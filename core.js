@@ -394,7 +394,13 @@
     }
 
     _walk(dt, input) {
-      let x = Number(Boolean(input.right)) - Number(Boolean(input.left)), y = Number(Boolean(input.down)) - Number(Boolean(input.up));
+      const forward = Number(Boolean(input.up)) - Number(Boolean(input.down));
+      const strafe = Number(Boolean(input.right)) - Number(Boolean(input.left));
+      let x = strafe, y = -forward;
+      if (Number.isFinite(input.moveAngle)) {
+        x = forward * Math.cos(input.moveAngle) + strafe * Math.cos(input.moveAngle + Math.PI / 2);
+        y = forward * Math.sin(input.moveAngle) + strafe * Math.sin(input.moveAngle + Math.PI / 2);
+      }
       const length = Math.hypot(x, y);
       if (length) { x /= length; y /= length; this.player.angle = Math.atan2(y, x); this._move(this.player, x * (input.boost ? 220 : 155) * dt, y * (input.boost ? 220 : 155) * dt, 10); }
     }

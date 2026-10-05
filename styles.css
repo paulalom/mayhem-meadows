@@ -39,7 +39,7 @@ button:active:not(:disabled){transform:translateY(1px)}
 #composure-value{font-family:"Courier New",monospace;font-size:10px;color:var(--aqua);font-weight:700}
 .meter{height:5px;background:#3b4650;overflow:hidden;border-radius:2px;width:100%}
 .meter>span{display:block;width:100%;height:100%;background:var(--aqua);transition:width .18s linear}
-.game-shell{position:relative;height:min(68vh,780px);min-height:510px;overflow:hidden;border:1px solid var(--line);background:#81986c;isolation:isolate}
+.game-shell{position:relative;height:min(68vh,780px);min-height:510px;overflow:hidden;border:1px solid var(--line);background:#81986c;isolation:isolate;touch-action:none}
 #game-canvas{display:block;width:100%;height:100%;outline-offset:-4px}
 .viewport-topline{position:absolute;top:14px;left:17px;right:17px;display:flex;justify-content:space-between;align-items:center;pointer-events:none;z-index:1;gap:10px;font-family:"Courier New",monospace;font-size:8px;font-weight:700;letter-spacing:1.1px}
 .district-label{background:rgba(20,29,39,.88);color:var(--cream);border-radius:3px;display:flex;align-items:center;gap:8px;padding:6px 8px}
@@ -65,7 +65,7 @@ button:active:not(:disabled){transform:translateY(1px)}
 #ride-condition{font-family:"Courier New",monospace;font-size:8px;font-weight:700;color:var(--yellow);white-space:nowrap}
 .ride-meter>span{background:var(--yellow)}
 .screen-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:8;background:rgba(14,21,29,.79);padding:27px;backdrop-filter:blur(4px)}
-.start-card{display:grid;grid-template-columns:1.18fr 1fr;gap:26px;background:var(--ink);border:1px solid #637060;border-radius:6px;max-width:790px;width:100%;padding:30px;box-shadow:9px 9px 0 #0e151d50;position:relative}
+.start-card{display:grid;grid-template-columns:1.18fr 1fr;gap:26px;background:var(--ink);border:1px solid #637060;border-radius:6px;max-width:790px;width:100%;max-height:100%;overflow:auto;padding:30px;box-shadow:9px 9px 0 #0e151d50;position:relative}
 .start-card:before{content:"";width:17px;height:7px;background:var(--coral);position:absolute;top:-4px;right:32px;transform:rotate(28deg)}
 .start-card:after{content:"";width:9px;height:20px;background:var(--aqua);position:absolute;bottom:-8px;left:50px;transform:rotate(-26deg)}
 .welcome-eyebrow{color:var(--lime);font-size:8px;letter-spacing:1.3px}
@@ -151,6 +151,29 @@ kbd{font:700 10px "Courier New",monospace;padding:4px 5px;background:var(--panel
 .town-note p{font-weight:750;font-size:12px;letter-spacing:-.2px;margin:0;line-height:1.5}
 .town-note small{display:block;font-family:"Courier New",monospace;color:var(--muted);font-size:8px;font-weight:400;letter-spacing:.1px;margin-top:3px}
 .bottom-line{display:flex;align-items:center;justify-content:space-between;gap:15px;padding:20px 0 16px;color:#6f818c;font-family:"Courier New",monospace;font-size:8px;letter-spacing:1px}
+.target-compass{position:absolute;top:53px;right:17px;display:flex;align-items:center;gap:12px;padding:10px 13px;background:rgba(20,29,39,.91);border:1px solid #647060;border-radius:4px;z-index:1;pointer-events:none;box-shadow:0 3px 14px #0002}
+.target-arrow{display:block;color:var(--lime);font-size:29px;font-weight:850;line-height:1;transform-origin:center}
+.target-copy{display:flex;flex-direction:column;gap:4px}
+.target-copy .stat-label{font-size:7px;letter-spacing:.7px}
+#target-distance{font:700 12px "Courier New",monospace;color:var(--cream);font-variant-numeric:tabular-nums;white-space:nowrap}
+.speed-panel{position:absolute;left:17px;bottom:88px;display:flex;align-items:baseline;gap:8px;padding:7px 11px 6px;background:rgba(20,29,39,.85);border-left:3px solid var(--aqua);border-radius:3px;z-index:1;pointer-events:none}
+#speed-value{font:850 29px "Segoe UI",Arial,sans-serif;line-height:1;font-variant-numeric:tabular-nums;color:var(--cream);letter-spacing:-1px}
+#speed-caption{font:700 8px "Courier New",monospace;letter-spacing:.7px;color:var(--aqua)}
+.minimap-panel{position:absolute;right:17px;bottom:15px;padding:8px;background:rgba(20,29,39,.93);border:1px solid #566451;border-radius:5px;z-index:1;pointer-events:none;box-shadow:3px 3px 0 #141d2733}
+.minimap-title{display:flex;align-items:center;justify-content:space-between;gap:6px;margin:0 1px 7px;font:700 6px "Courier New",monospace;letter-spacing:.2px;color:var(--muted);text-transform:uppercase}
+.minimap-title>span{color:var(--lime);white-space:nowrap}
+#minimap-canvas{display:block;width:140px;height:140px;border-radius:2px;background:var(--ink-deep)}
+.aim-reticle{position:absolute;left:50%;top:50%;width:15px;height:15px;transform:translate(-50%,-50%);filter:drop-shadow(0 1px 2px #141d27);z-index:2;pointer-events:none;border:1px solid #fff4de99;border-radius:50%}
+.aim-reticle:before,.aim-reticle:after{content:"";position:absolute;left:50%;top:50%;background:var(--cream);transform:translate(-50%,-50%)}
+.aim-reticle:before{width:23px;height:1px}
+.aim-reticle:after{width:1px;height:23px}
+.renderer-error{z-index:15;background:rgba(14,21,29,.94)}
+.renderer-error .dialog-card{max-width:420px}
+.game-shell:fullscreen{height:100vh;width:100vw;min-height:0;max-height:none;border:0}
+.game-shell:fullscreen .start-card{max-width:900px}
+.app:fullscreen{width:100vw;max-width:none;height:100vh;overflow:auto;background:var(--ink)}
+.app:fullscreen .game-shell{min-height:350px;height:calc(100vh - 205px);max-height:none}
+@media(max-width:600px){.speed-panel{display:none}.minimap-panel{bottom:83px;right:12px;padding:6px}.minimap-title{justify-content:flex-end;margin-bottom:5px;font-size:0}.minimap-title>span{font-size:6px}#minimap-canvas{width:80px;height:80px}.target-compass{top:47px;right:12px;padding:8px;gap:7px;max-width:99px}.target-arrow{font-size:22px}.target-copy .stat-label{font-size:6px;letter-spacing:.2px}#target-distance{font-size:10px}.game-shell .objective-panel{max-width:calc(100% - 128px)}}
 @media(min-width:1500px){.game-layout{grid-template-columns:minmax(0,1fr) 330px}.dispatch-panel,.garage-panel{padding-left:21px;padding-right:21px}.contract-button{padding:15px 12px}.contract-copy strong{font-size:13px}.contract-copy>span:last-child{font-size:9px}.purchase-button{padding:15px 0}}
 @media(max-width:1150px){.app{padding:20px 22px 0}.game-layout{grid-template-columns:minmax(0,1fr) 280px;gap:15px}.local-badge{display:none}.hud{gap:12px;padding:15px}.stat strong{font-size:22px}.stat-label{font-size:8px;letter-spacing:.6px}.heat-stars{font-size:21px;letter-spacing:1px}.start-card{padding:24px;gap:18px}.start-controls{padding-left:18px}.start-copy h2{font-size:34px}.control-list>div{grid-template-columns:95px 1fr;gap:8px}.control-list dd{font-size:10px}.start-copy>p{font-size:12px}.primary-button{font-size:10px;padding:13px 12px;gap:10px}.play-footer{padding:10px;font-size:8px}.footer-separator{margin:0 4px}.dispatch-panel,.garage-panel{padding-left:14px;padding-right:14px}.panel-heading h2{font-size:17px}.contract-button{gap:8px;padding:12px 8px}.contract-copy>span:last-child{font-size:7px}.contract-copy strong{font-size:11px}.contract-arrow{font-size:16px}.contract-icon{width:25px;height:29px;font-size:19px}}
 @media(max-width:940px){.game-layout{grid-template-columns:minmax(0,1fr)}.game-shell{height:64vh;min-height:480px}.start-card{max-width:740px}.start-copy h2{font-size:43px}.start-controls{padding-left:25px}.control-list>div{grid-template-columns:110px 1fr}.start-copy>p{font-size:13px}.control-list dd{font-size:11px}.dispatch-column{display:grid;grid-template-columns:1.15fr 1fr;gap:15px}.town-note{grid-column:1/-1;justify-content:center;margin-top:2px}.dispatch-panel,.garage-panel{padding:18px}.contract-copy strong{font-size:12px}.contract-copy>span:last-child{font-size:8px}.contract-button{padding:11px}.garage-panel .panel-heading h2{font-size:18px}.purchase-button{padding:17px 0}.purchase-button strong{font-size:12px}.purchase-button small{font-size:9px}.garage-status{font-size:10px}.town-note-star{font-size:29px}.town-note small{display:inline;margin-left:8px}.bottom-line{font-size:7px}.hud{grid-template-columns:1fr 1fr 1fr 1fr 1.3fr}.stat-label{font-size:9px;letter-spacing:1px}.primary-button{font-size:11px}}

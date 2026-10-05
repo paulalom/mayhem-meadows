@@ -2,11 +2,13 @@
 
 **A tiny town. Terrible errands. Excellent bad decisions.**
 
-A for-fun, original, GTA-inspired top-down driving sandbox. Borrow a car, run silly errands, scatter confetti, and lose the overenthusiastic Fun Police. Residents yell fake curses and recover from cartoon tumbles.
+A for-fun, original, GTA-inspired third-person 3D driving sandbox. Borrow a car, run silly errands, scatter confetti, and lose the overenthusiastic Fun Police. Residents yell fake curses and recover from cartoon tumbles. The same little town now has chunky buildings, modeled cars and residents, and a camera that follows you through the streets.
 
 ## Play
 
-Open **index.html** in Chrome. The game uses local HTML, CSS, JavaScript, procedurally drawn art, and synthesized sound. No installation, backend, external assets, or account is required.
+Open **index.html** in a desktop browser with WebGL 2 support. The game uses local HTML, CSS, JavaScript, procedurally modeled art, and synthesized sound. Its Three.js engine is bundled in **vendor/three.min.js**. No installation, backend, account, or network connection is required to play.
+
+Use a desktop keyboard and mouse with a WebGL 2 capable browser. If the game cannot create its 3D view, it shows a reload prompt; check that browser hardware acceleration is enabled.
 
 Alternatively, with Node.js installed:
 
@@ -14,28 +16,32 @@ Alternatively, with Node.js installed:
 npm start
 ```
 
-Then open **http://127.0.0.1:4173** in Chrome. This optional server only serves static files on your computer. All game logic runs in the browser.
+Then open **http://127.0.0.1:4173** in your browser. This optional server only serves static files on your computer. All game logic runs in the browser.
 
-The first prototype targets desktop keyboards. Its layout adapts to small screens, but touch controls and gamepads are not implemented.
+The layout adapts to small screens, but touch controls and gamepads are not implemented.
 
 ## Controls
 
 | Key | Action |
 | --- | --- |
-| WASD / arrows | Walk; accelerate, brake/reverse, and steer a car |
+| WASD / arrows | Walk relative to the camera; accelerate, brake/reverse, and steer a car |
+| Right mouse drag | Orbit the camera and look up/down |
+| C | Recenter the camera behind you |
 | E | Borrow/exit a nearby car; use the car wash |
 | Space | Handbrake/drift in a car; confetti popper on foot |
 | Shift | Boost in a car; sprint on foot |
 | H | Horn; start a party at a party mission ring |
 | R | Recover to a safe road position |
 | P / Esc | Pause/resume |
-| Pointer | Aim the on-foot confetti popper |
+| Pointer | Aim the on-foot confetti popper into the 3D world |
 
-Click the game canvas if keyboard focus has moved away from it. Changing tabs or windows pauses the game; resume with the button. Sound and reduced motion controls are in the header.
+Click the game canvas if keyboard focus has moved away from it. Changing tabs or windows pauses the game; resume with the button. Sound, reduced motion, and full screen controls are in the header. Looking around uses a right-button drag; the game does not capture or lock your pointer.
 
 ## The toybox
 
 - **Driving:** compact, sports car, and van handling; traffic; forgiving impacts; drifting and near-miss style points.
+- **Third-person camera:** an orbit view on foot, a following view while driving, and a safe camera distance around buildings. Press C whenever you want to recenter.
+- **Navigation:** glowing 3D mission markers, an objective direction/distance indicator, and a separate overhead minimap.
 - **Disco Delivery:** reach pickup, then deliver the imaginary disco ball.
 - **Checkpoint Dash:** drive through a sequence of glowing rings.
 - **Party Route:** visit the marked neighborhoods and honk at each ring.
@@ -46,24 +52,33 @@ Click the game canvas if keyboard focus has moved away from it. Changing tabs or
 
 Contract timers determine bonuses. Finishing overtime still pays the base reward. You can abandon a gig without losing banked money. Confetti hits on pedestrians never earn cash.
 
-The [gameplay design](DESIGN.md) explains the intended loops, tuning, scope, and next playtest questions. This is a small playable slice, with simple traffic and patrol AI, rather than a full city simulation.
+The [gameplay design](DESIGN.md) explains the intended loops, tuning, scope, and next playtest questions. This is a small playable slice with simple traffic and patrol AI. Movement and collision stay on the ground plane; buildings give the town depth, but there are no stairs, jumps, or building interiors.
 
 ## Development
 
-No runtime dependencies and no build step.
+The checked-in engine bundle is ready to play. You do not need npm or a build step to open the game.
 
 ```sh
 npm run check
 ```
 
-This runs JavaScript syntax checks and deterministic simulation tests. `tools/browser-check.cjs` adds optional Playwright checks with headless Chrome; it requires a separately available Playwright installation, using `PLAYWRIGHT_MODULE_PATH` if necessary. Run it with `node tools/browser-check.cjs`. Browser evidence is ignored by Git.
+This runs JavaScript syntax checks, deterministic simulation tests, and camera regression tests. `tools/browser-check.cjs` adds optional Playwright checks with headless Chrome; it requires a separately available Playwright installation, using `PLAYWRIGHT_MODULE_PATH` if necessary. Run it with `node tools/browser-check.cjs`. Browser evidence is ignored by Git.
+
+If you change or upgrade the engine, recreate the locally bundled Three.js file with:
+
+```sh
+npm ci
+npm run vendor
+```
 
 | File | Responsibility |
 | --- | --- |
 | core.js | Simulation, map, traffic, police, contracts, rewards, and save validation |
-| game.js | Fixed-step game loop, input, rendering, audio, persistence, and HUD |
+| scene3d.js | Three.js world, models, perspective camera, lighting, and visual effects |
+| game.js | Fixed-step game loop, input, audio, persistence, HUD, and minimap |
+| vendor/three.min.js | Bundled Three.js engine for offline and file-open play |
 | index.html / styles.css | Responsive interface and controls |
-| tests/core.test.cjs | Simulation regression checks |
+| tests/core.test.cjs / tests/camera.test.cjs | Simulation and camera regression checks |
 | tools/serve.cjs | Optional static development server |
 
-Next priorities: playtest steering and chase tuning, add touch/gamepad controls, then add route variety and cosmetic rewards.
+Next priorities: playtest camera and steering together, tune chases, add touch/gamepad controls, then add route variety and cosmetic rewards.

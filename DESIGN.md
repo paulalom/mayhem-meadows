@@ -2,7 +2,7 @@
 
 **A tiny town. Terrible errands. Excellent bad decisions.**
 
-A single-player, top-down, GTA-inspired toybox that runs entirely in the browser. The tone is Saturday-morning cartoon chaos: confetti impacts, springy crashes, grumpy residents yelling “FUDGE NUGGETS!”, and the town's overenthusiastic Fun Police. All characters, art, place names, and audio are original.
+A single-player, third-person 3D, GTA-inspired toybox that runs entirely in the browser. The tone is Saturday-morning cartoon chaos: confetti impacts, springy crashes, grumpy residents yelling “FUDGE NUGGETS!”, and the town's overenthusiastic Fun Police. All characters, art, place names, and audio are original.
 
 ## The promise
 
@@ -26,10 +26,21 @@ The player can ignore contracts and play freely. There is no mandatory story seq
 - **Forgiving collisions:** cars bounce and lose some speed; they do not get stuck against corners. Heavy impacts reduce vehicle condition. A wreck becomes a confetti cloud and ejects the player safely.
 - **Borrow any civilian car:** press Interact near a stationary car. Traffic slows for intersections. Exiting at speed is blocked with a useful message; exiting while stopped places you on a free side of the car.
 - **Three recognizable rides:** a forgiving compact, a fast but loose sports car, and a slower, sturdy van. Their silhouettes and colors explain their character.
-- **On foot:** direct eight-direction movement, sprint, car entry, and a short-range confetti popper aimed with the pointer. Confetti can startle residents and distract police; it is a toy, not a realistic weapon system.
+- **On foot:** camera-relative movement, sprint, car entry, and a short-range confetti popper aimed into the 3D world with the pointer. Confetti can startle residents and distract police; it is a toy, not a realistic weapon system.
 - **Immediate recovery:** a dedicated unstuck action returns you to a safe nearby road with a small score penalty. No long walk back after a bad crash.
 
-Prototype controls: WASD/arrow keys to move or drive; E to enter/exit or use a nearby service; Space for handbrake while driving or a confetti burst on foot; Shift for boost/sprint; H for horn; Esc/P to pause; R for recovery. Contract buttons live in the HUD so accepting a gig never depends on finding a tiny interaction point.
+Prototype controls: WASD/arrow keys to move or drive; right mouse drag to orbit the camera; C to recenter; E to enter/exit or use a nearby service; Space for handbrake while driving or a confetti burst on foot; Shift for boost/sprint; H for horn; Esc/P to pause; R for recovery. Contract buttons live in the HUD so accepting a gig never depends on finding a tiny interaction point.
+
+## Third-person presentation
+
+The camera makes the town feel like a place you can run through. Keep the player, the next corner, and the nearest traffic readable; a pleasing view should also explain where to go.
+
+- **On-foot orbit:** WASD follows the camera's horizontal forward/right directions. Right mouse drag changes yaw and pitch without locking the pointer. C returns the view behind the character.
+- **Driving chase:** the camera follows behind the car with enough height to read an intersection. Let the player look around; return smoothly toward the travel direction so steering and view stay connected.
+- **Safe camera distance:** shorten the camera boom when buildings obstruct the view, then ease it back out in open space. The camera must not spend a chase inside a wall.
+- **Readable objectives:** glowing ground rings and upright markers reveal mission targets in perspective. A HUD compass supplies bearing and distance when the target is around a corner; the overhead minimap shows routes, services, and patrols.
+- **Ground-plane simulation:** preserve the original arcade movement, handling, and collision rules beneath the 3D presentation. Characters and cars move on flat streets; roofs, curbs, and trees provide depth, with no stair, jump, or elevated-road physics in this milestone.
+- **Local rendering:** Three.js uses real perspective meshes and WebGL 2, with the engine bundled beside the game. No runtime asset download or service is needed. A friendly failure overlay explains when the browser cannot create a 3D view.
 
 ## Trouble and the Fun Police
 
@@ -85,7 +96,7 @@ A compact map is better than an empty large one. Four or five streets in each di
 - **Disco district:** open avenues that encourage speed and drifting.
 - **Car wash:** visible escape/repair service with an easy entrance.
 
-Visual landmarks matter more than realism. Buildings have chunky roofs, pastel walls, and big signs. Roads, sidewalks, mission rings, and the player's car remain readable under confetti and police effects. The camera follows smoothly with a little look-ahead; the HUD never covers the center of play.
+Visual landmarks matter more than realism. Buildings have chunky roofs, pastel walls, and big signs. Cars and residents have simple, playful 3D silhouettes. Roads, sidewalks, mission rings, and the player's car remain readable under confetti and police effects. The camera follows smoothly with a little look-ahead; the HUD leaves the center of play clear.
 
 ## Tone and feedback
 
@@ -97,18 +108,18 @@ Crashes get a bassy cartoon thump; pickups get a rising jingle; a perfect drift 
 
 Build a complete small loop before adding a larger city:
 
-1. One compact hand-built town rendered with Canvas 2D.
+1. One compact hand-built town rendered in third-person 3D with locally bundled Three.js and WebGL 2.
 2. Walk, enter/exit, arcade driving, traffic, residents, collisions, and confetti.
 3. Three reusable contract types with checkpoints, timers, pay, and immediate retry.
 4. A readable three-level pursuit system, escape timer, composure, and quick recovery.
-5. Garage/wash services, two capped upgrades, local saving, minimap, pause, sound and motion settings.
+5. Garage/wash services, two capped upgrades, local saving, minimap, objective compass, speed display, pause, sound and motion settings.
 6. Helpful first-run controls plus a clear “Play” button; no account, installation, or network requirement.
 
-Technical shape: plain HTML/CSS/JavaScript, local assets, no external services, no runtime packages. A fixed-step simulation keeps movement consistent across frame rates; rendering uses requestAnimationFrame. Input is scoped to the game, blur clears held keys, and background tabs pause. The static files should run from a normal file open as well as any static server.
+Technical shape: plain HTML/CSS/JavaScript, local geometry and audio, a checked-in Three.js engine bundle, and no external services. A fixed-step simulation keeps movement consistent across frame rates; 3D rendering uses requestAnimationFrame while a separate 2D canvas draws the minimap. The camera and models interpret simulation state without changing contract, heat, upgrade, or saving rules. Input is scoped to the game, blur clears held keys, and background tabs pause. The static files run from a normal file open as well as any static server; npm is only needed to regenerate the engine bundle during development.
 
 ## Deliberate cuts
 
-No multiplayer, huge procedural city, interiors, character customization editor, inventory management, realistic damage, complex combat, story campaign, licensed music, or online economy in this slice. Touch controls and gamepad support can follow once keyboard driving is good.
+No multiplayer, huge procedural city, interiors, stairs, jumping, elevated driving, character customization editor, inventory management, realistic damage, complex combat, story campaign, licensed music, or online economy in this slice. Touch controls and gamepad support can follow once keyboard driving and the camera are good.
 
 ## Playtest questions and acceptance checks
 
@@ -120,5 +131,8 @@ No multiplayer, huge procedural city, interiors, character customization editor,
 - Do car entry, exit, collision resolution, and mission targets avoid inaccessible positions?
 - Do pause, tab switching, retry, save reload, mute, and reduced motion behave predictably?
 - Does the game stay smooth with maximum patrols and confetti active?
+- Can players turn a corner, borrow a car, and aim confetti without fighting the camera?
+- Does the view stay outside buildings, and do markers plus minimap keep destinations easy to find?
+- Do file-open play, full screen, camera recentering, and the WebGL failure overlay behave predictably?
 
 Tune driving and heat first. More content cannot rescue an unpleasant steering model.

@@ -27,6 +27,60 @@ const url = pathToFileURL(path.join(project, 'index.html')).href;
 const saveKey = 'mayhem-meadows.v1';
 const errors = [];
 const checks = [];
+const diagnostics = {};
+
+async function sceneState(page) {
+  return page.locator('#game-canvas').evaluate(canvas => {
+    const numeric = ['cameraYaw', 'cameraDistance', 'worldX', 'worldY', 'frames', 'renderCalls', 'cameraX', 'cameraY', 'cameraZ', 'cameraTargetX', 'cameraTargetY', 'cameraTargetZ'];
+    const state = { ...canvas.dataset };
+    for (const key of numeric) state[key] = Number(state[key]);
+    state.targetX = state.cameraTargetX; state.targetY = state.cameraTargetY; state.targetZ = state.cameraTargetZ;
+    return state;
+  });
+}
+
+async function waitForScene(page, mode) {
+  await page.waitForFunction(expectedMode => {
+    const data = document.getElementById('game-canvas').dataset;
+    return data.view === 'third-person-3d' && data.cameraMode === expectedMode && Number(data.renderCalls) > 0;
+  }, mode, { timeout: 10000 });
+  return sceneState(page);
+}
+
+async function dragCamera(page, dx, dy = 0) {
+  const box = await page.locator('#game-canvas').boundingBox();
+  assert.ok(box, 'Game canvas has no visible bounds.');
+  const x = box.x + box.width * 0.53, y = box.y + box.height * 0.56;
+  await page.mouse.move(x, y);
+  await page.mouse.down({ button: 'right' });
+  await page.mouse.move(x + dx, y + dy, { steps: 8 });
+  await page.mouse.up({ button: 'right' });
+  await page.waitForTimeout(200);
+}
+
+function angleDifference(a, b) {
+  return Math.atan2(Math.sin(a - b), Math.cos(a - b));
+}
+
+async function waitForMinimap(page) {
+  await page.waitForFunction(() => {
+    const canvas = document.getElementById('minimap-canvas');
+    const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+    let opaque = 0;
+    const colors = new Set();
+    for (let i = 0; i < pixels.length; i += 4) {
+      if (pixels[i + 3] > 0) opaque++;
+      colors.add((pixels[i] << 16) | (pixels[i + 1] << 8) | pixels[i + 2]);
+    }
+    return opaque > canvas.width * canvas.height * 0.95 && colors.size > 5;
+  }, null, { timeout: 3000 });
+}
+
+async function waitForFreshFrames(page) {
+  const before = (await sceneState(page)).frames;
+  await page.waitForFunction(previous => Number(document.getElementById('game-canvas').dataset.frames) > previous + 2, before, { timeout: 10000 });
+  return sceneState(page);
+}
 
 async function check(name, action) {
   try {
@@ -43,7 +97,8 @@ async function main() {
   if (!fs.existsSync(path.join(project, 'core.js'))) throw new Error('core.js is missing from this project.');
   fs.mkdirSync(evidence, { recursive: true });
   const { chromium } = loadPlaywright();
-  const launch = { headless: true };
+  // Software WebGL keeps this optional check usable on headless Windows hosts.
+  const launch = { headless: true, args: ['--enable-unsafe-swiftshader'] };
   const chrome = process.env.BROWSER_EXECUTABLE || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
   if (fs.existsSync(chrome)) launch.executablePath = chrome;
   else throw new Error('Chrome executable not found. Set BROWSER_EXECUTABLE to your Chrome path.');
@@ -74,9 +129,71 @@ async function main() {
       await page.locator('#start-screen').waitFor({ state: 'hidden' });
       assert.equal(await page.locator('#game-canvas').evaluate(element => element === document.activeElement), true);
     });
+    let defaultFootYaw;
+    await check('perspective third-person scene uses a live WebGL 2 renderer', async () => {
+      const before = await waitForScene(page, 'foot');
+      defaultFootYaw = before.cameraYaw;
+      assert.equal(before.projection, 'perspective');
+      assert.ok(before.cameraDistance > 2, 'Foot camera should sit behind the avatar.');
+      assert.ok(Number.isFinite(before.cameraYaw), 'Camera yaw must be finite.');
+      assert.equal(await page.locator('#renderer-error').isVisible(), false);
+      assert.equal(await page.locator('#game-canvas').evaluate(canvas => canvas.getContext('webgl2') instanceof WebGL2RenderingContext), true);
+      await page.waitForTimeout(250);
+      const after = await sceneState(page);
+      assert.ok(after.frames > before.frames, 'Simulation frames must advance.');
+      assert.ok(after.renderCalls > 0, 'The scene must draw geometry.');
+      assert.ok([after.cameraX, after.cameraY, after.cameraZ, after.targetX, after.targetY, after.targetZ].every(Number.isFinite), 'Camera and target positions must be finite.');
+      assert.ok(after.cameraY > after.targetY, 'Third-person view should sit above its target.');
+      diagnostics.foot = after;
+    });
+    await waitForMinimap(page);
+    await page.screenshot({ path: path.join(evidence, 'desktop-third-person-foot.png'), fullPage: true });
+    await check('right mouse drag orbits the foot camera and C resets it', async () => {
+      const before = await sceneState(page);
+      await dragCamera(page, -70, -20);
+      const after = await sceneState(page);
+      assert.ok(Math.abs(angleDifference(after.cameraYaw, before.cameraYaw)) > 0.1, 'Right drag did not orbit the camera.');
+      assert.equal(after.cameraMode, 'foot');
+      assert.ok(after.cameraDistance > 0.4, 'Camera boom must stay outside the avatar.');
+      await page.keyboard.press('c');
+      await page.waitForFunction(expectedYaw => {
+        const yaw = Number(document.getElementById('game-canvas').dataset.cameraYaw);
+        return Math.abs(Math.atan2(Math.sin(yaw - expectedYaw), Math.cos(yaw - expectedYaw))) < 0.08;
+      }, defaultFootYaw, { timeout: 2500 });
+      const reset = await sceneState(page);
+      assert.ok(Math.abs(angleDifference(reset.cameraYaw, defaultFootYaw)) < 0.08, 'C should restore the view behind the initial player heading.');
+    });
+    await check('W walks in the direction of an orbited camera', async () => {
+      await dragCamera(page, -60);
+      const before = await sceneState(page);
+      const forward = { x: before.targetX - before.cameraX, y: before.targetZ - before.cameraZ };
+      assert.ok(Math.hypot(forward.x, forward.y) > 0.1, 'Camera needs a horizontal view direction.');
+      await page.keyboard.down('w');
+      await page.waitForTimeout(180);
+      await page.keyboard.up('w');
+      await page.waitForTimeout(120);
+      const after = await sceneState(page);
+      const move = { x: after.worldX - before.worldX, y: after.worldY - before.worldY };
+      assert.ok(Math.hypot(move.x, move.y) > 2, 'W should move the avatar.');
+      const alignment = (move.x * forward.x + move.y * forward.y) / (Math.hypot(move.x, move.y) * Math.hypot(forward.x, forward.y));
+      assert.ok(alignment > 0.9, `Movement should follow the view direction; alignment was ${alignment.toFixed(3)}.`);
+      await page.keyboard.press('c');
+    });
     await check('E borrows the nearby yellow car', async () => {
       await page.keyboard.press('e');
       await page.waitForFunction(() => document.getElementById('ride-name').textContent === 'Lemon Buggy', null, { timeout: 2000 });
+      const state = await waitForScene(page, 'drive');
+      assert.ok(state.cameraDistance > 3, 'Driving camera should pull back to show the whole ride.');
+    });
+    await check('exiting a ride switches back to the foot camera', async () => {
+      await page.waitForTimeout(350);
+      await page.keyboard.press('e');
+      await waitForScene(page, 'foot');
+      assert.notEqual(await page.locator('#ride-name').textContent(), 'Lemon Buggy');
+      await page.waitForTimeout(350);
+      await page.keyboard.press('e');
+      await waitForScene(page, 'drive');
+      assert.equal(await page.locator('#ride-name').textContent(), 'Lemon Buggy');
     });
     await check('delivery contract changes the objective', async () => {
       const before = await page.locator('#objective-title').textContent();
@@ -92,6 +209,33 @@ async function main() {
       await page.waitForTimeout(160);
       assert.notEqual(await page.locator('#mission-progress').textContent(), before);
       assert.equal(await page.locator('#ride-name').textContent(), 'Lemon Buggy');
+    });
+    await check('driving minimap renders the town and updates after resize', async () => {
+      await waitForMinimap(page);
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await waitForFreshFrames(page);
+      await waitForMinimap(page);
+      await page.setViewportSize({ width: 1365, height: 900 });
+      await waitForFreshFrames(page);
+      await waitForMinimap(page);
+      const state = await sceneState(page);
+      assert.equal(state.cameraMode, 'drive');
+      diagnostics.drive = state;
+    });
+    await check('fullscreen preserves the HUD and contracts, and exits back to play', async () => {
+      await page.locator('#fullscreen-toggle').click();
+      await page.waitForFunction(() => document.fullscreenElement?.classList.contains('app'), null, { timeout: 3000 });
+      assert.equal(await page.locator('[data-mission="dash"]').isVisible(), true);
+      assert.equal(await page.locator('#cash').isVisible(), true);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+      diagnostics.fullscreen = await waitForFreshFrames(page);
+      await waitForMinimap(page);
+      await page.screenshot({ path: path.join(evidence, 'desktop-fullscreen-driving.png'), fullPage: true });
+      await page.locator('#fullscreen-toggle').click();
+      await page.waitForFunction(() => !document.fullscreenElement, null, { timeout: 3000 });
+      assert.equal(await page.locator('#game-canvas').evaluate(element => element === document.activeElement), true);
+      await waitForFreshFrames(page);
+      await waitForMinimap(page);
     });
     await check('P pauses the mission clock and resume continues it', async () => {
       await page.keyboard.press('p');
@@ -112,6 +256,7 @@ async function main() {
       await page.locator('#help-screen').waitFor({ state: 'hidden' });
       assert.equal(await page.locator('#pause-screen').isVisible(), false);
     });
+    await waitForMinimap(page);
     await page.screenshot({ path: path.join(evidence, 'desktop-driving.png'), fullPage: true });
     await check('contract can be abandoned and another accepted', async () => {
       assert.equal(await page.locator('#abandon-button').isEnabled(), true);
@@ -160,6 +305,21 @@ async function main() {
       assert.equal(await fresh.locator('#cash').textContent(), '$1,234');
       await fresh.close();
     });
+    await check('short desktop viewport scrolls while the WebGL canvas keeps valid dimensions', async () => {
+      await page.setViewportSize({ width: 1365, height: 450 });
+      await page.reload();
+      await page.locator('#play-button').click();
+      await page.locator('#start-screen').waitFor({ state: 'hidden' });
+      await waitForScene(page, 'foot');
+      await waitForMinimap(page);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+      assert.ok(await page.evaluate(() => document.documentElement.scrollHeight > innerHeight), 'Short windows should let the page scroll.');
+      assert.equal(await page.locator('#game-canvas').evaluate(canvas => {
+        const viewport = canvas.getContext('webgl2').getParameter(WebGL2RenderingContext.VIEWPORT);
+        return canvas.clientWidth > 300 && canvas.clientHeight > 300 && viewport[2] === canvas.width && viewport[3] === canvas.height;
+      }), true);
+      await page.screenshot({ path: path.join(evidence, 'short-desktop-play.png'), fullPage: true });
+    });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.reload();
     await check('390px mobile layout fits and Play stays clickable', async () => {
@@ -197,6 +357,7 @@ async function main() {
         }), ['SecurityError', 'SecurityError']);
         await blockedPage.locator('#play-button').click();
         await blockedPage.locator('#start-screen').waitFor({ state: 'hidden' });
+        await waitForScene(blockedPage, 'foot');
         assert.match(await blockedPage.locator('#toast').textContent(), /Saving is unavailable/);
         await blockedPage.keyboard.press('e');
         await blockedPage.waitForFunction(() => document.getElementById('ride-name').textContent === 'Lemon Buggy', null, { timeout: 2000 });
@@ -206,9 +367,73 @@ async function main() {
         await blockedPage.screenshot({ path: path.join(evidence, 'storage-blocked-play.png'), fullPage: true });
       } finally { await blockedContext.close(); }
     });
+    await check('missing WebGL 2 shows a friendly renderer message without uncaught errors', async () => {
+      const unsupportedContext = await browser.newContext({ viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
+      const unsupportedErrors = [];
+      try {
+        await unsupportedContext.route('**/*', route => {
+          if (/^(file|data|blob):/.test(route.request().url())) return route.continue();
+          externalRequests.push(route.request().url());
+          return route.abort();
+        });
+        await unsupportedContext.addInitScript(() => {
+          const original = HTMLCanvasElement.prototype.getContext;
+          HTMLCanvasElement.prototype.getContext = function (kind, ...args) {
+            if (kind === 'webgl2') return null;
+            return original.call(this, kind, ...args);
+          };
+        });
+        const unsupportedPage = await unsupportedContext.newPage();
+        unsupportedPage.on('pageerror', error => unsupportedErrors.push(error.message));
+        unsupportedPage.on('console', message => {
+          if (message.type() === 'error' && !/THREE\.WebGLRenderer: (Error creating WebGL context|A WebGL context could not be created)/.test(message.text())) unsupportedErrors.push(message.text());
+        });
+        await unsupportedPage.goto(url);
+        await unsupportedPage.locator('#renderer-error').waitFor({ state: 'visible' });
+        assert.match(await unsupportedPage.locator('#renderer-error').textContent(), /WebGL 2/);
+        assert.equal(await unsupportedPage.locator('#reload-button').isVisible(), true);
+        assert.deepEqual(unsupportedErrors, []);
+        await unsupportedPage.screenshot({ path: path.join(evidence, 'webgl-unavailable.png'), fullPage: true });
+      } finally { await unsupportedContext.close(); }
+    });
+    await check('the camera stays outside building walls during a full near-wall orbit', async () => {
+      const wallContext = await browser.newContext({ viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
+      try {
+        await wallContext.route('**/*', route => {
+          if (/^(file|data|blob):/.test(route.request().url())) return route.continue();
+          externalRequests.push(route.request().url());
+          return route.abort();
+        });
+        const wallPage = await wallContext.newPage();
+        wallPage.on('pageerror', error => errors.push(error.message));
+        wallPage.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+        await wallPage.goto(url);
+        await wallPage.locator('#play-button').click();
+        await waitForScene(wallPage, 'foot');
+        // The first street has a building wall at x=840; A approaches it using
+        // real player input, while the simulation's collision prevents entry.
+        await wallPage.keyboard.down('a');
+        await wallPage.waitForTimeout(450);
+        await wallPage.keyboard.up('a');
+        await wallPage.waitForTimeout(250);
+        const nearWall = await sceneState(wallPage);
+        assert.ok(nearWall.worldX >= 849 && nearWall.worldX < 875, 'The avatar should approach the west wall without entering it.');
+        for (let step = 0; step < 13; step++) {
+          await dragCamera(wallPage, -85);
+          const state = await sceneState(wallPage);
+          assert.ok(state.cameraDistance > 0.4 && state.cameraDistance < 12, 'Camera boom length must remain usable.');
+          assert.ok([state.cameraX, state.cameraY, state.cameraZ].every(Number.isFinite), 'Camera coordinates must stay finite.');
+          // All nearby building bodies are at least 4.5 scene units tall.
+          // The test keeps the standard low foot camera below that roof line.
+          const insideWestWall = state.cameraX > 30 && state.cameraX < 42 && state.cameraZ > 48 && state.cameraZ < 60 && state.cameraY < 4.5;
+          assert.equal(insideWestWall, false, `Camera entered the west building on orbit step ${step}.`);
+        }
+        await wallPage.screenshot({ path: path.join(evidence, 'desktop-near-wall-orbit.png'), fullPage: true });
+      } finally { await wallContext.close(); }
+    });
     await check('no external network requests', async () => assert.deepEqual(externalRequests, []));
     await check('no page or console errors', async () => assert.deepEqual(errors, []));
-    fs.writeFileSync(path.join(evidence, 'browser-check.json'), JSON.stringify({ url, checks, errors, externalRequests }, null, 2) + '\n');
+    fs.writeFileSync(path.join(evidence, 'browser-check.json'), JSON.stringify({ url, checks, diagnostics, errors, externalRequests }, null, 2) + '\n');
     const failed = checks.filter(result => !result.passed).length;
     process.stdout.write(`\n${checks.length - failed}/${checks.length} browser checks passed. Evidence: ${evidence}\n`);
     if (failed) process.exitCode = 1;

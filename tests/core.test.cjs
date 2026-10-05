@@ -25,6 +25,61 @@ test('movement is frame-rate independent, normalized diagonally, and ignores inv
   assert.deepEqual(a.player, before);
 });
 
+test('on-foot movement follows the camera forward and right directions', () => {
+  const cases = [
+    { moveAngle: -Math.PI / 2, input: { up: true }, dx: 0, dy: -1 },
+    { moveAngle: -Math.PI / 2, input: { right: true }, dx: 1, dy: 0 },
+    { moveAngle: 0, input: { up: true }, dx: 1, dy: 0 },
+    { moveAngle: 0, input: { right: true }, dx: 0, dy: 1 },
+    { moveAngle: Math.PI / 2, input: { up: true }, dx: 0, dy: 1 },
+    { moveAngle: Math.PI / 2, input: { right: true }, dx: -1, dy: 0 },
+    { moveAngle: 0, input: { down: true }, dx: -1, dy: 0 },
+    { moveAngle: 0, input: { left: true }, dx: 0, dy: -1 }
+  ];
+  for (const { moveAngle, input, dx, dy } of cases) {
+    const game = makeGame(); game.player.x = 1080;
+    const start = { ...game.player };
+    game.update(0.25, { ...input, moveAngle });
+    assert.ok(Math.abs(game.player.x - start.x - dx * 155 * 0.25) < 0.00001);
+    assert.ok(Math.abs(game.player.y - start.y - dy * 155 * 0.25) < 0.00001);
+    assert.ok(Math.abs(Math.atan2(Math.sin(game.player.angle - Math.atan2(dy, dx)), Math.cos(game.player.angle - Math.atan2(dy, dx)))) < 0.00001);
+  }
+});
+
+test('camera-relative diagonals keep walking and sprinting speed and face movement', () => {
+  for (const moveAngle of [-Math.PI / 2, 0, Math.PI / 2, 0.7]) for (const boost of [false, true]) {
+    const game = makeGame(); game.player.x = 1080;
+    const start = { ...game.player };
+    game.update(0.25, { up: true, right: true, boost, moveAngle });
+    const dx = game.player.x - start.x, dy = game.player.y - start.y;
+    assert.ok(Math.abs(Math.hypot(dx, dy) - (boost ? 220 : 155) * 0.25) < 0.00001);
+    assert.ok(Math.abs(Math.atan2(Math.sin(game.player.angle - moveAngle - Math.PI / 4), Math.cos(game.player.angle - moveAngle - Math.PI / 4))) < 0.00001);
+  }
+});
+
+test('invalid camera headings preserve cardinal movement and opposing keys stop walking', () => {
+  for (const moveAngle of [undefined, NaN, Infinity, -Infinity, '0', null]) {
+    const game = makeGame();
+    game.update(0.25, { up: true, moveAngle });
+    assert.ok(Math.abs(game.player.x - 884) < 0.00001);
+    assert.ok(Math.abs(game.player.y - 1080 + 155 * 0.25) < 0.00001);
+  }
+  const game = makeGame(), start = { ...game.player };
+  game.update(0.25, { up: true, down: true, left: true, right: true, moveAngle: 0.7 });
+  assert.deepEqual(game.player, start);
+});
+
+test('vehicle acceleration, braking, and steering ignore camera heading', () => {
+  const inputs = [{ up: true }, { up: true, right: true, boost: true }, { down: true, left: true }, { up: true, right: true, brake: true }];
+  for (const input of inputs) {
+    const cardinal = makeGame(), camera = makeGame();
+    cardinal.interact(); camera.interact();
+    advance(cardinal, 0.5, input); advance(camera, 0.5, { ...input, moveAngle: Math.PI / 2 });
+    assert.deepEqual(camera.current, cardinal.current);
+    assert.deepEqual(camera.player, cardinal.player);
+  }
+});
+
 test('building collisions do not leave a car clipping or stuck inside a building', () => {
   const game = makeGame(); game.interact(); game.graceTimer = 0;
   const car = game.current; car.x = 215; car.y = 350; car.angle = 0;
