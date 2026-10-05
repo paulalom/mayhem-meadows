@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#141d27">
+    <meta name="description" content="A tiny town, terrible errands, and a whole lot of confetti. Play Mayhem Meadows, a local browser arcade sandbox.">
+    <title>Mayhem Meadows — Tiny town. Terrible errands.</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="core.js" defer></script>
+    <script src="game.js" defer></script>
+  </head>
+  <body>
+    <div class="app">
+      <header class="masthead">
+        <a class="brand" href="#" aria-label="Mayhem Meadows home">
+          <span class="brand-mark" aria-hidden="true">M<span>!</span></span>
+          <span class="brand-copy"><span class="eyebrow">Tiny town. Terrible errands.</span><span class="wordmark">Mayhem <em>Meadows</em></span></span>
+        </a>
+        <div class="header-actions">
+          <span class="local-badge"><i aria-hidden="true"></i>ALL LOCAL. ALL CHAOS.</span>
+          <button id="sound-toggle" class="utility-button" type="button" aria-pressed="true">Sound: on</button>
+          <button id="motion-toggle" class="utility-button" type="button" aria-pressed="false">Motion: full</button>
+          <button id="help-toggle" class="utility-button help-button" type="button" aria-label="Open controls and help">?</button>
+        </div>
+      </header>
+
+      <main class="game-layout">
+        <section class="play-column" aria-label="Play Mayhem Meadows">
+          <div class="hud">
+            <div class="stat cash-stat"><span class="stat-label">Pocket money</span><strong id="cash">$0</strong></div>
+            <div class="stat score-stat"><span class="stat-label">Style points</span><strong id="score">0</strong></div>
+            <div class="stat best-stat"><span class="stat-label">Personal best</span><strong id="best">0</strong></div>
+            <div class="heat-stat"><span class="stat-label">Heat</span><div id="heat" class="heat-stars" aria-label="Heat: 0 of 3">☆☆☆</div></div>
+            <div class="condition-stat"><div class="condition-label"><span class="stat-label">Composure</span><span id="composure-value">100%</span></div><div id="composure-meter" class="meter composure-meter" role="progressbar" aria-label="Composure" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100"><span id="composure-bar"></span></div></div>
+          </div>
+
+          <div id="game-shell" class="game-shell">
+            <canvas id="game-canvas" tabindex="0" aria-label="Mayhem Meadows game. Move with WASD or arrow keys. E enters or leaves a nearby car. Space throws confetti on foot or applies the handbrake while driving. Shift sprints or boosts. H honks the horn. R recovers. Escape pauses.">Your browser needs canvas support to play Mayhem Meadows.</canvas>
+            <div class="viewport-topline" aria-hidden="true"><span class="district-label"><span class="district-dot"></span>MEADOWS MUNICIPAL AREA</span><span class="viewport-tag">SANDBOX / 01</span></div>
+            <div class="objective-panel">
+              <span class="eyebrow objective-kicker">Current business</span>
+              <h2 id="objective-title">Your town. Your terrible decisions.</h2>
+              <p id="objective-detail">Grab a ride, explore, or pick up a contract from dispatch.</p>
+              <div class="objective-meta"><span id="mission-progress">FREE ROAM</span><span id="mission-time"></span></div>
+            </div>
+            <div id="interaction-hint" class="interaction-hint" hidden>Press <kbd>E</kbd> to borrow this ride</div>
+            <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+            <div class="ride-strip"><span class="ride-icon" aria-hidden="true">↗</span><div class="ride-copy"><span class="stat-label">Current ride</span><strong id="ride-name">Your own two feet</strong></div><div class="ride-condition"><div class="ride-condition-label"><span class="stat-label">Ride condition</span><span id="ride-condition">100%</span></div><div id="ride-meter" class="meter ride-meter" role="progressbar" aria-label="Ride condition" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100"><span id="ride-bar"></span></div></div></div>
+
+            <div id="start-screen" class="screen-overlay start-screen">
+              <div class="start-card">
+                <div class="start-copy"><span class="eyebrow welcome-eyebrow">Welcome to the neighborhood</span><h2>Small town.<br>Big <span>shenanigans.</span></h2><p>Borrow questionable cars. Run ridiculous errands. Leave a trail of confetti.</p><div class="start-tags"><span>ZERO DOWNLOADS</span><span>MAXIMUM NONSENSE</span></div><button id="play-button" class="primary-button" type="button">LET’S CAUSE A SCENE <span aria-hidden="true">↗</span></button><span class="start-footnote">Progress stays in this browser. Your dignity may not.</span></div>
+                <div class="start-controls"><div class="controls-heading"><span class="controls-number">01</span><h3>Know your nonsense</h3></div><dl class="control-list"><div><dt><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></dt><dd>Move / drive<br><small>Arrow keys work too</small></dd></div><div><dt><kbd>E</kbd></dt><dd>Enter / exit a nearby ride</dd></div><div><dt><kbd>SPACE</kbd></dt><dd>Confetti / handbrake</dd></div><div><dt><kbd>SHIFT</kbd></dt><dd>Sprint / boost</dd></div><div><dt><kbd>H</kbd> / <kbd>R</kbd></dt><dd>Horn / recover</dd></div><div><dt><kbd>ESC</kbd></dt><dd>Pause and take a breath</dd></div></dl><p class="controls-note"><span aria-hidden="true">★</span> Pick a contract. Follow the colored markers. Try to keep your composure.</p></div>
+              </div>
+            </div>
+
+            <div id="pause-screen" class="screen-overlay pause-screen" hidden>
+              <div class="dialog-card"><span class="eyebrow">Even chaos needs a breather</span><h2>Taking five.</h2><p>The town can wait. Your errands will be here.</p><button id="resume-button" class="primary-button" type="button">BACK TO BUSINESS <span aria-hidden="true">↗</span></button><button id="restart-button" class="secondary-button" type="button">Recover &amp; resume</button></div>
+            </div>
+
+            <div id="help-screen" class="screen-overlay help-screen" hidden>
+              <div class="dialog-card help-card"><button id="close-help" class="dialog-close" type="button" aria-label="Close controls">×</button><span class="eyebrow">Meadows field guide</span><h2>The fine art of mayhem.</h2><dl class="control-list"><div><dt><kbd>WASD</kbd> / <kbd>↑↓←→</kbd></dt><dd>Walk or steer your ride</dd></div><div><dt><kbd>E</kbd></dt><dd>Borrow / exit a nearby car</dd></div><div><dt><kbd>SPACE</kbd></dt><dd>Throw confetti on foot; handbrake / drift in a car</dd></div><div><dt><kbd>SHIFT</kbd></dt><dd>Sprint on foot; boost in a car</dd></div><div><dt><kbd>H</kbd></dt><dd>Honk your horn</dd></div><div><dt><kbd>R</kbd></dt><dd>Recover to a safe spot</dd></div><div><dt><kbd>ESC</kbd></dt><dd>Pause / resume</dd></div></dl><p>Contracts earn pocket money and style points. Mischief builds heat; disappear from patrols to cool off. The garage patches up and upgrades your ride.</p><p class="help-fine-print">Confetti everywhere. Cartoon consequences. Absolutely zero actual good advice.</p></div>
+            </div>
+          </div>
+
+          <footer class="play-footer"><span><kbd>WASD</kbd> move <span class="footer-separator">/</span> <kbd>E</kbd> ride <span class="footer-separator">/</span> <kbd>SPACE</kbd> mischief <span class="footer-separator">/</span> <kbd>ESC</kbd> pause</span><button id="recover-button" class="text-button" type="button">Stuck? Recover ↗</button></footer>
+        </section>
+
+        <aside class="dispatch-column" aria-label="Contracts and garage">
+          <section class="dispatch-panel">
+            <div class="panel-heading"><div><span class="eyebrow">Meadows dispatch</span><h2>Questionable gigs.</h2></div><span class="panel-index" aria-hidden="true">01—03</span></div>
+            <p class="panel-intro">Honest work. Mostly. Pick your next bad idea.</p>
+            <div class="contract-list">
+              <button class="contract-button delivery-contract" type="button" data-mission="delivery"><span class="contract-icon" aria-hidden="true">▣</span><span class="contract-copy"><span class="contract-category">DELIVERY</span><strong>Special delivery.</strong><span>Collect it. Drop it. Don’t ask.</span></span><span class="contract-arrow" aria-hidden="true">↗</span></button>
+              <button class="contract-button dash-contract" type="button" data-mission="dash"><span class="contract-icon" aria-hidden="true">ϟ</span><span class="contract-copy"><span class="contract-category">DASH</span><strong>Town tour, turbo.</strong><span>A scenic route. A silly deadline.</span></span><span class="contract-arrow" aria-hidden="true">↗</span></button>
+              <button class="contract-button party-contract" type="button" data-mission="party"><span class="contract-icon" aria-hidden="true">✳</span><span class="contract-copy"><span class="contract-category">PARTY</span><strong>Party emergency.</strong><span>Bring the boom. And the confetti.</span></span><span class="contract-arrow" aria-hidden="true">↗</span></button>
+            </div>
+            <div class="dispatch-status"><span id="mission-status">No gig active. The town is your oyster.</span><button id="abandon-button" class="text-button" type="button" hidden>Abandon gig</button></div>
+          </section>
+
+          <section class="garage-panel">
+            <div class="panel-heading"><div><span class="eyebrow">Spanner’s garage</span><h2>Make it worse. Faster.</h2></div><span class="garage-icon" aria-hidden="true">⚒</span></div>
+            <p id="garage-status" class="garage-status">Find the garage to tune up your ride.</p>
+            <div class="upgrade-list"><button class="purchase-button" type="button" data-upgrade="boost"><span><strong>Extra oomph</strong><small>Upgrade your boost</small></span><span id="boost-price" class="price">$200</span></button><button class="purchase-button" type="button" data-upgrade="armor"><span><strong>Less crumple</strong><small>Toughen up your ride</small></span><span id="armor-price" class="price">$150</span></button><button class="purchase-button" type="button" data-upgrade="repair"><span><strong>Un-dent, please</strong><small>Patch up your current ride</small></span><span class="price">$45</span></button></div>
+          </section>
+
+          <div class="town-note"><span class="town-note-star" aria-hidden="true">✳</span><p>“Oh, for fudge’s sake.”<small>— Every resident, eventually</small></p></div>
+        </aside>
+      </main>
+      <div class="bottom-line"><span>EST. FIVE MINUTES AGO</span><span>Confetti cleans up itself. Probably.</span><span>MAYHEM MEADOWS © FOR FUN</span></div>
+    </div>
+  </body>
+</html>
