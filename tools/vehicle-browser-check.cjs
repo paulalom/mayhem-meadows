@@ -59,8 +59,8 @@ async function main() {
     assert.equal(await page.evaluate(() => checkGame.current.burning), false);
     await page.evaluate(() => {
       const g = checkGame, car = g.current, garage = g.services.find(value => value.id === 'garage');
-      car.x = garage.x; car.y = garage.y; car.elevation = 0; car.upright = true; car.speed = 0;
-      g.player.x = car.x; g.player.y = car.y; g.player.elevation = 0; g.money = 1000;
+      car.x = garage.x; car.y = garage.y; g.vehiclePhysics.reset(car);
+      g.player.x = car.x; g.player.y = car.y; g.player.elevation = car.elevation; g.player.grounded = true; g.money = 1000;
       g.garageStore(); g._damageVehicle(car, 20);
       document.getElementById('pause-screen').style.visibility = '';
     });

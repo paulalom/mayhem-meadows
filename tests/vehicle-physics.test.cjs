@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { Game } = require('../core.js');
+const { Game, CAR_TYPES } = require('../core.js');
 const C = require('../vendor/cannon.cjs');
 const { PERSON_HEIGHT, PLAYER_RADIUS } = require('../physics.js');
 const VehicleStats = require('../vehicle-stats.js');
@@ -21,7 +21,9 @@ const driveWorld = (fixture, seconds, command) => {
 const empty = () => {
   const game = new Game({ seed: 42 });
   game.cars = []; game.police = []; game.peds = []; game.buildings = []; game.staticObjects = [];
+  game.terrain = null; game.world = { ...game.world, terrain: null };
   game.player.x = 900; game.player.y = 900; game.graceTimer = 0;
+  game.player.elevation = game.player.verticalVelocity = 0; game.player.grounded = true;
   game.vehiclePhysics.sync(); return game;
 };
 const stepBodies = (game, seconds, observe = () => {}) => {
@@ -210,12 +212,12 @@ test('rotated compound props expose their real offset footprint and elevation', 
 
 test('expanded physics bounds allow suburban driving and bounce at the new perimeter', () => {
   const game = empty();
-  assert.equal(Game.SIZE, 5600);
+  assert.equal(Game.SIZE, 12000);
   assert.equal(game.vehiclePhysics.size, Game.SIZE);
-  const suburban = car(game, 4250, 4500); suburban.speed = suburban.vx = 180;
+  const suburban = car(game, 9000, 9500); suburban.speed = suburban.vx = 180;
   stepBodies(game, 0.5);
-  assert.ok(suburban.x > 4320, 'the old 2160 perimeter no longer traps suburban cars');
-  const edge = car(game, 5520, 4500); edge.speed = edge.vx = 280;
+  assert.ok(suburban.x > 9070, 'previous map boundaries no longer trap cars on the larger terrain');
+  const edge = car(game, Game.SIZE - 80, 9500); edge.speed = edge.vx = 280;
   let bounce = false; stepBodies(game, 0.6, () => { bounce ||= edge.vx < -20; });
   assert.ok(bounce, 'the new outer boundary reverses chassis velocity');
   assert.ok(edge.x < Game.SIZE - 20, 'the vehicle remains inside the expanded town');
@@ -225,12 +227,192 @@ test('expanded physics bounds allow suburban driving and bounce at the new perim
 test('world-size resynchronization preserves live cars while replacing all four perimeter walls', () => {
   const game = empty(), ride = car(game, 3000, 3500); game.vehiclePhysics.sync();
   const body = game.vehiclePhysics.get(ride.id), oldWalls = game.vehiclePhysics.world.bodies.filter(candidate => candidate.kind === 'boundary');
-  game.world = { ...game.world, size: 6200 }; game.vehiclePhysics.sync();
-  assert.equal(game.vehiclePhysics.size, 6200, 'the active world size takes priority over the Game fallback');
+  const enlarged = Game.SIZE + 600;
+  game.world = { ...game.world, size: enlarged }; game.vehiclePhysics.sync();
+  assert.equal(game.vehiclePhysics.size, enlarged, 'the active world size takes priority over the Game fallback');
   assert.equal(game.vehiclePhysics.get(ride.id), body, 'resizing fixed bounds preserves dynamic body identity');
   assert.equal(game.vehiclePhysics.world.bodies.filter(candidate => candidate.kind === 'boundary').length, 4);
   for (const wall of oldWalls) assert.equal(game.vehiclePhysics.world.bodies.includes(wall), false);
-  assert.ok(game.vehiclePhysics.world.bodies.some(candidate => candidate.kind === 'boundary' && candidate.position.x === 6210 / 20), 'east boundary follows the resized world');
+  assert.ok(game.vehiclePhysics.world.bodies.some(candidate => candidate.kind === 'boundary' && candidate.position.x === (enlarged + 10) / 20), 'east boundary follows the resized world');
+});
+
+function sampledTerrain(count, step, sample) {
+  const heights = new Float32Array(count * count);
+  for (let row = 0; row < count; row++) for (let col = 0; col < count; col++) heights[row * count + col] = sample(col * step / 20, row * step / 20);
+  const heightAt = (x, z) => {
+    const gx = Math.max(0, Math.min(count - 1, x / step)), gz = Math.max(0, Math.min(count - 1, z / step));
+    const col = Math.min(count - 2, Math.floor(gx)), row = Math.min(count - 2, Math.floor(gz)), u = gx - col, v = gz - row;
+    const a = heights[row * count + col], b = heights[row * count + col + 1], c = heights[(row + 1) * count + col], d = heights[(row + 1) * count + col + 1];
+    return u + v <= 1 ? a + (b - a) * u + (c - a) * v : d + (c - d) * (1 - u) + (b - d) * (1 - v);
+  };
+  const normalAt = (x, z) => {
+    const delta = 0.01, dx = (heightAt(x + delta, z) - heightAt(x - delta, z)) * 20 / (delta * 2);
+    const dz = (heightAt(x, z + delta) - heightAt(x, z - delta)) * 20 / (delta * 2), length = Math.hypot(dx, 1, dz);
+    return { x: -dx / length, y: 1 / length, z: -dz / length };
+  };
+  return { count, step, size: (count - 1) * step, heights, heightAt, surfaceHeight: heightAt, normalAt, surfaceNormalAt: normalAt };
+}
+
+function terrainTown(terrain, roads = []) {
+  const town = { world: { size: terrain.size, terrain, roads }, terrain, roads, buildings: [], staticObjects: [], cars: [], police: [] };
+  town.vehiclePhysics = new VehicleWorld(town, CAR_TYPES);
+  return town;
+}
+
+function terrainCar(town, x, y, elevation = town.terrain.surfaceHeight(x, y)) {
+  const ride = { id: 'terrain-car-' + town.cars.length, x, y, angle: 0, kind: 'compact', elevation, speed: 0, vx: 0, vy: 0, verticalVelocity: 0 };
+  town.cars.push(ride); town.vehiclePhysics.sync(); return ride;
+}
+
+test('Cannon heightfield rows and triangle halves match absolute sampled terrain, including negative heights', () => {
+  const terrain = sampledTerrain(3, 200, (x, z) => -4 + 0.6 * x + 0.5 * z - 0.01 * x * z);
+  const town = terrainTown(terrain), physics = town.vehiclePhysics;
+  assert.ok(physics.floor.shapes[0] instanceof C.Heightfield, 'real terrain replaces the infinite zero plane');
+  for (const [x, z, expected] of [[40, 60, -1.3], [160, 140, 3.8], [0, 0, -4], [400, 400, 14]]) {
+    assert.ok(Math.abs(physics.support(x, z, 30) - expected) < 1e-9, `ray height at ${x},${z} uses the shared triangle`);
+  }
+  assert.equal(physics.groundHeight(0, 0), -4, 'sea floor retains its negative elevation');
+  assert.equal(physics.support(1000, 1000, 30), terrain.surfaceHeight(1000, 1000), 'out-of-grid query falls back to the shared clamped terrain sampler');
+  const floor = physics.floor;
+  town.buildings = [{ x: 80, y: 80, w: 40, h: 40, elevation: 2, height: 3 }]; physics.sync();
+  assert.equal(physics.floor, floor, 'a static prop/lot refresh preserves the heightfield');
+  assert.ok(Math.abs(physics.support(100, 100, 10) - 5) < 1e-10, 'elevated building roof remains an absolute support surface');
+});
+
+test('grounded slope driving climbs without artificial launches and reset aligns the chassis with the hill', () => {
+  const terrain = sampledTerrain(65, 31.25, (x, z) => 3 + 0.18 * x + 0.06 * z), town = terrainTown(terrain);
+  const ride = terrainCar(town, 400, 400), physics = town.vehiclePhysics;
+  physics.reset(ride);
+  const start = { x: ride.x, height: ride.elevation }, normal = terrain.normalAt(ride.x, ride.y);
+  const up = physics.get(ride.id).quaternion.vmult(new C.Vec3(0, 1, 0));
+  assert.ok(up.dot(new C.Vec3(normal.x, normal.y, normal.z)) > 0.99999, 'reset rests the bottom plane on the surface normal');
+  assert.ok(ride.elevation >= terrain.surfaceHeight(ride.x, ride.y));
+  let maxGap = 0, impacts = 0;
+  for (let i = 0; i < 120; i++) {
+    physics.control(ride, { up: true }); impacts += physics.step(1 / 60).length;
+    maxGap = Math.max(maxGap, Math.abs(ride.elevation - terrain.heightAt(ride.x, ride.y)));
+  }
+  assert.ok(ride.x > start.x + 250 && ride.elevation > start.height + 2, 'driving force follows the hill and makes meaningful uphill progress');
+  assert.ok(maxGap < 0.15, 'solid slope contacts keep the chassis near the ground');
+  assert.equal(impacts, 0, 'ordinary terrain contacts never trigger bumper damage or cartoon lift');
+  assert.equal(ride.grounded, true);
+  physics.reset(ride); const parked = { x: ride.x, y: ride.y };
+  for (let i = 0; i < 120; i++) physics.step(1 / 60);
+  assert.ok(Math.hypot(ride.x - parked.x, ride.y - parked.y) < 1, 'a parked car does not slide away down a hill');
+});
+
+test('actual hillside parking bays retain resting physical cars and release them for driving and blasts', () => {
+  const game = new Game({ seed: 42 }), physics = game.vehiclePhysics;
+  const parked = game.world.vehicleSpawns.filter(spawn => !spawn.traffic).map(spawn => {
+    const ride = game.cars.find(car => Math.hypot(car.x - spawn.x, car.y - spawn.y) < 0.1);
+    assert.ok(ride, `a real car occupies ${spawn.parkingBayId}`);
+    return { spawn, ride, body: physics.get(ride.id), bay: game.world.parkingBays.find(bay => bay.id === spawn.parkingBayId) };
+  });
+  assert.ok(parked.some(entry => entry.spawn.roadId === 'pine-road'), 'the steep van parking repro is included');
+  advance(game, 4);
+  for (const { spawn, ride, body, bay } of parked) {
+    assert.ok(ride.upright && ride.grounded, `${spawn.roadId} retains a grounded upright car`);
+    assert.ok(Math.hypot(ride.x - spawn.x, ride.y - spawn.y) < 1, `${spawn.roadId} holds its parked position`);
+    assert.ok(body.mass > 0 && body.type === C.Body.DYNAMIC, 'parking retains a real dynamic collision body');
+    const half = body.shapes[0].halfExtents, cosine = Math.cos(bay.angle), sine = Math.sin(bay.angle);
+    for (const x of [-half.x, half.x]) for (const y of [-half.y, half.y]) for (const z of [-half.z, half.z]) {
+      const offset = body.quaternion.vmult(new C.Vec3(x, y, z));
+      const dx = (body.position.x + offset.x) * 20 - (bay.x + bay.w / 2), dz = (body.position.z + offset.z) * 20 - (bay.y + bay.h / 2);
+      assert.ok(Math.abs(dx * cosine + dz * sine) <= bay.w / 2 + 0.1, `${spawn.roadId} fits its full chassis length inside the bay`);
+      assert.ok(Math.abs(-dx * sine + dz * cosine) <= bay.h / 2 + 0.1, `${spawn.roadId} fits its full chassis width inside the bay`);
+    }
+    let minGap = Infinity, maxGap = -Infinity;
+    for (let ix = 0; ix <= 24; ix++) for (let iz = 0; iz <= 24; iz++) {
+      const offset = body.quaternion.vmult(new C.Vec3(-half.x + half.x * ix / 12, -half.y, -half.z + half.z * iz / 12));
+      const ground = game.terrain.surfaceHeight((body.position.x + offset.x) * 20, (body.position.z + offset.z) * 20);
+      const gap = body.position.y + offset.y - ground;
+      minGap = Math.min(minGap, gap); maxGap = Math.max(maxGap, gap);
+    }
+    assert.ok(minGap >= -0.005 && minGap < 0.03, `${spawn.roadId} rests against actual terrain without penetration or suspension`);
+    assert.ok(maxGap < 0.2, `${spawn.roadId} has a usable parking footprint rather than balancing on a terrain peak`);
+  }
+  const { ride, body, spawn } = parked.find(entry => entry.spawn.roadId === 'pine-road');
+  game.player.vehicleId = ride.id;
+  advance(game, 0.5, { up: true });
+  assert.equal(physics.get(ride.id), body, 'driving wakes the same body instead of replacing a parked placeholder');
+  assert.notEqual(body.sleepState, C.Body.SLEEPING);
+  assert.ok(Math.hypot(ride.x - spawn.x, ride.y - spawn.y) > 30 && ride.speed > 30, 'throttle releases the parking brake and drives away');
+  assert.ok(ride.upright && ride.grounded, 'the released car retains real slope contact');
+  game.player.vehicleId = null; ride.x = spawn.x; ride.y = spawn.y; ride.angle = spawn.angle; physics.reset(ride);
+  const restingHeight = ride.elevation;
+  physics.impulse(ride, { x: 2, y: 6, z: 0 });
+  advance(game, 0.2);
+  assert.equal(physics.get(ride.id), body);
+  assert.ok(ride.elevation > restingHeight + 0.4 && ride.verticalVelocity > 1, 'a blast wakes and launches the resting dynamic car');
+  assert.equal(ride.grounded, false, 'launched cars lose ground support normally');
+});
+
+test('sloped bridge decks support cars above the sea floor without phantom under-bridge grounding', () => {
+  const terrain = sampledTerrain(33, 50, () => -4), slope = 2 / 44;
+  const road = { id: 'bridge-test', bridge: true, width: 100, points: [{ x: 320, y: 800, elevation: 2 }, { x: 760, y: 800, elevation: 3 }, { x: 1200, y: 800, elevation: 4 }] };
+  terrain.surfaceHeight = (x, z) => x >= 320 && x <= 1200 && Math.abs(z - 800) <= 82 ? 2 + (x - 320) / 440 : -4;
+  terrain.surfaceNormalAt = (x, z) => terrain.surfaceHeight(x, z) > -4 ? { x: -slope / Math.hypot(slope, 1), y: 1 / Math.hypot(slope, 1), z: 0 } : { x: 0, y: 1, z: 0 };
+  const town = terrainTown(terrain, [road]), physics = town.vehiclePhysics;
+  assert.equal(physics.bridgeBodies.length, 2);
+  for (const x of [400, 600, 900, 1100]) assert.ok(Math.abs(physics.support(x, 800, 10) - terrain.surfaceHeight(x, 800)) < 1e-10, 'deck top follows the shared sloped profile');
+  assert.ok(Math.abs(physics.support(760, 800, 1) + 4) < 1e-10, 'a point below the deck sees the actual sea floor');
+  const under = terrainCar(town, 1000, 800, 0), body = physics.get(under.id);
+  assert.equal(physics._nearGround(body, 0.65), false, 'the higher walking deck does not ground a chassis underneath it');
+  town.cars = []; physics.sync();
+  const ride = terrainCar(town, 650, 800, 6); let impacts = 0;
+  for (let i = 0; i < 120; i++) impacts += physics.step(1 / 60).length;
+  assert.ok(Math.abs(ride.elevation - terrain.surfaceHeight(ride.x, ride.y)) < 0.08);
+  assert.equal(ride.grounded, true); assert.equal(impacts, 0, 'landing on a road deck uses ordinary ground contact');
+  const deck = physics.bridgeBodies[0], floor = physics.floor;
+  town.staticObjects = [{ kind: 'lamp', x: 120, y: 120, elevation: -4, parts: [{ half: [0.1, 1, 0.1], offset: [0, 1, 0] }] }]; physics.sync();
+  assert.equal(physics.floor, floor); assert.ok(physics.world.bodies.includes(deck), 'ordinary street-object sync leaves terrain and bridge bodies intact');
+});
+
+test('terrain replacement rebuilds the sampled floor without duplicating live cars or perimeter walls', () => {
+  const terrain = sampledTerrain(17, 100, () => 5), town = terrainTown(terrain), physics = town.vehiclePhysics;
+  const ride = terrainCar(town, 800, 800), body = physics.get(ride.id), oldFloor = physics.floor;
+  town.terrain = town.world.terrain = sampledTerrain(17, 100, () => 7); physics.sync();
+  assert.notEqual(physics.floor, oldFloor); assert.equal(physics.world.bodies.includes(oldFloor), false);
+  assert.equal(physics.get(ride.id), body); assert.equal(physics.world.bodies.filter(candidate => candidate.kind === 'boundary').length, 4);
+  assert.ok(Math.abs(physics.support(400, 400, 15) - 7) < 1e-10);
+  const east = physics.world.bodies.find(candidate => candidate.kind === 'boundary' && candidate.position.x > 80);
+  assert.ok(east.shapes[0].halfExtents.y + east.shapeOffsets[0].y >= 52, 'high terrain and airborne cars stay inside tall perimeter walls');
+});
+
+test('a hillside building foundation stops low chassis impacts while preserving the elevated rotated roof', () => {
+  const town = terrainTown(sampledTerrain(33, 100, () => 4)), physics = town.vehiclePhysics, angle = Math.PI / 6;
+  const building = { x: 1150, y: 1100, w: 100, h: 200, angle, elevation: 8, foundationBottom: 3.88, height: 5 };
+  town.buildings = [building]; physics.sync();
+  const point = localX => ({ x: 1200 + localX * Math.cos(angle), y: 1200 + localX * Math.sin(angle) });
+  const start = point(-170), target = point(0);
+  const hit = physics.firstHit({ x: start.x, y: start.y, height: 4.6 }, { x: target.x, y: target.y, height: 4.6 });
+  assert.equal(hit?.body.source, building, 'the former empty gap below the wall is a solid foundation');
+  assert.ok(Math.abs(physics.support(1200, 1200, 20) - 13) < 1e-10, 'foundation depth never raises the physical roof');
+  const ride = terrainCar(town, start.x, start.y);
+  ride.angle = angle; ride.speed = 280; ride.vx = Math.cos(angle) * 280; ride.vy = Math.sin(angle) * 280; physics.sync();
+  let reversed = false;
+  for (let i = 0; i < 48; i++) {
+    physics.step(1 / 60);
+    reversed ||= ride.vx * Math.cos(angle) + ride.vy * Math.sin(angle) < -30;
+  }
+  assert.ok(reversed, 'a car below the first-floor base bounces off the rotated plinth');
+  const body = physics.world.bodies.find(candidate => candidate.source === building);
+  const bottom = body.position.y + body.shapeOffsets[0].y - body.shapes[0].halfExtents.y;
+  assert.ok(Math.abs(bottom - building.foundationBottom) < 1e-10);
+});
+
+test('a piercing trajectory can ignore struck props while still hitting the next solid terrain-world collider', () => {
+  const town = terrainTown(sampledTerrain(33, 100, () => 5)), physics = town.vehiclePhysics;
+  const first = { kind: 'tree', x: 650, y: 800, elevation: 5, parts: [{ half: [0.3, 1, 0.3], offset: [0, 1, 0] }] };
+  const second = { kind: 'lamp', x: 850, y: 800, elevation: 5, parts: [{ half: [0.1, 1, 0.1], offset: [0, 1, 0] }] };
+  const building = { x: 1050, y: 750, w: 100, h: 100, elevation: 7, foundationBottom: 4.88, height: 4 };
+  town.staticObjects = [first, second]; town.buildings = [building]; physics.sync();
+  const from = { x: 500, y: 800, height: 6 }, to = { x: 1200, y: 800, height: 6 };
+  assert.equal(physics.firstHit(from, to).source, first);
+  assert.equal(physics.firstHit(from, to, undefined, new Set([first])).source, second, 'ignoring a struck prop does not skip unrelated fixed colliders');
+  assert.equal(physics.firstHit(from, to, undefined, new Set([first, second])).source, building, 'the solid foundation remains an obstruction below the raised floor');
+  first.destroyed = true; town._environmentVersion = 1; physics.sync();
+  assert.equal(physics.firstHit(from, to).source, second, 'destroyed prop removal still updates the physical world');
 });
 
 test('component damage reduces manual acceleration and caps boosted and AI driving at the damaged model speed', () => {

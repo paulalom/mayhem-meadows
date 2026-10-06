@@ -3,11 +3,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Game, SIZE } = require('../core.js');
 const { PLAYER_RADIUS, NPC_RADIUS } = require('../physics.js');
-const makeGame = () => new Game({ seed: 42 });
+const { makeFlatGame: makeGame } = require('./helpers/flat-game.cjs');
 const advance = (game, seconds, input = {}) => { for (let t = 0; t < seconds - 0.0001; t += 1 / 60) game.update(1 / 60, input); };
 
 test('town starts near a usable car and all contract targets are reachable', () => {
-  const game = makeGame();
+  const game = new Game({ seed:42 });
   assert.ok(game.buildings.length >= 90); assert.equal(game.world.size,SIZE);
   assert.equal(game.interact(), true);
   assert.equal(game.current.color, '#ffd15b');

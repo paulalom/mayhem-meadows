@@ -1,17 +1,21 @@
 /* One road graph owns Mayhem Meadows' city, suburbs, routes, and lot placement. */
 (function (root) {
   'use strict';
-  const SIZE = 5600, SIDEWALK_WIDTH = 32;
+  const SIZE = 12000, MAP_WIDTH=12000, MAP_HEIGHT=8000, SIDEWALK_WIDTH = 32;
+  const HeightData=typeof module!=='undefined'&&module.exports?require('./height-data.js'):root.MayhemHeightData;
+  const Terrain=typeof module!=='undefined'&&module.exports?require('./terrain.js'):root.MayhemTerrain;
   const DISTRICTS = Object.freeze({
-    heights: Object.freeze({ id: 'heights', name: 'Biscuit Heights', color: '#bcd2ae', mapColor: '#bcd2ae' }),
-    works: Object.freeze({ id: 'works', name: 'Waffle Works', color: '#b8c7cd', mapColor: '#b8c7cd' }),
-    market: Object.freeze({ id: 'market', name: 'Market Mile', color: '#d9c6b6', mapColor: '#d9c6b6' }),
-    riverfront: Object.freeze({ id: 'riverfront', name: 'Riverfront', color: '#b7d5c7', mapColor: '#b7d5c7' }),
-    willow: Object.freeze({ id: 'willow', name: 'Willow Gardens', color: '#a9c99f', mapColor: '#a9c99f', suburban: true }),
-    orchard: Object.freeze({ id: 'orchard', name: 'Orchard Park', color: '#d2d6ac', mapColor: '#d2d6ac', suburban: true })
+    heights: Object.freeze({ id: 'heights', name: 'Old Town', color: '#bcd2ae', mapColor: '#bcd2ae',pedCount:8 }),
+    works: Object.freeze({ id: 'works', name: 'Docklands', color: '#b8c7cd', mapColor: '#b8c7cd',pedCount:5 }),
+    market: Object.freeze({ id: 'market', name: 'Downtown', color: '#d9c6b6', mapColor: '#d9c6b6',pedCount:14 }),
+    riverfront: Object.freeze({ id: 'riverfront', name: 'West Beach & Marina', color: '#b7d5c7', mapColor: '#b7d5c7',pedCount:6 }),
+    willow: Object.freeze({ id: 'willow', name: 'Northside', color: '#a9c99f', mapColor: '#a9c99f', suburban: true,pedCount:10 }),
+    orchard: Object.freeze({ id: 'orchard', name: 'Airport', color: '#d2d6ac', mapColor: '#d2d6ac',pedCount:3 }),
+    ridge: Object.freeze({id:'ridge',name:'Ridge Heights',color:'#9cb190',mapColor:'#9cb190',pedCount:1}),
+    marsh: Object.freeze({id:'marsh',name:'Tidewell Marsh',color:'#8fac98',mapColor:'#8fac98',pedCount:1})
   });
   const COLORS = ['#ffd15b', '#fb8097', '#67d3c8', '#a6a0fa', '#90c66b', '#6fb5eb'];
-  const PROP_HEALTH = Object.freeze({ fence: 25, wayfinding: 20, lamp: 35, bench: 45, tree: 90, fountain: 160, wash: 100 });
+  const PROP_HEALTH = Object.freeze({fence:25,wayfinding:20,lamp:35,bench:45,tree:90,fountain:160,wash:100});
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   const heading = (a, b) => Math.atan2(b.y - a.y, b.x - a.x);
@@ -20,9 +24,8 @@
   function districtAt(point, y) {
     const x = typeof point === 'number' ? point : point.x;
     y = typeof point === 'number' ? y : point.y;
-    return DISTRICTS[y > 2850 && x < 2950 ? 'willow' : x > 2900 ? 'orchard'
-      : y > 1860 ? 'riverfront' : x > 1530 && y < 1560 ? 'works'
-        : y > 1150 || x > 1050 ? 'market' : 'heights'];
+    return DISTRICTS[x>9450?(y>5600?'marsh':'orchard'):y<2500?(x<5300?'ridge':'willow'):
+      y>4900&&x>6000?'works':x<5200?(y>4000?'riverfront':'heights'):'market'];
   }
 
   function footprintCorners(box, margin = 0) {
@@ -116,7 +119,8 @@
         const t = clamp(((point.x - a.x) * dx + (point.y - a.y) * dy) / length2, 0, 1), x = a.x + dx * t, y = a.y + dy * t;
         const d = Math.hypot(point.x - x, point.y - y);
         if (!best || d < best.distance) best = { x, y, angle: Math.atan2(dy, dx), roadId: road.id, road,
-          index: i, t, distance: d, width: road.width, s: road.arc[i] + Math.sqrt(length2) * t };
+          index: i, t, distance: d, width: road.width, s: road.arc[i] + Math.sqrt(length2) * t,
+          elevation:Number.isFinite(a.elevation)&&Number.isFinite(b.elevation)?a.elevation+(b.elevation-a.elevation)*t:undefined };
       }
       return best;
     }
@@ -133,7 +137,8 @@
       const angle = heading(a, b);
       return { x: a.x + (b.x - a.x) * t - Math.sin(angle) * offset,
         y: a.y + (b.y - a.y) * t + Math.cos(angle) * offset,
-        angle, roadId: id, road, s, width: road.width, index: i, t };
+        angle, roadId: id, road, s, width: road.width, index: i, t,
+        elevation:Number.isFinite(a.elevation)&&Number.isFinite(b.elevation)?a.elevation+(b.elevation-a.elevation)*t:undefined };
     }
 
     _shortestNodes(start, end) {
@@ -248,78 +253,108 @@
     const node = (id, x, y) => { const point = { id, x, y }; nodes.push(point); byId.set(id, point); return point; };
     const road = (id, name, a, b, district, bend = 0, width = 100, skew = 0) => roads.push({ id, name, a, b, district, width, points: sampleCurve(byId.get(a), byId.get(b), bend, skew) });
     for (const [id, x, y] of [
-      ['north',900,480],['bakery',900,720],['garage',900,900],['spawn',900,1080],['plaza',900,1320],
-      ['clock',1260,620],['warehouse',1710,500],['worksyard',2080,770],['clay',2420,1160],
-      ['arcade',1280,1270],['depot',1660,1010],['eastmarket',1740,1480],['canal',2240,1650],
-      ['heights',620,650],['westgate',470,1030],['garden',540,1410],['outer',420,1770],
-      ['market',1000,1610],['creek',620,1900],['southgate',840,2340],['riverbend',1270,2050],['ferry',1940,2050],['quay',1680,2400],
-      ['willow-trail',890,2880],['willow-entry',1280,3150],['willow-green',1220,3500],['willow-bend',960,3870],
-      ['willow-lake',1180,4280],['willow-end',1630,4700],['willow-east',2090,4270],['willow-top',1960,3560],
-      ['willow-court',520,3980],['birch-court',840,4660],['drift-court',2010,4920],['elm-court',2440,4500],['fern-court',620,3150],
-      ['meadow',2130,3000],['meadow-hub',2710,3020],['meadow-bend',3150,3200],
-      ['orchard-gate',3000,1230],['apple',3520,1080],['pear',4050,1160],['orchard-east',4570,1520],['orchard-pond',4690,2000],
-      ['orchard-south',4410,2550],['orchard-west',3770,2620],['orchard-green',3370,2200],['orchard-center',3870,1790],
-      ['cedar-court',3470,630],['picnic-court',4390,750],['view-court',5040,1410],['peach-court',3880,3240],['cherry-court',4760,3030]
+      ['north',6000,2950],['bakery',6000,3250],['garage',6000,3500],['spawn',6000,3700],['plaza',6000,3950],['market',6100,4300],
+      ['clock',5450,3150],['heights',4700,2950],['westgate',4150,3050],['garden',4300,3600],['outer',4250,4100],['creek',4900,4350],['southgate',5550,4650],
+      ['arcade',6550,3900],['depot',6750,3300],['eastmarket',7300,3900],['canal',7900,4300],['riverbend',6550,4650],
+      ['quay',7300,5100],['ferry',8100,5100],['warehouse',7500,5600],['worksyard',8250,6100],['clay',7400,6400],['dock-end',8050,6650],
+      ['oldwest',3400,3000],['oldlower',3500,3650],['beach',2800,4300],['beach-tip',2350,4600],
+      ['marina-gate',3550,4480],['marina-west',3150,5250],['marina-south',3600,6050],['marina-east',4250,6100],
+      ['ridge-gate',3350,2350],['ridge-low',2450,2220],['ridge-switch1',3000,1840],['ridge-switch2',2100,1550],['ridge-switch3',2920,1170],
+      ['ridge-switch4',2200,850],['eagle-peak',4300,550],['vista',1350,1600],['pine-ridge',5550,1150],
+      ['willow-trail',6400,2600],['willow-entry',6750,2300],['willow-green',7200,1800],['willow-bend',6750,1400],
+      ['willow-lake',7250,850],['willow-end',8000,1200],['willow-east',8350,1850],['willow-top',8000,2450],
+      ['willow-court',6220,1570],['birch-court',6800,650],['elm-court',8650,2200],['fern-court',6350,2200],
+      ['bridge-north-west',8750,1250],['bridge-north-east',9850,1300],['bridge-city-west',8140,3700],['bridge-city-east',9500,3700],
+      ['orchard-gate',10200,1650],['apple',11000,1650],['orchard-east',11400,2350],['orchard-pond',11400,4400],
+      ['orchard-south',10700,5250],['orchard-west',10000,5200],['orchard-green',9850,3750],['orchard-center',10200,3400],
+      ['marsh-gate',10850,5850],['marsh-lookout',11000,6430],['marsh-east',11600,6150]
     ]) node(id, x, y);
     for (const spec of [
-      ['north-spine','Biscuit Avenue','north','bakery','heights',0],['bakery-spine','Biscuit Avenue','bakery','garage','heights',0],
-      ['garage-spine','Biscuit Avenue','garage','spawn','market',0],['plaza-spine','Biscuit Avenue','spawn','plaza','market',0],
-      ['heights-rise','Scone Rise','north','heights','heights',-35],['heights-lane','Daisy Lane','heights','westgate','heights',45],
-      ['garden-lane','Garden Crescent','westgate','garden','heights',-60],['plaza-lane','Crumb Street','garden','plaza','market',55],
-      ['clock-street','Clock Street','bakery','clock','market',25],['warehouse-road','Loading Lane','clock','warehouse','works',-45],
-      ['works-road','Waffle Way','warehouse','worksyard','works',60],['clay-road','Clay Terrace','worksyard','clay','works',-60],
-      ['depot-road','Depot Street','clock','depot','works',-50],['yard-road','Factory Crescent','depot','worksyard','works',65],
-      ['arcade-road','Arcade Street','plaza','arcade','market',-30],['arcade-depot','Noodle Alley','arcade','depot','market',45,90],
-      ['market-lane','Market Mile','plaza','market','market',-65],['arcade-market','Disco Lane','arcade','market','market',-30,90],
-      ['eastmarket-road','Bean Boulevard','arcade','eastmarket','market',50],['depot-market','Fudge Street','depot','eastmarket','works',-45],
-      ['canal-road','Canal Crescent','eastmarket','canal','riverfront',-40],['clay-canal','Clay Terrace','clay','canal','works',55],
-      ['outer-lane','Primrose Bend','garden','outer','heights',55],['creek-lane','Creek Road','outer','creek','riverfront',-35],
-      ['market-creek','Market Mile','market','creek','market',45],['garden-creek','Garden Crescent','garden','creek','heights',-70],
-      ['southgate-road','Riverside Drive','creek','southgate','riverfront',-80],['riverbend-road','Riverside Drive','market','riverbend','riverfront',45],
-      ['southgate-bend','Quay Road','southgate','riverbend','riverfront',60],['ferry-road','Ferry Lane','eastmarket','ferry','riverfront',50],
-      ['canal-ferry','Canal Crescent','canal','ferry','riverfront',-45],['quay-road','Quay Road','riverbend','quay','riverfront',-50],
-      ['ferry-quay','Waterside Way','ferry','quay','riverfront',50],['quay-south','Riverside Drive','quay','southgate','riverfront',-170],
-      ['willow-approach','Willow Road','southgate','willow-trail','willow',-90,90],['willow-entry-road','Willow Road','willow-trail','willow-entry','willow',65,90],
-      ['willow-green-road','Willow Crescent','willow-entry','willow-green','willow',65,84],['willow-west-road','Willow Crescent','willow-green','willow-bend','willow',-60,84],
-      ['willow-lake-road','Lake Crescent','willow-bend','willow-lake','willow',70,84],['willow-bottom-road','Lake Crescent','willow-lake','willow-end','willow',-80,84],
-      ['willow-east-road','Foxglove Drive','willow-end','willow-east','willow',90,84],['willow-top-road','Foxglove Drive','willow-east','willow-top','willow',-100,84],
-      ['willow-loop-road','Willow Crescent','willow-top','willow-entry','willow',90,84],['willow-cross-road','Lavender Lane','willow-green','willow-top','willow',-70,78],
-      ['willow-court-road','Willow Court','willow-bend','willow-court','willow',55,72],['birch-road','Birch Court','willow-lake','birch-court','willow',-45,72],
-      ['drift-road','Driftwood Court','willow-end','drift-court','willow',-35,72],['elm-road','Elm Court','willow-east','elm-court','willow',35,72],
-      ['fern-road','Fern Court','willow-trail','fern-court','willow',-40,72],['meadow-south','Meadow Road','willow-top','meadow','willow',70,86],
-      ['meadow-quay','Meadow Road','meadow','quay','riverfront',-80,90],['meadow-link','Meadow Road','meadow','meadow-hub','willow',80,86],
-      ['meadow-bend-road','Meadow Road','meadow-hub','meadow-bend','orchard',-70,86],
-      ['orchard-approach','Orchard Parkway','clay','orchard-gate','orchard',-90,100],['apple-road','Orchard Parkway','orchard-gate','apple','orchard',90,88],
-      ['pear-road','Apple Crescent','apple','pear','orchard',-85,84],['orchard-east-road','Apple Crescent','pear','orchard-east','orchard',55,84],
-      ['orchard-pond-road','Pond Drive','orchard-east','orchard-pond','orchard',-75,84],['orchard-south-road','Pond Drive','orchard-pond','orchard-south','orchard',85,84],
-      ['orchard-west-road','Pear Crescent','orchard-south','orchard-west','orchard',75,84],['orchard-green-road','Pear Crescent','orchard-west','orchard-green','orchard',-70,84],
-      ['orchard-loop-road','Orchard Parkway','orchard-green','orchard-gate','orchard',110,88],['orchard-center-road','Blossom Lane','orchard-green','orchard-center','orchard',-70,78],
-      ['orchard-pear-road','Blossom Lane','orchard-center','pear','orchard',70,78],['orchard-pond-link','Peach Lane','orchard-center','orchard-pond','orchard',-45,78],
-      ['cedar-road','Cedar Court','apple','cedar-court','orchard',45,72],['picnic-road','Picnic Court','pear','picnic-court','orchard',-50,72],
-      ['view-road','View Court','orchard-east','view-court','orchard',45,72],['peach-road','Peach Court','orchard-west','peach-court','orchard',-60,72],
-      ['cherry-road','Cherry Court','orchard-south','cherry-court','orchard',45,72],['orchard-meadow','Meadow Road','meadow-bend','orchard-west','orchard',70,86],
-      ['city-orchard','Greenway Drive','canal','orchard-green','orchard',-100,94]
+      ['north-spine','Biscuit Avenue','north','bakery','market',0,110],['bakery-spine','Biscuit Avenue','bakery','garage','market',0,110],
+      ['garage-spine','Biscuit Avenue','garage','spawn','market',0,110],['plaza-spine','Biscuit Avenue','spawn','plaza','market',0,110],
+      ['market-lane','Market Mile','plaza','market','market',-25,110],['clock-street','Clock Street','bakery','clock','market',30,100],
+      ['heights-rise','Scone Rise','clock','heights','heights',-55,100],['heights-lane','Daisy Lane','heights','westgate','heights',40,100],
+      ['garden-lane','Garden Crescent','westgate','garden','heights',-55,100],['plaza-lane','Crumb Street','garden','plaza','heights',60,100],
+      ['outer-lane','Primrose Bend','garden','outer','heights',50,100],['creek-lane','Creek Road','outer','creek','heights',-35,100],
+      ['market-creek','Market Mile','market','creek','market',-60,100],['garden-creek','Garden Crescent','garden','creek','heights',-70,100],
+      ['southgate-road','Seafront Drive','creek','southgate','riverfront',50,110],['riverbend-road','Quay Road','market','riverbend','market',35,110],
+      ['southgate-bend','Quay Road','southgate','riverbend','riverfront',-30,110],['arcade-road','Arcade Street','plaza','arcade','market',20,110],
+      ['arcade-depot','Noodle Street','arcade','depot','market',-40,100],['eastmarket-road','Bean Boulevard','arcade','eastmarket','market',-25,110],
+      ['depot-market','Fudge Street','depot','eastmarket','market',40,100],['north-depot','Clock Street','north','depot','market',-45,100],
+      ['canal-road','Canal Crescent','eastmarket','canal','market',45,110],['ferry-road','Canal Crescent','canal','ferry','works',-50,110],
+      ['quay-road','Quay Road','riverbend','quay','works',50,110],['ferry-quay','Waterside Way','ferry','quay','works',-45,110],
+      ['warehouse-road','Loading Lane','quay','warehouse','works',40,120],['works-road','Waffle Way','warehouse','worksyard','works',-50,120],
+      ['clay-road','Container Road','worksyard','clay','works',-45,120],['yard-road','Container Road','clay','warehouse','works',50,120],
+      ['dock-pier','Sprinkle Pier','worksyard','dock-end','works',0,100],
+      ['old-west','Old Market Road','westgate','oldwest','heights',60,100],['old-loop','Old Market Road','oldwest','oldlower','heights',-55,100],
+      ['old-garden','Daisy Lane','oldlower','garden','heights',-55,100],['beach-road','West Beach Drive','oldlower','beach','riverfront',40,110],
+      ['beach-walk','West Beach Drive','beach','beach-tip','riverfront',-20,100],['marina-approach','Harbor Crescent','beach','marina-gate','riverfront',-55,110],
+      ['marina-east-link','Harbor Crescent','marina-gate','outer','riverfront',50,100],['marina-west-road','Harbor Road','marina-gate','marina-west','riverfront',100,100],
+      ['marina-south-road','Harbor Road','marina-west','marina-south','riverfront',80,100],['marina-pier','Marina Way','marina-south','marina-east','riverfront',-40,100],
+      ['ridge-approach','Ridge Road','oldwest','ridge-gate','ridge',-45,100],['ridge-low-road','Ridge Road','ridge-gate','ridge-low','ridge',-90,100],
+      ['ridge-hairpin1','Eagle Pass','ridge-low','ridge-switch1','ridge',-120,100],['ridge-hairpin2','Eagle Pass','ridge-switch1','ridge-switch2','ridge',115,100],
+      ['ridge-hairpin3','Eagle Pass','ridge-switch2','ridge-switch3','ridge',-120,100],['ridge-hairpin4','Eagle Pass','ridge-switch3','ridge-switch4','ridge',100,100],
+      ['ridge-summit','Eagle Pass','ridge-switch4','eagle-peak','ridge',-100,100],['vista-road','Vista Point Road','ridge-switch2','vista','ridge',-40,100],
+      ['pine-road','Pine Ridge Road','eagle-peak','pine-ridge','ridge',-100,100],
+      ['willow-approach','Northside Parkway','north','willow-trail','willow',30,110],['willow-entry-road','Northside Parkway','willow-trail','willow-entry','willow',40,110],
+      ['willow-green-road','Willow Crescent','willow-entry','willow-green','willow',-60,100],['willow-west-road','Willow Crescent','willow-green','willow-bend','willow',45,100],
+      ['willow-lake-road','Lake Crescent','willow-bend','willow-lake','willow',60,100],['willow-bottom-road','Lake Crescent','willow-lake','willow-end','willow',-80,100],
+      ['willow-east-road','Foxglove Drive','willow-end','willow-east','willow',60,100],['willow-top-road','Foxglove Drive','willow-east','willow-top','willow',-50,100],
+      ['willow-loop-road','Willow Crescent','willow-top','willow-entry','willow',70,100],['willow-cross-road','Lavender Lane','willow-green','willow-top','willow',-40,100],
+      ['willow-court-road','Willow Court','willow-bend','willow-court','willow',30,90],['birch-road','Birch Court','willow-lake','birch-court','willow',-30,90],
+      ['elm-road','Elm Court','willow-east','elm-court','willow',30,90],['fern-road','Fern Court','willow-entry','fern-court','willow',-30,90],
+      ['pine-northside','Pine Ridge Road','pine-ridge','willow-bend','ridge',-60,100],
+      ['bridge-north-approach','River Parkway','willow-end','bridge-north-west','willow',-25,110],
+      ['bridge-north','North River Bridge','bridge-north-west','bridge-north-east','willow',0,120],
+      ['bridge-city-approach','Airport Express','eastmarket','bridge-city-west','market',-40,120],
+      ['bridge-city','Downtown River Bridge','bridge-city-west','bridge-city-east','market',0,120],
+      ['airport-north-link','Airport Road','bridge-north-east','orchard-gate','orchard',40,110],['apple-road','Airport Perimeter','orchard-gate','apple','orchard',-40,110],
+      ['orchard-east-road','Airport Perimeter','apple','orchard-east','orchard',45,110],['orchard-pond-road','Airport Perimeter','orchard-east','orchard-pond','orchard',15,110],
+      ['orchard-south-road','Airport Perimeter','orchard-pond','orchard-south','orchard',65,110],['orchard-west-road','Airport Perimeter','orchard-south','orchard-west','orchard',-40,110],
+      ['orchard-green-road','Terminal Avenue','orchard-west','orchard-green','orchard',-45,110],['airport-city-link','Terminal Avenue','bridge-city-east','orchard-green','orchard',0,110],
+      ['orchard-center-road','Terminal Avenue','orchard-green','orchard-center','orchard',-30,110],['airport-terminal-road','Terminal Avenue','orchard-center','orchard-gate','orchard',40,110],
+      ['marsh-approach','Tidewell Trail','orchard-south','marsh-gate','marsh',0,100],['marsh-road','Tidewell Trail','marsh-gate','marsh-lookout','marsh',0,90],
+      ['marsh-east-road','Wetlands Road','marsh-gate','marsh-east','marsh',50,90]
     ]) road(...spec);
+    for(const street of roads) if(street.id==='bridge-north'||street.id==='bridge-city') street.bridge=true;
     const network = new RoadNetwork(roads, nodes);
-    const washApproach=network.pointOnRoad('ferry-quay',160);
-    const services = [{ id: 'garage', x: 900, y: 900, label: 'Sprinkle Garage' }, { id: 'wash', x: washApproach.x, y: washApproach.y, label: 'Cool-Down Car Wash · $75' }];
-    const start = { player: { x: 884, y: 1080, angle: -Math.PI / 2 }, car: { x: 916, y: 1080, angle: -Math.PI / 2, kind: 'compact', color: '#ffd15b' } };
-    const areas = [
-      ['heights',[[230,300],[1100,300],[1130,1140],[580,1660],[230,1510]]],
-      ['works',[[1380,260],[2690,390],[2740,1550],[1760,1730],[1440,1200]]],
-      ['market',[[570,1100],[1260,920],[1820,1190],[2110,1730],[1250,1940],[520,2130],[290,1720]]],
-      ['riverfront',[[410,1880],[1640,1830],[2480,1700],[2320,2780],[1000,2780],[380,2300]]],
-      ['willow',[[370,2890],[1310,2940],[2230,3240],[2710,3970],[2720,4710],[2110,5210],[760,5000],[320,4080]]],
-      ['orchard',[[2860,680],[3400,400],[4730,460],[5260,1310],[5190,2920],[4630,3400],[3610,3460],[3050,2880],[2940,2030]]]
-    ].map(([district, vertices]) => ({ id: 'area-' + district, district, mapColor: DISTRICTS[district].mapColor, points: vertices.map(([x, y]) => ({ x, y })) }));
+    const washApproach=network.pointOnRoad('ferry-quay',190);
+    const services = [{id:'garage',x:6000,y:3500,label:'Sprinkle Garage'},{id:'wash',x:washApproach.x,y:washApproach.y,label:'Cool-Down Car Wash · $75'}];
+    const start={player:{x:5984,y:3700,angle:-Math.PI/2},car:{x:6016,y:3700,angle:-Math.PI/2,kind:'compact',color:'#ffd15b'}};
+    const areas=[
+      ['heights',[[3200,2700],[5300,2700],[5550,4200],[4500,4400],[3150,3800]]],
+      ['works',[[6500,4800],[8200,4650],[8900,6500],[7600,6800],[6400,6200]]],
+      ['market',[[5300,2800],[7100,2900],[8220,3700],[8150,4800],[6000,4850],[5200,4300]]],
+      ['riverfront',[[2250,3800],[4300,3900],[5600,4550],[4450,6370],[3250,6200],[2500,5150]]],
+      ['willow',[[5950,700],[8350,500],[9000,2000],[8400,2800],[6100,2880]]],
+      ['orchard',[[9700,1250],[11500,1250],[11800,4600],[11000,5550],[9800,5500],[9400,3600]]],
+      ['ridge',[[800,700],[4650,300],[6150,1000],[5800,2200],[3300,2650],[950,2200]]],
+      ['marsh',[[9750,5600],[11800,5500],[11850,7050],[9700,7050]]]
+    ].map(([district,vertices])=>({id:'area-'+district,district,mapColor:DISTRICTS[district].mapColor,points:vertices.map(([x,y])=>({x,y}))}));
     const buildings = [], blocks = [], staticObjects = [];
-    const targets = { heights: 16, works: 15, market: 25, riverfront: 18, willow: 29, orchard: 29 };
+    const targets = { heights: 26, works: 24, market: 42, riverfront: 16, willow: 42, orchard: 8, ridge:4, marsh:0 };
     const counts = Object.fromEntries(Object.keys(targets).map(id => [id, 0]));
-    const styles = { heights: 'cottage', works: 'warehouse', market: 'shop', riverfront: 'cafe', willow: 'cottage', orchard: 'cottage' };
-    const names = { heights: ['Scone House','Crumb Cottage','Daisy House'], works: ['Waffle Works','Fudge Factory','Disco Depot'], market: ['Biscuit Bank','The Noodle Hut','Bean Palace','Sprinkle Shop'], riverfront: ['Crumb Café','The Boathouse','Riverside Snacks'], willow: ['Willow House','Foxglove Cottage','Lavender Lodge'], orchard: ['Apple House','Blossom Cottage','Pear Place'] };
-    const villageGreens=[{id:'willow-village-green',district:'willow',x:1350,y:3720,w:280,h:290},
-      {id:'orchard-village-green',district:'orchard',x:3970,y:2190,w:260,h:230}];
-    const reserved = [...services.map(service => ({ ...service, radius: 128 })), { x: 900, y: 1080, radius: 95 },
+    const styles = { heights:'cottage',works:'warehouse',market:'shop',riverfront:'cafe',willow:'cottage',orchard:'hangar',ridge:'cottage',marsh:'cottage' };
+    const names = { heights:['Scone House','Crumb Cottage','Old Market House'],works:['Waffle Works','Fudge Factory','Disco Depot'],market:['Biscuit Bank','The Noodle Hut','Bean Palace','Sprinkle Shop'],riverfront:['Crumb Café','The Boathouse','Beach Snacks'],willow:['Willow House','Foxglove Cottage','Lavender Lodge'],orchard:['Sprinkle Hangar','Confetti Air Terminal','Biscuit Air Cargo'],ridge:['Eagle Lodge','Pine Chalet'],marsh:['Tidewell Lodge'] };
+    const villageGreens=[{id:'willow-village-green',district:'willow',x:7460,y:2070,w:280,h:260},
+      {id:'downtown-green',district:'market',x:6230,y:4080,w:200,h:150}];
+    const airport={runways:[{id:'airport-runway',x:11020,y:2450,w:160,h:1950,angle:0,role:'runway'}],
+      taxiways:[{id:'airport-taxiway',x:10750,y:2520,w:90,h:1850,angle:0,role:'taxiway'}],
+      aprons:[{id:'airport-apron',x:10440,y:3350,w:310,h:650,angle:0,role:'apron'}]};
+    const protectedPads=[...airport.runways,...airport.taxiways,...airport.aprons];
+    const onLand=point=>point.x>=100&&point.y>=100&&point.x<=MAP_WIDTH-100&&point.y<=MAP_HEIGHT-100&&!HeightData.isWaterRaw(point.x,point.y,MAP_WIDTH,MAP_HEIGHT);
+    // Sample whole oriented footprints, including their interiors: a building
+    // must never straddle a narrow water channel hidden between its corners.
+    const landBox=box=>{
+      const angle=box.angle||0,c=Math.cos(angle),s=Math.sin(angle),cx=box.x+box.w/2,cy=box.y+box.h/2;
+      const nx=Math.max(1,Math.ceil(box.w/24)),ny=Math.max(1,Math.ceil(box.h/24));
+      for(let i=0;i<=nx;i++) for(let j=0;j<=ny;j++) {
+        const x=box.w*(i/nx-.5),y=box.h*(j/ny-.5);
+        if(!onLand({x:cx+x*c-y*s,y:cy+x*s+y*c})) return false;
+      }
+      return true;
+    };
+    const reserved = [...services.map(service => ({ ...service, radius: 128 })), { x:start.car.x,y:start.car.y,radius:95 },
       ...villageGreens.map(green=>({x:green.x,y:green.y,radius:Math.hypot(green.w,green.h)/2}))];
     const roadClear = (box, extra = SIDEWALK_WIDTH + 8) => !roads.some(street => {
       const corners = footprintCorners(box, street.width / 2 + extra);
@@ -333,17 +368,17 @@
     });
     const addLot = (street, s, side) => {
       const district = street.district;
-      if (counts[district] >= targets[district]) return false;
+      if (street.bridge||counts[district] >= targets[district]) return false;
       const suburban = DISTRICTS[district].suburban;
-      const ranges = district === 'works' ? [154,216,96,150] : district === 'market' ? [62,96,84,120]
+      const ranges = district === 'orchard'?[190,260,140,200]:district === 'works' ? [154,216,96,150] : district === 'market' ? [62,96,84,120]
         : suburban ? [94,138,84,116] : [78,124,76,108];
       const w = ranges[0] + random() * (ranges[1] - ranges[0]), h = ranges[2] + random() * (ranges[3] - ranges[2]);
       const along = network.pointOnRoad(street.id, s), setback = street.width / 2 + SIDEWALK_WIDTH + h / 2 + (suburban ? 34 + random() * 60 : 18 + random() * 22);
       const nx = -Math.sin(along.angle) * side, ny = Math.cos(along.angle) * side;
       const cx = along.x + nx * setback, cy = along.y + ny * setback, angle = wrap(along.angle + (side > 0 ? Math.PI : 0));
       const box = { x: cx - w / 2, y: cy - h / 2, w, h, angle };
-      const corners = footprintCorners(box);
-      if (corners.some(point => point.x < 160 || point.y < 160 || point.x > SIZE - 160 || point.y > SIZE - 160) ||
+      const margin=suburban?40:18,lot={x:box.x-margin,y:box.y-margin,w:w+margin*2,h:h+margin*2,angle};
+      if (!landBox(lot)||protectedPads.some(pad=>boxesOverlap(lot,pad,12))||
         !roadClear(box) || buildings.some(other => boxesOverlap(box, other, 12)) || reserved.some(point => distance(point, {x:cx,y:cy}) < point.radius + Math.hypot(w,h)/2)) return false;
       const number = counts[district]++, id = 'lot-' + district + '-' + number;
       const height = district === 'works' ? 5 + random() * 3 : district === 'market' ? 4.6 + random() * 4.7 : 3.4 + random() * 2.1;
@@ -351,10 +386,15 @@
         frontAngle: wrap(angle + Math.PI/2), roadId: street.id, roadS: s, color: COLORS[(number + Object.keys(targets).indexOf(district)) % COLORS.length],
         name: names[district][number % names[district].length] };
       if (district === 'market' && number === 2) { building.style = 'tower'; building.height = 13.4; building.name = 'Biscuit Clocktower'; }
+      if(district==='orchard') {
+        building.height=number===1?12:6.2+random()*2;
+        building.style=number===1?'control-tower':number===2?'terminal':'hangar';
+        building.name=number===1?'Confetti Air Control':number===2?'Confetti Air Terminal':'Sprinkle Hangar '+(number+1);
+        if(number===1) {building.name='Confetti Air Control';building.w=80;building.h=80;building.x=cx-40;building.y=cy-40;}
+      }
       buildings.push(building);
-      const margin = suburban ? 40 : 18, lot = { x: box.x-margin, y: box.y-margin, w:w+margin*2, h:h+margin*2, angle };
-      const frontX = -Math.sin(angle), frontY = Math.cos(angle), drivewayLength = Math.max(12, setback - h/2 - street.width/2 - SIDEWALK_WIDTH);
-      const driveway = { x:cx+frontX*(h/2+drivewayLength/2)-18, y:cy+frontY*(h/2+drivewayLength/2)-drivewayLength/2,
+      const frontX = -Math.sin(angle), frontY = Math.cos(angle), drivewayLength = Math.max(12, setback - building.h/2 - street.width/2 - SIDEWALK_WIDTH);
+      const driveway = { x:cx+frontX*(building.h/2+drivewayLength/2)-18, y:cy+frontY*(building.h/2+drivewayLength/2)-drivewayLength/2,
         w:36, h:drivewayLength, angle };
       blocks.push({ ...lot, id, district, kind: suburban || district === 'heights' ? 'garden' : district === 'works' ? 'yard' : district === 'market' ? 'shops' : 'cafe',
         landUse: suburban ? 'residential' : district, mapColor: DISTRICTS[district].mapColor, points: footprintCorners(lot), buildings:[building],
@@ -363,21 +403,30 @@
     };
     // First fill every neighborhood along actual frontage, then fill rejected
     // gaps with a shifted pass. Suburban spacing is much looser than the market.
-    for (let pass = 0; pass < 6; pass++) for (const street of roads) {
+    // Concentrate frontage in each region's actual center. Approaches remain
+    // quieter, the airport buildings line the terminal, and the mountain's few
+    // lodges sit above town instead of becoming another urban strip.
+    const preferredFronts=['old-west','old-loop','old-garden','heights-lane','garden-lane',
+      'warehouse-road','works-road','clay-road','yard-road',
+      'beach-road','marina-approach','marina-west-road','marina-south-road','marina-pier','beach-walk',
+      'ridge-summit','vista-road','pine-road',
+      'orchard-center-road','airport-terminal-road','orchard-green-road'];
+    const lotStreets=[...preferredFronts.map(id=>network.roadById.get(id)),...roads.filter(street=>!preferredFronts.includes(street.id))];
+    for (let pass = 0; pass < 6; pass++) for (const street of lotStreets) {
       const spacing = street.district === 'market' ? 116 : street.district === 'works' ? 210 : DISTRICTS[street.district].suburban ? 230 : 155;
       for (let s = 125 + pass * spacing / 6; s < street.length - 110; s += spacing) {
         addLot(street, s, pass % 2 ? -1 : 1); addLot(street, s + 40, pass % 2 ? 1 : -1);
       }
     }
     const propBox = (x,y,w,h,angle=0) => ({x:x-w/2,y:y-h/2,w,h,angle});
-    const decorationClear=box=>roadClear(box,SIDEWALK_WIDTH+8)&&!buildings.some(building=>boxesOverlap(box,building,8));
+    const decorationClear=box=>landBox(box)&&!protectedPads.some(pad=>boxesOverlap(box,pad,8))&&roadClear(box,SIDEWALK_WIDTH+8)&&!buildings.some(building=>boxesOverlap(box,building,8));
     const propClear = box => decorationClear(box) &&
       !reserved.some(point => distance(point,{x:box.x+box.w/2,y:box.y+box.h/2}) < point.radius + Math.hypot(box.w,box.h)/2);
     const addProp = object => {
-      object.id = 'prop-' + staticObjects.length;
-      object.destructible = object.kind !== 'garage';
-      if (object.destructible) object.health = object.maxHealth = PROP_HEALTH[object.kind] || 45;
-      staticObjects.push(object); return object;
+      object.id='prop-'+staticObjects.length;
+      object.destructible=object.kind!=='garage';
+      if(object.destructible) object.health=object.maxHealth=PROP_HEALTH[object.kind]||45;
+      staticObjects.push(object);return object;
     };
     for (const block of blocks) {
       const building = block.buildings[0], cx=building.x+building.w/2,cy=building.y+building.h/2,angle=building.angle;
@@ -389,11 +438,11 @@
       const side={x:Math.cos(angle),y:Math.sin(angle)},tx=cx+side.x*(building.w/2+32)-front.x*18,ty=cy+side.y*(building.w/2+32)-front.y*18;
       if (propClear(propBox(tx,ty,12,12))) addProp({kind:'tree',x:tx,y:ty,angle:0,district:block.district,scale:DISTRICTS[block.district].suburban?1.18:.9,variety:Math.floor(random()*3),parts:[{shape:'cylinder',offset:[0,.98,0],half:[.17,.98,.17]}]});
     }
-    const garageKiosk = {kind:'garage',x:1020,y:885,angle:0,district:'market',parts:[{shape:'box',offset:[0,.9,0],half:[.95,.9,.65]},{shape:'box',offset:[0,1.88,0],half:[1.05,.09,.75]}]};
+    const garageKiosk = {kind:'garage',x:6120,y:3485,angle:0,district:'market',parts:[{shape:'box',offset:[0,.9,0],half:[.95,.9,.65]},{shape:'box',offset:[0,1.88,0],half:[1.05,.09,.75]}]};
     addProp(garageKiosk);
-    addProp({kind:'wash',x:washApproach.x,y:washApproach.y,angle:washApproach.angle+Math.PI/2,district:'riverfront',parts:[
+    addProp({kind:'wash',x:washApproach.x,y:washApproach.y,angle:washApproach.angle+Math.PI/2,district:'works',parts:[
       {shape:'box',offset:[-2.25,1.25,0],half:[.13,1.25,.13]}, {shape:'box',offset:[2.25,1.25,0],half:[.13,1.25,.13]}, {shape:'box',offset:[0,2.55,0],half:[2.4,.175,.325]}]});
-    for(const id of ['heights-lane','clock-street','eastmarket-road','southgate-road','willow-west-road','willow-top-road','apple-road','orchard-green-road']) {
+    for(const id of ['heights-lane','clock-street','eastmarket-road','southgate-road','willow-west-road','willow-top-road','apple-road','orchard-green-road','ridge-low-road']) {
       const street=network.roadById.get(id),point=network.pointOnRoad(id,street.length*.55,street.width/2+SIDEWALK_WIDTH+16);
       if(propClear(propBox(point.x,point.y,20,8,point.angle))) addProp({kind:'lamp',x:point.x,y:point.y,angle:point.angle,district:street.district,parts:[
         {shape:'cylinder',offset:[0,1.4,0],half:[.07,1.4,.07]}, {shape:'box',offset:[.3,2.85,0],half:[.35,.06,.10]},
@@ -407,13 +456,13 @@
           {shape:'box',offset:[0,.48,0],half:[.78,.055,.22]}, {shape:'box',offset:[0,.78,.18],half:[.78,.24,.055]},
           {shape:'box',offset:[-.55,.23,0],half:[.055,.23,.055]}, {shape:'box',offset:[.55,.23,0],half:[.055,.23,.055]}]});
       const nearby=network.nearestRoad(green),sign=network.pointOnRoad(nearby.roadId,nearby.s,nearby.width/2+SIDEWALK_WIDTH+24);
-      if(roadClear(propBox(sign.x,sign.y,18,7,sign.angle),SIDEWALK_WIDTH+8)&&!buildings.some(building=>boxesOverlap(propBox(sign.x,sign.y,18,7,sign.angle),building,8)))
+      if(decorationClear(propBox(sign.x,sign.y,18,7,sign.angle)))
         addProp({kind:'wayfinding',label:DISTRICTS[green.district].name.toUpperCase(),x:sign.x,y:sign.y,angle:sign.angle,district:green.district,parts:[
           {shape:'box',offset:[0,.65,0],half:[.045,.65,.045]}, {shape:'box',offset:[0,1.3,0],half:[.5,.2,.06]}]});
     }
     const pedPaths = [];
     for (const street of roads) {
-      if (street.length < 200 || pedPaths.filter(path=>path.district===street.district).length >= (DISTRICTS[street.district].suburban ? 4 : 5)) continue;
+      if (street.bridge||street.length < 200 || pedPaths.filter(path=>path.district===street.district).length >= (DISTRICTS[street.district].suburban ? 4 : 5)) continue;
       const startS=75,endS=street.length-75, offset=street.width/2+SIDEWALK_WIDTH*.55;
       const candidates=[];
       for(let s=startS;s<endS;s+=25) candidates.push(network.pointOnRoad(street.id,s,offset));
@@ -424,11 +473,11 @@
       let best=[],run=[];
       const radius=6.02+2;
       for(const candidate of candidates) {
-        const pointClear=roadClear({x:candidate.x,y:candidate.y,w:0,h:0},radius);
+        const pointClear=landBox({x:candidate.x-radius,y:candidate.y-radius,w:radius*2,h:radius*2})&&roadClear({x:candidate.x,y:candidate.y,w:0,h:0},radius);
         if(!pointClear) { if(run.length>best.length) best=run; run=[]; continue; }
         if(run.length) {
           const previous=run.at(-1),length=distance(previous,candidate),cx=(previous.x+candidate.x)/2,cy=(previous.y+candidate.y)/2;
-          if(!roadClear({x:cx-length/2,y:cy,w:length,h:0,angle:heading(previous,candidate)},radius)) {
+          if(!landBox({x:cx-length/2,y:cy-radius,w:length,h:radius*2,angle:heading(previous,candidate)})||!roadClear({x:cx-length/2,y:cy,w:length,h:0,angle:heading(previous,candidate)},radius)) {
             if(run.length>best.length) best=run; run=[];
           }
         }
@@ -441,12 +490,12 @@
     const vehicleSpawns=[];
     for(let i=0;i<roads.length;i++) {
       const street=roads[i];
-      if(street.length<220 || i%3!==1) continue;
+      if(street.bridge||street.length<220 || i%3!==1||vehicleSpawns.length>=27) continue;
       const point=network.pointOnRoad(street.id,street.length*.53,i%2?18:-18);
       if(distance(point,start.car)<160 || services.some(service=>distance(point,service)<140)) continue;
       const spawnIndex=vehicleSpawns.length;
       vehicleSpawns.push({x:point.x,y:point.y,angle:wrap(point.angle+(i%2?0:Math.PI)),roadId:street.id,s:point.s,
-        kind:['compact','sports','van'][spawnIndex%3],color:COLORS[spawnIndex%6],traffic:spawnIndex%3!==0});
+        kind:['compact','sports','van'][(spawnIndex+Math.floor(spawnIndex/3))%3],color:COLORS[spawnIndex%6],traffic:spawnIndex%3!==0});
     }
     const parkingBays=[],parkedBoxes=[],parkingAccesses=[];
     const solidParts=staticObjects.flatMap(object=>object.parts.map(part=>{
@@ -458,7 +507,7 @@
     for(const spawn of vehicleSpawns.filter(spawn=>!spawn.traffic)) {
       const originalStreet=network.roadById.get(spawn.roadId),type=dimensions[spawn.kind],middle=network.pointOnRoad(originalStreet.id,spawn.s);
       const initialSide=(spawn.x-middle.x)*-Math.sin(middle.angle)+(spawn.y-middle.y)*Math.cos(middle.angle)>0?1:-1;
-      const streets=[originalStreet,...roads.filter(road=>road!==originalStreet&&road.district===originalStreet.district)
+      const streets=[originalStreet,...roads.filter(road=>!road.bridge&&road!==originalStreet&&road.district===originalStreet.district)
         .sort((a,b)=>distance(network.pointOnRoad(a.id,a.length/2),middle)-distance(network.pointOnRoad(b.id,b.length/2),middle))];
       let placement=null;
       for(const street of streets) for(const shift of [0,-50,50,-100,100,-150,150,-200,200]) for(const side of [initialSide,-initialSide]) for(const extra of [0,18,36,54]) {
@@ -470,7 +519,7 @@
         const accessPoint=network.pointOnRoad(street.id,s),accessCentre={x:(accessPoint.x+point.x)/2,y:(accessPoint.y+point.y)/2};
         const access={x:accessCentre.x-(type.length+10)/2,y:accessCentre.y-(Math.abs(offset)+type.width+10)/2,
           w:type.length+10,h:Math.abs(offset)+type.width+10,angle:point.angle};
-        if(!decorationClear(bay)||footprintCorners(bay).some(point=>point.x<100||point.y<100||point.x>SIZE-100||point.y>SIZE-100)||
+        if(!decorationClear(bay)||!landBox(access)||
           solidParts.some(part=>part.bottom<(spawn.kind==='van'?1.7:1.3)&&boxesOverlap(bay,part.box,3))||
           parkedBoxes.some(other=>boxesOverlap(bay,other,5))||buildings.some(building=>boxesOverlap(access,building,3))||
           solidParts.some(part=>part.bottom<(spawn.kind==='van'?1.7:1.3)&&boxesOverlap(access,part.box,3))||
@@ -487,21 +536,21 @@
     const anchor=id=>({x:byId.get(id).x,y:byId.get(id).y,nodeId:id});
     const missionAnchors={
       delivery:[anchor('plaza'),anchor('ferry')],deliveryAlt:[anchor('bakery'),anchor('willow-green')],
-      dash:['clock','clay','orchard-green','meadow-hub','willow-green','quay'].map(anchor),
+      dash:['clock','clay','orchard-center','eagle-peak','willow-green','quay'].map(anchor),
       party:['heights','market','quay'].map(anchor),partyAlt:['depot','orchard-green','ferry'].map(anchor),
       suburbs:[anchor('willow-green'),anchor('orchard-green')],
       byName:Object.fromEntries(nodes.map(point=>[point.id,anchor(point.id)]))
     };
-    const landscape={
-      riverWidth:142,riverPath:[{x:SIZE+360,y:-450},{x:SIZE+600,y:600},{x:SIZE+290,y:1700},{x:SIZE+510,y:2700},{x:SIZE+260,y:3800},{x:SIZE+560,y:4850},{x:SIZE+390,y:SIZE+550}],
-      hills:[{x:-850,y:1150,radius:1000,height:27},{x:900,y:-950,radius:1200,height:22},{x:3300,y:-1050,radius:1450,height:30},{x:1100,y:SIZE+900,radius:1500,height:26}],
-      meadow:[{x:2350,y:3750,w:750,h:1400},{x:2780,y:3500,w:620,h:1550}],
-      greens:villageGreens
-    };
-    return {size:SIZE,sidewalkWidth:SIDEWALK_WIDTH,districts:DISTRICTS,roads,nodes,network,buildings,blocks,lots:blocks,areas,staticObjects,services,start,spawn:start,pedPaths,vehicleSpawns,parkingBays,missionAnchors,landscape};
+    const landscape={airport,greens:villageGreens,riverPath:[],hills:[],meadow:[],
+      landmarks:[{id:'eagle-peak',label:'EAGLE PEAK',...anchor('eagle-peak')},{id:'vista',label:'VISTA POINT',...anchor('vista')},
+        {id:'marina',label:'MARINA',...anchor('marina-gate')},{id:'marsh',label:'TIDEWELL MARSH',...anchor('marsh-lookout')}],
+      beach:{x:2480,y:4520,w:280,h:420,angle:-.42},mountainRoads:roads.filter(road=>road.district==='ridge').map(road=>road.id)};
+    const result={size:SIZE,mapWidth:MAP_WIDTH,mapHeight:MAP_HEIGHT,sidewalkWidth:SIDEWALK_WIDTH,districts:DISTRICTS,roads,nodes,network,buildings,blocks,lots:blocks,areas,staticObjects,services,start,spawn:start,pedPaths,vehicleSpawns,parkingBays,missionAnchors,landscape};
+    result.terrain=Terrain.createTerrain(result);
+    return result;
   }
 
-  const api={SIZE,SIDEWALK_WIDTH,DISTRICTS,PROP_HEALTH,districtAt,footprintCorners,boxesOverlap,segmentHitsBox,segmentBoxDistance,RoadNetwork,createWorld};
+  const api={SIZE,MAP_WIDTH,MAP_HEIGHT,SIDEWALK_WIDTH,DISTRICTS,PROP_HEALTH,districtAt,footprintCorners,boxesOverlap,segmentHitsBox,segmentBoxDistance,RoadNetwork,createWorld};
   root.MayhemWorld=api;
   if(typeof module!=='undefined'&&module.exports) module.exports=api;
 })(globalThis);

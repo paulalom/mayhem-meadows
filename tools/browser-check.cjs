@@ -66,6 +66,13 @@ async function waitForScene(page, mode) {
   return sceneState(page);
 }
 
+async function assertRideName(page) {
+  const expected = await page.evaluate(() => { const model = globalThis.MayhemVehicleStats.getModel(globalThis.__browserCheckGame.current);
+    return model.make + ' ' + model.model; });
+  await page.waitForFunction(name => document.getElementById('ride-name').textContent === name, expected, { timeout: 3000 });
+  assert.equal(await page.locator('#ride-name').textContent(), expected);
+}
+
 async function captureMouse(page) {
   assert.equal(await page.evaluate(() => globalThis.__browserInputFixture?.assertSafe()), true, 'Capture requires the safe automated pointer fixture.');
   if (await page.evaluate(() => document.pointerLockElement === document.getElementById('game-canvas'))) return;
@@ -167,9 +174,11 @@ async function driveNetworkRoute(page, destination, trace) {
       const car = await page.evaluate(() => {
         const game = globalThis.__browserCheckGame, car = game.current, road = game.network.project(car);
         return { x: car.x, y: car.y, angle: car.angle, speed: car.speed, upright: car.upright, health: car.health,
+          elevation: car.elevation, groundHeight: globalThis.__browserCheckGround(car),
+          water: Boolean(game.world.terrain?.isWater(car.x, car.y)),
           roadDistance: road.distance, roadWidth: road.width, district: game.districtAt(car).id };
       });
-      assert.ok([car.x, car.y, car.angle, car.speed].every(Number.isFinite), 'The real vehicle pose must stay finite during the journey.');
+      assert.ok([car.x, car.y, car.angle, car.speed, car.elevation, car.groundHeight].every(Number.isFinite), 'The real vehicle pose must stay finite during the journey.');
       const remaining = Math.hypot(car.x - destination.x, car.y - destination.y);
       trace.maxRoadDistance = Math.max(trace.maxRoadDistance, car.roadDistance);
       if (previousAngle !== undefined) trace.headingChange += Math.abs(angleDifference(car.angle, previousAngle));
@@ -207,20 +216,27 @@ async function captureNetworkOverview(page) {
   // This temporary evidence camera uses the real renderer and world meshes.
   // It is never installed as a gameplay camera or persisted in a player save.
   await page.evaluate(() => {
-    const scene = globalThis.__browserCheckScene, T = scene.T, size = globalThis.__browserCheckGame.world.size / 20;
-    const camera = new T.OrthographicCamera(-size * 0.86, size * 0.86, size * 0.55, -size * 0.55, 0.1, 2000);
-    camera.position.set(size / 2, 450, size / 2); camera.up.set(0, 0, -1); camera.lookAt(size / 2, 0, size / 2); camera.updateMatrixWorld(true);
-    globalThis.__browserOverviewEvidence = { original: scene.renderer.render, fog: scene.scene.fog };
+    const scene = globalThis.__browserCheckScene, T = scene.T, world = globalThis.__browserCheckGame.world;
+    const width = (world.mapWidth || world.size) / 20, height = (world.mapHeight || world.size) / 20;
+    const canvas = document.getElementById('game-canvas'), halfWidth = width * 0.56, halfHeight = halfWidth * canvas.height / canvas.width;
+    const camera = new T.OrthographicCamera(-halfWidth, halfWidth, halfHeight, -halfHeight, 0.1, 2000);
+    camera.position.set(width / 2, 450, height / 2); camera.up.set(0, 0, -1); camera.lookAt(width / 2, 0, height / 2); camera.updateMatrixWorld(true);
+    const overlays = [...document.getElementById('game-shell').children].filter(element => element.tagName !== 'CANVAS');
+    globalThis.__browserOverviewEvidence = { original: scene.renderer.render, fog: scene.scene.fog,
+      overlays: overlays.map(element => ({ element, visibility: element.style.visibility })) };
+    for (const element of overlays) element.style.visibility = 'hidden';
     scene.scene.fog = null;
     scene.renderer.render = function (world) { return globalThis.__browserOverviewEvidence.original.call(this, world, camera); };
     scene.renderer.render(scene.scene, scene.camera);
   });
   try {
-    await page.screenshot({ path: path.join(evidence, 'desktop-organic-network-overview.png'), fullPage: true });
+    await page.locator('#game-canvas').screenshot({ path: path.join(evidence, 'desktop-terrain-city-overview.png') });
   } finally {
     await page.evaluate(() => {
       const scene = globalThis.__browserCheckScene, saved = globalThis.__browserOverviewEvidence;
-      scene.renderer.render = saved.original; scene.scene.fog = saved.fog; delete globalThis.__browserOverviewEvidence;
+      scene.renderer.render = saved.original; scene.scene.fog = saved.fog;
+      for (const { element, visibility } of saved.overlays) element.style.visibility = visibility;
+      delete globalThis.__browserOverviewEvidence;
     });
   }
 }
@@ -261,16 +277,22 @@ async function installEngineInspection(context) {
     // Isolated scenario poses are derived from the live road graph. The real
     // game update, native keyboard events and Cannon contacts still produce
     // every movement and collision outcome checked below.
+    globalThis.__browserCheckGround = point => globalThis.__browserCheckGame.world.terrain?.surfaceHeight(point.x, point.y) || 0;
+    globalThis.__browserCheckPose = point => { const { road, ...pose } = point; return { ...pose, elevation: globalThis.__browserCheckGround(point) }; };
     globalThis.__browserCheckLane = () => {
       const game = globalThis.__browserCheckGame;
       for (const road of game.roads) for (const fraction of [0.25, 0.5, 0.75]) {
         const center = game.network.pointOnRoad(road.id, road.length * fraction);
         const ux = Math.cos(center.angle), uy = Math.sin(center.angle), nx = -uy, ny = ux;
-        const point = (along = 0, across = 0) => ({ x: center.x + ux * along + nx * across, y: center.y + uy * along + ny * across });
+        const point = (along = 0, across = 0) => globalThis.__browserCheckPose({ x: center.x + ux * along + nx * across, y: center.y + uy * along + ny * across });
+        // Generic straight-impact fixtures use a genuinely nearly level street;
+        // separate terrain checks below exercise sloping surfaces explicitly.
+        const heights = [-180, -90, 0, 90, 180].map(along => point(along).elevation);
+        if (Math.max(...heights) - Math.min(...heights) > 0.2 || road.bridge) continue;
         const free = [-180, -90, 0, 90, 180].every(along => [-25, 0, 25].every(across => {
           const p = point(along, across), projected = game.network.project(p);
           return projected.distance < projected.width / 2 - 12 && game._vehicleFree({ ...game.cars[0], ...p,
-            angle: center.angle, orientation: null, elevation: 0, upright: true });
+            angle: center.angle, orientation: null, upright: true });
         }));
         if (free) return { ...center, ux, uy, nx, ny, point,
           along: entity => (entity.x - center.x) * ux + (entity.y - center.y) * uy,
@@ -283,8 +305,10 @@ async function installEngineInspection(context) {
       for (const building of game.buildings.filter(b => Math.abs(Math.sin(2 * (b.angle || 0))) > 0.2)) {
         const angle = building.angle || 0, ux = Math.cos(angle), uy = Math.sin(angle);
         const center = { x: building.x + building.w / 2, y: building.y + building.h / 2 };
-        const point = gap => ({ x: center.x - ux * (building.w / 2 + gap), y: center.y - uy * (building.w / 2 + gap) });
-        if ([28, 42, 56, 70].every(gap => game._vehicleFree({ ...game.cars[0], ...point(gap), angle, orientation: null, elevation: 0, upright: true })))
+        const point = gap => globalThis.__browserCheckPose({ x: center.x - ux * (building.w / 2 + gap), y: center.y - uy * (building.w / 2 + gap) });
+        const heights = [28, 42, 56, 70].map(gap => point(gap).elevation);
+        if (Math.max(...heights) - Math.min(...heights) > 0.2) continue;
+        if ([28, 42, 56, 70].every(gap => game._vehicleFree({ ...game.cars[0], ...point(gap), angle, orientation: null, upright: true })))
           return { building, angle, ux, uy, center, point };
       }
       throw new Error('The generated town needs a clear rotated building frontage.');
@@ -293,8 +317,29 @@ async function installEngineInspection(context) {
       const game = globalThis.__browserCheckGame, garage = game.services.find(service => service.id === 'garage');
       const road = game.network.project(garage);
       const direction = road.road.length - road.s >= 60 ? 1 : -1;
-      return { garage, car: game.network.pointOnRoad(road.roadId, road.s + direction * 50),
-        player: game.network.pointOnRoad(road.roadId, road.s + direction * 18), road, direction };
+      return { garage: globalThis.__browserCheckPose(garage), car: globalThis.__browserCheckPose(game.network.pointOnRoad(road.roadId, road.s + direction * 50)),
+        player: globalThis.__browserCheckPose(game.network.pointOnRoad(road.roadId, road.s + direction * 18)), road, direction };
+    };
+    globalThis.__browserCheckHill = () => {
+      const game = globalThis.__browserCheckGame, candidates = [];
+      for (const road of game.roads.filter(road => !road.bridge && road.length > 450)) {
+        const span = Math.min(600, road.length - 80);
+        for (const fraction of [0, 0.25, 0.5, 0.75]) {
+          const from = Math.min(road.length - span - 20, 20 + road.length * fraction), to = from + span;
+          const a = globalThis.__browserCheckPose(game.network.pointOnRoad(road.id, from));
+          const b = globalThis.__browserCheckPose(game.network.pointOnRoad(road.id, to));
+          const rise = Math.abs(b.elevation - a.elevation);
+          if (rise < 1.5 || Math.max(a.elevation, b.elevation) < 4) continue;
+          const clear = Array.from({ length: 21 }, (_, i) => globalThis.__browserCheckPose(game.network.pointOnRoad(road.id, from + span * i / 20)))
+            .every(point => !game.world.terrain.isWater(point.x, point.y) && game._vehicleFree({ ...game.cars[0], ...point, orientation: null, upright: true }));
+          if (!clear) continue;
+          const forward = b.elevation > a.elevation, start = forward ? a : b, end = forward ? b : a;
+          candidates.push({ roadId: road.id, start: { ...start, angle: start.angle + (forward ? 0 : Math.PI) }, end, rise, span });
+        }
+      }
+      candidates.sort((a, b) => b.rise - a.rise);
+      if (!candidates.length) throw new Error('The imported map needs a clear graded hill road with a meaningful height change.');
+      return candidates[0];
     };
   });
 }
@@ -581,6 +626,200 @@ async function checkUnavailableAudio(browser, externalRequests) {
   } finally { await closeTestContext(context); }
 }
 
+async function withTerrainPage(browser, externalRequests, action) {
+  const context = await createTestContext(browser, { viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
+  try {
+    await installEngineInspection(context);
+    await context.route('**/*', route => {
+      if (/^(file|data|blob):/.test(route.request().url())) return route.continue();
+      externalRequests.push(route.request().url()); return route.abort();
+    });
+    const page = await context.newPage();
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+    await page.goto(url);
+    await page.locator('#play-button').click();
+    await waitForScene(page, 'foot');
+    await captureMouse(page);
+    await action(page);
+  } finally { await closeTestContext(context); }
+}
+
+async function checkSharedTerrain(page) {
+  await waitForMinimap(page);
+  const terrain = await page.evaluate(() => {
+    const game = globalThis.__browserCheckGame, scene = globalThis.__browserCheckScene, field = game.world.terrain, T = scene.T;
+    const positions = scene._terrainMesh.geometry.getAttribute('position'), waterBounds = new T.Box3().setFromObject(scene._riverSurface);
+    const vertexMatches = [0, field.count - 1, Math.floor(field.heights.length / 3), Math.floor(field.heights.length / 2), field.heights.length - 1]
+      .every(index => Math.abs(positions.getY(index) - field.heights[index]) < 0.00001 &&
+        Math.abs(positions.getX(index) * 20 - index % field.count * field.step) < 0.01 &&
+        Math.abs(positions.getZ(index) * 20 - Math.floor(index / field.count) * field.step) < 0.01);
+    const hill = globalThis.__browserCheckHill(), origin = hill.start;
+    scene.scene.updateMatrixWorld(true);
+    const ray = new T.Raycaster(new T.Vector3(origin.x / 20, origin.elevation + 100, origin.y / 20), new T.Vector3(0, -1, 0));
+    const groundHit = ray.intersectObject(scene._terrainMesh, false)[0];
+    const canvas = document.getElementById('minimap-canvas'), pixels = canvas.getContext('2d');
+    const sample = point => {
+      const x = Math.round(point.x / game.world.size * canvas.width), y = Math.round(point.y / game.world.size * canvas.width);
+      const values = pixels.getImageData(x - 1, y - 1, 3, 3).data, color = [0, 0, 0];
+      for (let i = 0; i < values.length; i += 4) for (let channel = 0; channel < 3; channel++) color[channel] += values[i + channel] / 9;
+      return { point, color };
+    };
+    let dry;
+    for (let y = 200; y < field.mapHeight && !dry; y += 200) for (let x = 200; x < field.mapWidth; x += 200) {
+      if (field.heightAt(x, y) > 5 && game.network.project({ x, y }).distance > 250 &&
+        !game.buildings.some(building => Math.hypot(x - building.x - building.w / 2, y - building.y - building.h / 2) < 250)) { dry = { x, y }; break; }
+    }
+    const sea = { x: game.world.size / 2, y: game.world.size - 600 };
+    return { info: scene.worldInfo, sourceBitDepth: field.sourceBitDepth, importedBitDepth: globalThis.MayhemHeightData.sourceBitDepth, sourceSha256: field.sourceSha256,
+      size: game.world.size, mapWidth: field.mapWidth, mapHeight: field.mapHeight, count: field.count,
+      vertices: positions.count, triangles: scene._terrainMesh.geometry.index.count / 3, vertexMatches,
+      physicalGrid: game.vehiclePhysics.heightfield.data.length, physicalFloorKind: game.vehiclePhysics.floor.kind,
+      visibleHillHeight: groundHit?.point.y, expectedHillHeight: field.heightAt(origin.x, origin.y), hill,
+      waterBounds: { min: waterBounds.min.toArray(), max: waterBounds.max.toArray() }, waterLevel: field.waterLevel,
+      mapDry: dry && sample(dry), mapSea: sample(sea), seaIsWater: field.isWater(sea.x, sea.y) };
+  });
+  assert.equal(terrain.sourceBitDepth, terrain.importedBitDepth); assert.ok([8, 16].includes(terrain.sourceBitDepth)); assert.match(terrain.sourceSha256, /^[a-f0-9]{64}$/);
+  assert.equal(terrain.size, 12000); assert.equal(terrain.mapWidth, 12000); assert.equal(terrain.mapHeight, 8000);
+  assert.equal(terrain.vertices, terrain.count ** 2); assert.equal(terrain.triangles, (terrain.count - 1) ** 2 * 2);
+  assert.equal(terrain.physicalGrid, terrain.count); assert.equal(terrain.physicalFloorKind, 'terrain'); assert.equal(terrain.vertexMatches, true);
+  assert.ok(Math.abs(terrain.visibleHillHeight - terrain.expectedHillHeight) < 0.01, 'Actual visible triangles must agree with the shared physical terrain height at a hill point.');
+  assert.ok(terrain.info.landscape.maxElevation - terrain.info.landscape.minElevation > 20 && terrain.info.landscape.minElevation < 0);
+  assert.ok(terrain.waterBounds.min[0] <= 0 && terrain.waterBounds.max[0] >= terrain.size / 20 && Math.abs(terrain.waterBounds.max[1] - terrain.waterLevel) < 0.1);
+  assert.equal(terrain.seaIsWater, true); assert.ok(terrain.mapDry);
+  assert.ok(terrain.mapSea.color[2] > terrain.mapSea.color[0] + 25, 'The minimap must draw the real ocean mask in blue.');
+  assert.ok(terrain.mapDry.color[1] > terrain.mapDry.color[2] + 5, 'The minimap must draw real elevated land distinctly from the water.');
+  diagnostics.sharedTerrain = terrain;
+  await captureNetworkOverview(page);
+}
+
+async function checkHillWalking(page) {
+  const hill = await page.evaluate(() => {
+    const game = globalThis.__browserCheckGame, fixture = globalThis.__browserCheckHill();
+    game.cars = []; game.peds = []; game.police = []; game.physics.clearAll(); game.heat = 0; game.graceTimer = 120;
+    Object.assign(game.player, { ...fixture.start, vehicleId: null, verticalVelocity: 0, grounded: true, ragdollGrace: 0 });
+    return fixture;
+  });
+  await page.keyboard.press('c'); await waitForFreshFrames(page);
+  const before = await sceneState(page);
+  await page.keyboard.down('w');
+  try { await page.waitForTimeout(650); } finally { await page.keyboard.up('w'); }
+  const walked = await page.evaluate(() => {
+    const game = globalThis.__browserCheckGame, scene = globalThis.__browserCheckScene, player = game.player;
+    return { x: player.x, y: player.y, elevation: player.elevation, ground: globalThis.__browserCheckGround(player), grounded: player.grounded,
+      renderedHeight: scene._player.group.position.y, cameraHeight: scene.camera.position.y,
+      cameraGround: game.world.terrain.surfaceHeight(scene.camera.position.x * 20, scene.camera.position.z * 20) };
+  });
+  assert.ok(Math.hypot(walked.x - before.worldX, walked.y - before.worldY) > 12, 'Real walking input must advance uphill.');
+  assert.ok(Math.abs(walked.ground - hill.start.elevation) > 0.015, 'Walking must follow a changing hill surface.');
+  assert.ok(walked.grounded && Math.abs(walked.elevation - walked.ground) < 0.08);
+  assert.ok(Math.abs(walked.renderedHeight - walked.elevation) < 0.1 && walked.cameraHeight > walked.cameraGround + 0.1);
+  await page.keyboard.press('Space');
+  await page.waitForFunction(() => { const player = globalThis.__browserCheckGame.player; return player.elevation - globalThis.__browserCheckGround(player) > 1; }, null, { timeout: 1500 });
+  const airborne = await page.evaluate(() => ({ elevation: globalThis.__browserCheckGame.player.elevation,
+    ground: globalThis.__browserCheckGround(globalThis.__browserCheckGame.player), renderedHeight: globalThis.__browserCheckScene._player.group.position.y }));
+  assert.ok(airborne.renderedHeight - airborne.ground > 1);
+  await page.waitForFunction(() => { const player = globalThis.__browserCheckGame.player; return player.grounded && Math.abs(player.elevation - globalThis.__browserCheckGround(player)) < 0.08; }, null, { timeout: 2500 });
+  await page.keyboard.press('f');
+  await page.waitForFunction(() => Boolean(globalThis.__browserCheckGame.physics.get('player')));
+  await page.waitForTimeout(900);
+  const fallen = await bodyState(page); assertFiniteBody(fallen);
+  assert.ok(fallen.joints.head.y > fallen.groundHeight - 0.5, 'The articulated body must collide with the elevated hill, not fall to a zero-height floor.');
+  await page.waitForFunction(() => !globalThis.__browserCheckGame.physics.get('player'), null, { timeout: 10000 });
+  const recovered = await page.evaluate(() => { const player = globalThis.__browserCheckGame.player;
+    return { x: player.x, y: player.y, elevation: player.elevation, ground: globalThis.__browserCheckGround(player), grounded: player.grounded }; });
+  assert.ok(recovered.grounded && recovered.elevation > 3 && Math.abs(recovered.elevation - recovered.ground) < 0.1, 'Automatic get-up must restore standing feet on the hill.');
+  assert.ok(Math.hypot(recovered.x - walked.x, recovered.y - walked.y) < 150, 'Automatic get-up must remain beside the hill tumble.');
+  for (let turn = 0; turn < 4; turn++) {
+    await lookCamera(page, 260, turn === 0 ? 65 : 0);
+    const camera = await page.evaluate(() => { const game = globalThis.__browserCheckGame, scene = globalThis.__browserCheckScene;
+      return { y: scene.camera.position.y, ground: game.world.terrain.surfaceHeight(scene.camera.position.x * 20, scene.camera.position.z * 20) }; });
+    assert.ok(camera.y > camera.ground + 0.08, 'The live camera must remain above the actual hill as it orbits.');
+  }
+  await page.keyboard.press('c');
+  await page.waitForFunction(() => { const game = globalThis.__browserCheckGame, scene = globalThis.__browserCheckScene;
+    return Math.abs(Math.atan2(Math.sin(scene.viewYaw - game.player.angle), Math.cos(scene.viewYaw - game.player.angle))) < 0.05; });
+  await page.waitForTimeout(300);
+  await page.waitForFunction(() => Number(getComputedStyle(document.getElementById('toast')).opacity) === 0, null, { timeout: 6000 });
+  await page.screenshot({ path: path.join(evidence, 'desktop-terrain-hill-street.png'), fullPage: true });
+  diagnostics.hillWalking = { hill, walked, airborne, recovered };
+}
+
+async function checkHillDriving(page) {
+  const hill = await page.evaluate(() => {
+    const game = globalThis.__browserCheckGame, fixture = globalThis.__browserCheckHill(), car = game.cars[0];
+    game.cars = [car]; game.peds = []; game.police = []; game.physics.clearAll(); game.heat = 0; game.graceTimer = 120;
+    Object.assign(car, { ...fixture.start, traffic: false, speed: 0, vx: 0, vy: 0, orientation: null }); game.vehiclePhysics.reset(car, car);
+    const side = { x: car.x - Math.sin(car.angle) * 32, y: car.y + Math.cos(car.angle) * 32 };
+    Object.assign(game.player, { ...globalThis.__browserCheckPose(side), angle: car.angle, vehicleId: null, grounded: true, verticalVelocity: 0 });
+    return fixture;
+  });
+  await page.keyboard.press('c'); await page.keyboard.press('e'); await waitForScene(page, 'drive');
+  const trace = {};
+  await driveNetworkRoute(page, hill.end, trace);
+  const car = await vehicleState(page); assertRenderedVehicle(car);
+  assert.ok(car.elevation - hill.start.elevation > 1.2, 'Actual throttle and steering must climb a physically graded hill.');
+  assert.ok(trace.samples.every(sample => sample.elevation > sample.groundHeight - 0.25 && sample.elevation < sample.groundHeight + 1.0), 'The real car body must stay supported by terrain during the climb.');
+  assert.ok(car.upright && Math.abs(car.elevation - car.groundHeight) < 0.35 && car.health > 90);
+  diagnostics.hillDriving = { hill, trace, car };
+  await page.keyboard.press('c');
+  await page.waitForFunction(() => { const game = globalThis.__browserCheckGame, scene = globalThis.__browserCheckScene;
+    return Math.abs(Math.atan2(Math.sin(scene.viewYaw - game.current.angle), Math.cos(scene.viewYaw - game.current.angle))) < 0.05; });
+  await page.waitForTimeout(300);
+  await page.waitForFunction(() => Number(getComputedStyle(document.getElementById('toast')).opacity) === 0, null, { timeout: 6000 });
+  await page.screenshot({ path: path.join(evidence, 'desktop-terrain-hill-driving.png'), fullPage: true });
+}
+
+async function checkBridgeDriving(page) {
+  const bridge = await page.evaluate(() => {
+    const game = globalThis.__browserCheckGame, car = game.cars[0];
+    const bridges = game.roads.filter(road => road.bridge && road.points.some(point => game.world.terrain.isWater(point.x, point.y)));
+    const road = bridges.find(road => road.id === 'bridge-city') || bridges[0];
+    if (!road) throw new Error('The attached map must provide a physical city-to-airport bridge over water.');
+    game.cars = [car]; game.peds = []; game.police = []; game.physics.clearAll(); game.heat = 0; game.graceTimer = 120;
+    const start = globalThis.__browserCheckPose(game.network.pointOnRoad(road.id, 30));
+    const end = globalThis.__browserCheckPose(game.network.pointOnRoad(road.id, road.length - 30));
+    Object.assign(car, { ...start, traffic: false, speed: 0, vx: 0, vy: 0, orientation: null }); game.vehiclePhysics.reset(car, car);
+    const side = { x: car.x - Math.sin(car.angle) * 32, y: car.y + Math.cos(car.angle) * 32 };
+    Object.assign(game.player, { ...globalThis.__browserCheckPose(side), angle: car.angle, vehicleId: null, grounded: true, verticalVelocity: 0 });
+    globalThis.__terrainBridgeContacts = 0;
+    car && game.vehiclePhysics.get(car.id).addEventListener('collide', event => { if (event.body.kind === 'bridge') globalThis.__terrainBridgeContacts++; });
+    return { roadId: road.id, start, end, length: road.length, physicalDecks: game.vehiclePhysics.bridgeBodies.length,
+      renderedDecks: globalThis.__browserCheckScene._bridgeUndersides.count };
+  });
+  assert.ok(bridge.physicalDecks > 0 && bridge.renderedDecks > 0, 'The bridge needs actual Cannon deck solids and visible supporting geometry.');
+  await page.keyboard.press('c'); await page.keyboard.press('e'); await waitForScene(page, 'drive');
+  const trace = {};
+  await driveNetworkRoute(page, bridge.end, trace);
+  const wetSamples = trace.samples.filter(sample => sample.water);
+  assert.ok(wetSamples.length > 4, 'Real keyboard driving must travel across the water span.');
+  assert.ok(wetSamples.every(sample => sample.groundHeight > 1 && sample.elevation > sample.groundHeight - 0.25 && sample.elevation < sample.groundHeight + 0.8), 'The real car must be carried by the bridge deck above the seabed and water.');
+  assert.ok(await page.evaluate(() => globalThis.__terrainBridgeContacts > 0), 'The crossing must produce actual Cannon bridge contacts.');
+  const car = await vehicleState(page); assertRenderedVehicle(car);
+  assert.ok(car.upright && car.health > 90 && Math.hypot(car.x - bridge.end.x, car.y - bridge.end.y) < 42);
+  diagnostics.bridgeDriving = { bridge, trace, car, contacts: await page.evaluate(() => globalThis.__terrainBridgeContacts) };
+}
+
+async function checkElevatedGarage(page) {
+  const visit = await page.evaluate(() => {
+    const game = globalThis.__browserCheckGame, fixture = globalThis.__browserCheckService(), car = game.cars[0];
+    game.cars = [car]; game.peds = []; game.police = []; game.physics.clearAll(); game.heat = 0; game.graceTimer = 120;
+    Object.assign(car, { ...fixture.car, traffic: false, speed: 0, vx: 0, vy: 0, orientation: null }); game.vehiclePhysics.reset(car, car);
+    Object.assign(game.player, { ...fixture.player, vehicleId: null, verticalVelocity: 0, grounded: true });
+    return { garage: fixture.garage, player: fixture.player, car: fixture.car };
+  });
+  assert.ok(visit.player.elevation > 0.2, 'The service visit must exercise a raised local floor.');
+  await page.keyboard.press('e'); await waitForScene(page, 'drive');
+  await openInventory(page, true);
+  assert.equal(await page.locator('#store-car').isDisabled(), false, 'The raised garage must allow storing a stopped upright car.');
+  await closeInventory(page);
+  await captureMouse(page); await page.keyboard.press('e'); await waitForScene(page, 'foot');
+  const player = await page.evaluate(() => { const game = globalThis.__browserCheckGame;
+    return { elevation: game.player.elevation, ground: globalThis.__browserCheckGround(game.player), free: game._isFree(game.player.x, game.player.y, globalThis.MayhemPhysics.PLAYER_RADIUS) }; });
+  assert.ok(player.free && Math.abs(player.elevation - player.ground) < 0.15, 'Car exit must place feet on the raised local terrain.');
+  diagnostics.elevatedGarage = { visit, player };
+}
+
 async function checkSampleFallback(browser, externalRequests) {
   const results = {};
   for (const scenario of ['missing', 'corrupt']) {
@@ -667,6 +906,7 @@ async function bodyState(page, id = 'player') {
       renderedSegments: scene._ragdollCubes.count,
       matrices: Array.from(scene._ragdollCubes.instanceMatrix.array.slice(0, scene._ragdollCubes.count * 16)),
       playerAngle: game.player.angle, vehicleId: game.player.vehicleId, actionCooldown: game._actionCooldown,
+      groundHeight: globalThis.__browserCheckGround(game.player),
     };
   }, id);
 }
@@ -679,6 +919,7 @@ async function vehicleState(page, id) {
     const body = entry.body;
     return {
       id: car.id, x: car.x, y: car.y, elevation: car.elevation, speed: car.speed,
+      groundHeight: globalThis.__browserCheckGround(car),
       vx: car.vx, vy: car.vy, verticalVelocity: car.verticalVelocity,
       health: car.health, upright: car.upright, grounded: car.grounded,
       orientation: { ...car.orientation }, angularVelocity: { ...car.angularVelocity },
@@ -757,7 +998,7 @@ async function check(name, action) {
     checks.push({ name, passed: true });
     process.stdout.write(`PASS ${name}\n`);
   } catch (error) {
-    checks.push({ name, passed: false, error: error.message });
+    checks.push({ name, passed: false, error: error.message, stack: error.stack });
     process.stdout.write(`FAIL ${name}: ${error.message}\n`);
   }
 }
@@ -813,15 +1054,16 @@ async function main() {
       assert.ok(Number.isFinite(before.cameraYaw), 'Camera yaw must be finite.');
       assert.equal(await page.locator('#renderer-error').isVisible(), false);
       assert.equal(await page.locator('#game-canvas').evaluate(canvas => canvas.getContext('webgl2') instanceof WebGL2RenderingContext), true);
-      await page.waitForTimeout(250);
-      const after = await sceneState(page);
+      const after = await waitForFreshFrames(page);
       assert.ok(after.frames > before.frames, 'Simulation frames must advance.');
       assert.ok(after.renderCalls > 0, 'The scene must draw geometry.');
       assert.ok([after.cameraX, after.cameraY, after.cameraZ, after.targetX, after.targetY, after.targetZ].every(Number.isFinite), 'Camera and target positions must be finite.');
       assert.ok(after.cameraY > after.targetY, 'Third-person view should sit above its target.');
       diagnostics.foot = after;
     });
-    await check('an expanded connected curved road graph serves six districts with denser city lots, suburban gardens and aligned rotated colliders', async () => {
+    await check('the attached-map road graph connects city, suburbs, airport and ridge districts with raised rotated colliders and real parking', async () => {
+      // Observe real unattended settling before validating the parking bays.
+      await page.waitForTimeout(600);
       const world = await page.evaluate(() => {
         const game = globalThis.__browserCheckGame, scene = globalThis.__browserCheckScene, radius = globalThis.MayhemPhysics.PLAYER_RADIUS;
         const colliderBodies = game.vehiclePhysics.world.bodies.filter(body => body.kind === 'building');
@@ -829,6 +1071,8 @@ async function main() {
           const body = colliderBodies[index], shape = body?.shapes[0];
           return body && shape && Math.abs(body.position.x * 20 - building.x - building.w / 2) < 0.01 &&
             Math.abs(body.position.z * 20 - building.y - building.h / 2) < 0.01 &&
+            Math.abs(body.position.y + body.shapeOffsets[0].y + shape.halfExtents.y - (building.elevation || 0) - building.height) < 0.01 &&
+            Math.abs(body.position.y + body.shapeOffsets[0].y - shape.halfExtents.y - (building.foundationBottom ?? building.elevation ?? 0)) < 0.01 &&
             Math.abs(shape.halfExtents.x * 40 - building.w) < 0.01 && Math.abs(shape.halfExtents.z * 40 - building.h) < 0.01 &&
             Math.abs(Math.abs(body.quaternion.y * Math.sin(-(building.angle || 0) / 2) + body.quaternion.w * Math.cos(-(building.angle || 0) / 2)) - 1) < 0.0001;
         });
@@ -836,39 +1080,49 @@ async function main() {
           const frame = scene._buildingFrames.get(building.id);
           return frame && Math.abs(frame.center.x * 20 - building.x - building.w / 2) < 0.01 &&
             Math.abs(frame.center.z * 20 - building.y - building.h / 2) < 0.01 &&
+            Math.abs(frame.baseElevation - (building.elevation || 0)) < 0.01 &&
             Math.abs(frame.width * 20 - building.w) < 0.01 && Math.abs(frame.depth * 20 - building.h) < 0.01 &&
             Math.abs(Math.atan2(Math.sin(frame.yaw + (building.angle || 0)), Math.cos(frame.yaw + (building.angle || 0)))) < 0.0001;
         });
         let bayMesh;
         scene.scene.traverse(object => { if (object.isMesh && object.material.color?.getHexString() === '9caca9') bayMesh = object; });
-        const bays = game.world.parkingBays, cubeVertices = scene._cube.getAttribute('position').count;
+        const bays = game.world.parkingBays;
         const bayPositions = bayMesh?.geometry.getAttribute('position');
-        // Driveways share this paving batch. Locate each actual bay cube by its
-        // center rather than assuming the merged material contains only bays.
-        const parkingRendered = Boolean(bayPositions && bayPositions.count % cubeVertices === 0 && bays.every(bay => {
-          let start = -1;
-          for (let offset = 0; offset < bayPositions.count; offset += cubeVertices) {
-            let x = 0, z = 0;
-            for (let vertex = 0; vertex < cubeVertices; vertex++) { x += bayPositions.getX(offset + vertex); z += bayPositions.getZ(offset + vertex); }
-            if (Math.abs(x / cubeVertices * 20 - bay.x - bay.w / 2) < 0.01 && Math.abs(z / cubeVertices * 20 - bay.y - bay.h / 2) < 0.01) { start = offset; break; }
+        // Paving is a merged, terrain-conforming grid. Every real bay corner
+        // must occur at its source footprint and sampled local ground height.
+        const parkingRendered = Boolean(bayPositions && bays.every(bay => globalThis.MayhemWorld.footprintCorners(bay).every(corner => {
+          const height = game.world.terrain.surfaceHeight(corner.x, corner.y) + 0.028;
+          for (let vertex = 0; vertex < bayPositions.count; vertex++) {
+            if (Math.hypot(bayPositions.getX(vertex) * 20 - corner.x, bayPositions.getZ(vertex) * 20 - corner.y) < 0.01 &&
+              Math.abs(bayPositions.getY(vertex) - height) < 0.01) return true;
           }
-          if (start < 0) return false;
-          let localX = 0, localZ = 0;
-          const c = Math.cos(bay.angle), s = Math.sin(bay.angle), cx = bay.x + bay.w / 2, cz = bay.y + bay.h / 2;
-          for (let vertex = 0; vertex < cubeVertices; vertex++) {
-            const vx = bayPositions.getX(start + vertex), vz = bayPositions.getZ(start + vertex);
-            localX = Math.max(localX, Math.abs((vx * 20 - cx) * c + (vz * 20 - cz) * s));
-            localZ = Math.max(localZ, Math.abs(-(vx * 20 - cx) * s + (vz * 20 - cz) * c));
-          }
-          return Math.abs(localX - bay.w / 2) < 0.01 && Math.abs(localZ - bay.h / 2) < 0.01;
-        }));
+          return false;
+        })));
         const parkedSpawns = game.world.vehicleSpawns.filter(spawn => !spawn.traffic);
-        const parkingAligned = parkedSpawns.every(spawn => {
-          const bay = bays.find(bay => bay.id === spawn.parkingBayId), car = game.cars.find(car => !car.traffic && car.kind === spawn.kind && Math.hypot(car.x - spawn.x, car.y - spawn.y) < 0.3);
+        const parkedVehicles = parkedSpawns.map(spawn => {
+          const bay = bays.find(bay => bay.id === spawn.parkingBayId);
+          const car = game.cars.filter(car => !car.traffic && car.kind === spawn.kind && car.roadId === spawn.roadId)
+            .sort((a, b) => Math.hypot(a.x - spawn.x, a.y - spawn.y) - Math.hypot(b.x - spawn.x, b.y - spawn.y))[0];
           const model = car && scene._vehicles.get(car.id);
-          return bay && car && model && Math.abs(bay.x + bay.w / 2 - car.x) < 0.3 && Math.abs(bay.y + bay.h / 2 - car.y) < 0.3 &&
-            Math.hypot(model.group.position.x * 20 - car.x, model.group.position.z * 20 - car.y) < 0.1;
+          if (!bay || !car || !model) return { roadId: spawn.roadId, contained: false };
+          const body = game.vehiclePhysics.get(car.id), half = body.shapes[0].halfExtents;
+          const c = Math.cos(bay.angle || 0), s = Math.sin(bay.angle || 0);
+          const dx = car.x - bay.x - bay.w / 2, dy = car.y - bay.y - bay.h / 2;
+          const localX = dx * c + dy * s, localY = -dx * s + dy * c;
+          const corners = [];
+          for (const x of [-half.x, half.x]) for (const y of [-half.y, half.y]) for (const z of [-half.z, half.z]) {
+            const offset = body.quaternion.vmult(new globalThis.CANNON.Vec3(x, y, z));
+            corners.push({ x: (offset.x * c + offset.z * s) * 20, y: (-offset.x * s + offset.z * c) * 20 });
+          }
+          const extentX = Math.max(...corners.map(corner => Math.abs(corner.x)));
+          const extentY = Math.max(...corners.map(corner => Math.abs(corner.y)));
+          const sourceCentered = Math.hypot(spawn.x - bay.x - bay.w / 2, spawn.y - bay.y - bay.h / 2) < 0.01;
+          const contained = Math.abs(localX) + extentX <= bay.w / 2 + 0.05 && Math.abs(localY) + extentY <= bay.h / 2 + 0.05;
+          const renderedAligned = Math.hypot(model.group.position.x * 20 - car.x, model.group.position.z * 20 - car.y) < 0.1;
+          return { id: car.id, roadId: spawn.roadId, sourceCentered, contained, renderedAligned, upright: car.upright,
+            drift: Math.hypot(car.x - spawn.x, car.y - spawn.y), speed: car.speed, localX, localY, extentX, extentY, bayWidth: bay.w, bayDepth: bay.h };
         });
+        const parkingAligned = parkedVehicles.every(car => car.sourceCentered && car.contained && car.renderedAligned && car.upright);
         const curvedRoads = game.roads.filter(road => {
           const first = game.network.pointOnRoad(road.id, road.length * 0.1), last = game.network.pointOnRoad(road.id, road.length * 0.9);
           return Math.abs(Math.atan2(Math.sin(first.angle - last.angle), Math.cos(first.angle - last.angle))) > 0.08;
@@ -877,21 +1131,22 @@ async function main() {
         const connected = game.nodes.every(node => game.network.route(game.player, node).length > 0);
         return { size: game.world.size, roads: game.roads.length, nodes: game.nodes.length, curvedRoads, connected,
           blocks: game.blocks.length, buildings: game.buildings.length,
-          districts: [...new Set(game.blocks.map(block => block.district))],
+          districts: [...new Set(game.blocks.map(block => block.district))], areaDistricts: [...new Set(game.areas.map(area => area.district))], expectedDistricts: Object.keys(game.world.districts),
           footprints: [...new Set(game.buildings.map(building => `${building.w}x${building.h}`))],
           orientations: [...new Set(game.buildings.map(building => (building.angle || 0).toFixed(2)))],
           density: { market: density('market'), works: density('works'), willow: density('willow'), orchard: density('orchard') },
           heights: [...new Set(game.buildings.map(building => building.height))], collisionMatches, renderMatches,
-          parking: { bays: bays.length, parkedSpawns: parkedSpawns.length, parkingRendered, parkingAligned },
+          parking: { bays: bays.length, parkedSpawns: parkedSpawns.length, parkingRendered, parkingAligned, parkedVehicles },
           info: scene.worldInfo, playerClear: game._isFree(game.player.x, game.player.y, radius),
           starterClear: game._vehicleFree(game.cars[0]),
           starterDistance: Math.hypot(game.player.x - game.cars[0].x, game.player.y - game.cars[0].y) };
       });
+      diagnostics.worldLayout = world;
       assert.ok(world.size > 5000 && world.roads > 40 && world.nodes > 30 && world.curvedRoads > 10);
       assert.equal(world.connected, true, 'Every real junction must be reachable from the starter road through the graph.');
       assert.ok(world.buildings >= 90 && world.footprints.length >= 4 && world.orientations.length > 10, 'Street frontage must use varied footprints and orientations.');
-      assert.equal(world.districts.length, 6);
-      assert.ok(world.density.market > world.density.willow && world.density.works > world.density.orchard, 'Suburban gardens must occupy more space around each home than city lots.');
+      assert.deepEqual(world.areaDistricts.sort(), world.expectedDistricts.sort(), 'Mapped district coverage includes open marsh as well as developed lots.');
+      assert.ok(world.density.market > world.density.willow, 'Northside gardens must occupy more space around each home than Downtown lots.');
       assert.ok(world.heights.length >= 3);
       assert.ok(world.info.sidewalkWidth >= 1.5, 'Sidewalk geometry must be wider than the old narrow strip.');
       assert.equal(world.collisionMatches, true, 'Actual Cannon building bodies must follow the new varied footprints.');
@@ -934,13 +1189,13 @@ async function main() {
       });
       try {
         for (const point of fixture.points) {
-          await page.evaluate(target => Object.assign(globalThis.__browserCheckGame.player, { x: target.x, y: target.y, elevation: 0, verticalVelocity: 0, grounded: true }), point);
+          await page.evaluate(target => Object.assign(globalThis.__browserCheckGame.player, { ...globalThis.__browserCheckPose(target), verticalVelocity: 0, grounded: true }), point);
           await page.waitForFunction(display => document.getElementById('district-name').textContent === display, point.display);
           assert.equal(await page.locator('#district-name').textContent(), point.display);
           assert.equal(await page.locator('#game-canvas').getAttribute('data-district'), point.id);
         }
       } finally {
-        await page.evaluate(original => Object.assign(globalThis.__browserCheckGame.player, { ...original, elevation: 0, verticalVelocity: 0, grounded: true }), fixture.original);
+        await page.evaluate(original => Object.assign(globalThis.__browserCheckGame.player, { ...globalThis.__browserCheckPose(original), verticalVelocity: 0, grounded: true }), fixture.original);
         await page.keyboard.press('c'); await waitForFreshFrames(page);
       }
       diagnostics.districtVisits = fixture.points;
@@ -1016,16 +1271,16 @@ async function main() {
       const before = await page.evaluate(() => ({ actionCooldown: globalThis.__browserCheckGame._actionCooldown, projectiles: globalThis.__browserCheckGame.projectiles.length }));
       await page.keyboard.down('Space');
       try {
-        await page.waitForFunction(() => globalThis.__browserCheckGame.player.elevation > 1, null, { timeout: 1500 });
+        await page.waitForFunction(() => { const player = globalThis.__browserCheckGame.player; return player.elevation - globalThis.__browserCheckGround(player) > 1; }, null, { timeout: 1500 });
         const airborne = await page.evaluate(() => {
           const game = globalThis.__browserCheckGame, scene = globalThis.__browserCheckScene;
-          return { elevation: game.player.elevation, renderedHeight: scene._player.group.position.y, grounded: game.player.grounded };
+          return { elevation: game.player.elevation, groundHeight: globalThis.__browserCheckGround(game.player), renderedHeight: scene._player.group.position.y, grounded: game.player.grounded };
         });
         assert.equal(airborne.grounded, false);
-        assert.ok(airborne.renderedHeight > 1, 'The visible avatar must rise with the jumping player.');
+        assert.ok(airborne.renderedHeight - airborne.groundHeight > 1, 'The visible avatar must rise above its local ground with the jumping player.');
         diagnostics.jump = airborne;
         await page.screenshot({ path: path.join(evidence, 'desktop-jump.png'), fullPage: true });
-        await page.waitForFunction(() => globalThis.__browserCheckGame.player.grounded && globalThis.__browserCheckGame.player.elevation < 0.01, null, { timeout: 2000 });
+        await page.waitForFunction(() => { const player = globalThis.__browserCheckGame.player; return player.grounded && Math.abs(player.elevation - globalThis.__browserCheckGround(player)) < 0.05; }, null, { timeout: 2000 });
         await page.waitForTimeout(700);
         assert.equal(await page.evaluate(() => globalThis.__browserCheckGame.player.grounded), true, 'Holding Space must not keep jumping after landing.');
       } finally { await page.keyboard.up('Space'); }
@@ -1110,19 +1365,20 @@ async function main() {
     });
     await check('E borrows the nearby yellow car', async () => {
       await page.keyboard.press('e');
-      await page.waitForFunction(() => document.getElementById('ride-name').textContent === 'Pocket Rocket', null, { timeout: 2000 });
       const state = await waitForScene(page, 'drive');
+      assert.equal(await page.evaluate(() => globalThis.__browserCheckGame.player.vehicleId === globalThis.__browserCheckGame.cars[0].id), true);
+      await assertRideName(page);
       assert.ok(state.cameraDistance > 3, 'Driving camera should pull back to show the whole ride.');
     });
     await check('exiting a ride switches back to the foot camera', async () => {
       await page.waitForTimeout(350);
       await page.keyboard.press('e');
       await waitForScene(page, 'foot');
-      assert.notEqual(await page.locator('#ride-name').textContent(), 'Pocket Rocket');
+      assert.equal(await page.locator('#ride-name').textContent(), 'Fresh sneakers');
       await page.waitForTimeout(350);
       await page.keyboard.press('e');
       await waitForScene(page, 'drive');
-      assert.equal(await page.locator('#ride-name').textContent(), 'Pocket Rocket');
+      await assertRideName(page);
     });
     await check('driving supports free look while aim and fire remain on-foot controls', async () => {
       await captureMouse(page);
@@ -1158,7 +1414,7 @@ async function main() {
       await page.keyboard.up('w');
       await page.waitForTimeout(160);
       assert.notEqual(await page.locator('#mission-progress').textContent(), before);
-      assert.equal(await page.locator('#ride-name').textContent(), 'Pocket Rocket');
+      await assertRideName(page);
     });
     await check('Space still applies the driving handbrake', async () => {
       await page.evaluate(() => {
@@ -1311,6 +1567,7 @@ async function main() {
     await check('blocked local storage still permits Play and car entry', async () => {
       const blockedContext = await createTestContext(browser, { viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
       try {
+        await installEngineInspection(blockedContext);
         await blockedContext.route('**/*', route => {
           if (/^(file|data|blob):/.test(route.request().url())) return route.continue();
           externalRequests.push(route.request().url());
@@ -1339,7 +1596,8 @@ async function main() {
         await waitForScene(blockedPage, 'foot');
         assert.match(await blockedPage.locator('#toast').textContent(), /Saving is unavailable/);
         await blockedPage.keyboard.press('e');
-        await blockedPage.waitForFunction(() => document.getElementById('ride-name').textContent === 'Pocket Rocket', null, { timeout: 2000 });
+        await waitForScene(blockedPage, 'drive');
+        await assertRideName(blockedPage);
         await blockedPage.locator('#sound-toggle').click();
         await blockedPage.locator('#motion-toggle').click();
         assert.equal(await blockedPage.locator('#game-canvas').evaluate(element => element === document.activeElement), true);
@@ -1395,7 +1653,7 @@ async function main() {
           game.cars = []; game.peds = []; game.police = []; game.physics.clearAll();
           const wall = globalThis.__browserCheckWall(), point = wall.point(radius + 35);
           if (!game._isFree(point.x, point.y, radius)) throw new Error('The generated town needs a clear rotated frontage for walking.');
-          Object.assign(game.player, { ...point, elevation: 0, verticalVelocity: 0, grounded: true, vehicleId: null, angle: wall.angle });
+          Object.assign(game.player, { ...point, verticalVelocity: 0, grounded: true, vehicleId: null, angle: wall.angle });
           return { ...wall.building, radius, ux: wall.ux, uy: wall.uy, center: wall.center, angle: wall.angle };
         });
         await captureMouse(wallPage);
@@ -1403,7 +1661,7 @@ async function main() {
         await wallPage.waitForFunction(expected => Math.abs(Math.atan2(Math.sin(globalThis.__browserCheckScene.viewYaw - expected), Math.cos(globalThis.__browserCheckScene.viewYaw - expected))) < 0.05, wall.angle);
         const renderedWall = await wallPage.evaluate(fixture => {
           const scene = globalThis.__browserCheckScene, T = scene.T, player = globalThis.__browserCheckGame.player;
-          const ray = new T.Raycaster(new T.Vector3(player.x / 20, 1.2, player.y / 20), new T.Vector3(fixture.ux, 0, fixture.uy));
+          const ray = new T.Raycaster(new T.Vector3(player.x / 20, player.elevation + 1.2, player.y / 20), new T.Vector3(fixture.ux, 0, fixture.uy));
           const meshes = [];
           scene.scene.traverse(object => {
             if (!object.isMesh) return;
@@ -1429,7 +1687,7 @@ async function main() {
           const insideBuilding = await wallPage.evaluate(view => globalThis.__browserCheckGame.buildings.some(b => {
             const dx = view.cameraX * 20 - b.x - b.w / 2, dy = view.cameraZ * 20 - b.y - b.h / 2;
             const c = Math.cos(b.angle || 0), s = Math.sin(b.angle || 0);
-            return Math.abs(dx * c + dy * s) < b.w / 2 - 0.1 && Math.abs(-dx * s + dy * c) < b.h / 2 - 0.1 && view.cameraY < b.height;
+            return Math.abs(dx * c + dy * s) < b.w / 2 - 0.1 && Math.abs(-dx * s + dy * c) < b.h / 2 - 0.1 && view.cameraY > (b.elevation || 0) && view.cameraY < (b.elevation || 0) + b.height;
           }), state);
           assert.equal(insideBuilding, false, `Camera entered a live building footprint on orbit step ${step}.`);
         }
@@ -1463,14 +1721,14 @@ async function main() {
         assert.ok(after.some(car => car.routePoints > 4), 'Traffic must use sampled bend routes rather than jumping from junction to junction.');
         diagnostics.graphTraffic = after;
       });
-      await check('real keyboard steering follows bends into Willow Gardens and returns to town with suburb HUD, minimap and graph recovery intact', async () => {
+      await check('real keyboard steering follows bends into Northside and returns to town with district HUD, minimap and raised graph recovery intact', async () => {
         const fixture = await networkPage.evaluate(() => {
           const game = globalThis.__browserCheckGame, car = game.cars[0];
           game.cars = [car]; game.peds = []; game.police = []; game.physics.clearAll(); game.heat = 0;
           const destination = game.world.missionAnchors.suburbs.find(point => game.districtAt(point).id === 'willow');
           const route = game.network.route(car, destination, 0), forward = route.find(point => Math.hypot(point.x - car.x, point.y - car.y) > 55);
           car.angle = Math.atan2(forward.y - car.y, forward.x - car.x); game.vehiclePhysics.reset(car);
-          return { origin: { x: car.x, y: car.y }, originDistrict: game.districtAt(car).id, destination };
+          return { origin: { x: car.x, y: car.y }, originDistrict: game.districtAt(car).id, destination, destinationName: game.districtAt(destination).name.toUpperCase() };
         });
         assert.ok(fixture.destination);
         await captureMouse(networkPage);
@@ -1479,10 +1737,10 @@ async function main() {
         diagnostics.suburbanJourney = { outbound: {}, inbound: {} };
         await driveNetworkRoute(networkPage, fixture.destination, diagnostics.suburbanJourney.outbound);
         await networkPage.waitForFunction(() => document.getElementById('game-canvas').dataset.district === 'willow');
-        assert.equal(await networkPage.locator('#district-name').textContent(), 'WILLOW GARDENS');
+        assert.equal(await networkPage.locator('#district-name').textContent(), fixture.destinationName);
         await waitForMinimap(networkPage);
         const farView = await sceneState(networkPage);
-        assert.ok(farView.worldY > 2850, 'The vehicle must physically enter the playable southern suburb.');
+        assert.ok(Math.hypot(farView.worldX - fixture.origin.x, farView.worldY - fixture.origin.y) > 1500, 'The vehicle must physically reach Northside beyond the initial Downtown neighborhood.');
         assert.ok(diagnostics.suburbanJourney.outbound.headingChange > 0.3 && diagnostics.suburbanJourney.outbound.steeringChanges > 4, 'The journey must include real steering through bends.');
         await networkPage.keyboard.press('r');
         await waitForFreshFrames(networkPage);
@@ -1528,81 +1786,11 @@ async function main() {
         await captureNetworkOverview(networkPage);
       });
     } finally { await closeTestContext(networkContext); }
-    await check('rolling terrain and a winding river have real outside-town geometry visible from a safe riverfront overlook', async () => {
-      const scenicContext = await createTestContext(browser, { viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
-      try {
-        await installEngineInspection(scenicContext);
-        await scenicContext.route('**/*', route => {
-          if (/^(file|data|blob):/.test(route.request().url())) return route.continue();
-          externalRequests.push(route.request().url()); return route.abort();
-        });
-        const scenicPage = await scenicContext.newPage();
-        scenicPage.on('pageerror', error => errors.push(error.message));
-        scenicPage.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-        await scenicPage.goto(url);
-        await scenicPage.locator('#play-button').click();
-        await waitForScene(scenicPage, 'foot');
-        const overlook = await scenicPage.evaluate(() => {
-          const game = globalThis.__browserCheckGame, scene = globalThis.__browserCheckScene;
-          const riverPoint = scene._riverCurve.getPoint(0.32), size = globalThis.MayhemCore.SIZE;
-          const point = { x: size - 55, y: Math.max(80, Math.min(size - 80, riverPoint.z * 20)) };
-          game.cars = []; game.peds = []; game.police = []; game.physics.clearAll();
-          if (!game._isFree(point.x, point.y, globalThis.MayhemPhysics.PLAYER_RADIUS)) throw new Error('Riverfront overlook must be a clear playable position.');
-          const angle = Math.atan2(riverPoint.z * 20 - point.y, riverPoint.x * 20 - point.x);
-          Object.assign(game.player, { ...point, angle, elevation: 0, verticalVelocity: 0, grounded: true, vehicleId: null });
-          return { ...point, angle };
-        });
-        await captureMouse(scenicPage);
-        await scenicPage.keyboard.press('c');
-        await scenicPage.waitForFunction(expected => Math.abs(Math.atan2(Math.sin(globalThis.__browserCheckScene.viewYaw - expected), Math.cos(globalThis.__browserCheckScene.viewYaw - expected))) < 0.05, overlook.angle);
-        await scenicPage.waitForTimeout(300);
-        const landscape = await scenicPage.evaluate(() => {
-          const scene = globalThis.__browserCheckScene, T = scene.T, size = globalThis.MayhemCore.SIZE / 20;
-          const terrain = scene._landscapeGroup.getObjectByName('Rolling terrain'), water = scene._riverSurface;
-          scene.scene.updateMatrixWorld(true);
-          const terrainBounds = new T.Box3().setFromObject(terrain), riverBounds = new T.Box3().setFromObject(scene._riverGroup);
-          const projection = new T.Matrix4().multiplyMatrices(scene.camera.projectionMatrix, scene.camera.matrixWorldInverse);
-          const frustum = new T.Frustum().setFromProjectionMatrix(projection), heights = new Set();
-          const terrainPosition = terrain.geometry.getAttribute('position');
-          for (let i = 0; i < terrainPosition.count; i++) heights.add(terrainPosition.getY(i).toFixed(2));
-          const renderedMeshes = [];
-          scene.scene.traverse(object => {
-            if (!object.isMesh) return;
-            for (let ancestor = object; ancestor; ancestor = ancestor.parent) if (!ancestor.visible) return;
-            renderedMeshes.push(object);
-          });
-          const waterPosition = water.geometry.getAttribute('position'), indices = water.geometry.index;
-          const center = new T.Vector3(), vertex = new T.Vector3(), ray = new T.Raycaster();
-          let projectedWaterTriangles = 0, unobstructedWaterTriangles = 0;
-          for (let index = 0; index < indices.count; index += 3) {
-            center.set(0, 0, 0);
-            for (let corner = 0; corner < 3; corner++) center.add(vertex.fromBufferAttribute(waterPosition, indices.getX(index + corner)));
-            center.multiplyScalar(1 / 3).applyMatrix4(water.matrixWorld);
-            if (center.x >= 0 && center.x <= size && center.z >= 0 && center.z <= size) continue;
-            const screen = center.clone().project(scene.camera);
-            if (Math.abs(screen.x) >= 0.95 || Math.abs(screen.y) >= 0.95 || screen.z <= -1 || screen.z >= 1) continue;
-            projectedWaterTriangles++;
-            ray.setFromCamera(new T.Vector2(screen.x, screen.y), scene.camera);
-            if (ray.intersectObjects(renderedMeshes, false)[0]?.object === water) unobstructedWaterTriangles++;
-          }
-          return { info: scene.worldInfo, worldSize: size, terrainVertices: terrainPosition.count, riverVertices: waterPosition.count,
-            terrainHeights: heights.size, terrainInView: frustum.intersectsObject(terrain),
-            terrainBounds: { min: terrainBounds.min.toArray(), max: terrainBounds.max.toArray() },
-            riverBounds: { min: riverBounds.min.toArray(), max: riverBounds.max.toArray() },
-            projectedWaterTriangles, unobstructedWaterTriangles, renderCalls: scene.renderer.info.render.calls };
-        });
-        assert.ok(landscape.terrainVertices > 1000 && landscape.terrainHeights > 8, 'The hinterland must contain genuinely raised, varied terrain.');
-        assert.ok(landscape.riverVertices > 200 && landscape.info.landscape.riverSamples > 100 && landscape.info.landscape.riverWidth > 7);
-        assert.ok(landscape.info.landscape.treeCount > 20, 'The world edge should have a substantial backdrop of trees.');
-        assert.ok(landscape.terrainBounds.min[0] < 0 && landscape.terrainBounds.max[2] > landscape.worldSize, 'Real terrain must extend beyond the expanded playable boundary.');
-        assert.ok(landscape.riverBounds.min[0] > landscape.worldSize, 'The river must sit beyond the expanded playable world, without cutting a hidden hole in a suburb.');
-        assert.equal(landscape.terrainInView, true);
-        assert.ok(landscape.projectedWaterTriangles > 4 && landscape.unobstructedWaterTriangles > 0, 'Actual outside-town river triangles must be in the view and unobstructed.');
-        assert.ok(landscape.renderCalls > 0);
-        diagnostics.landscape = { ...landscape, overlook };
-        await scenicPage.screenshot({ path: path.join(evidence, 'desktop-river-overlook.png'), fullPage: true });
-      } finally { await closeTestContext(scenicContext); }
-    });
+    await check('imported terrain uses the same real mesh and Cannon heightfield, with land and coastline on the minimap', async () => withTerrainPage(browser, externalRequests, checkSharedTerrain));
+    await check('walking, jumping, ragdoll recovery and camera orbit follow a real elevated hill surface', async () => withTerrainPage(browser, externalRequests, checkHillWalking));
+    await check('actual keyboard driving climbs a graded hill with supported rigid-body contact', async () => withTerrainPage(browser, externalRequests, checkHillDriving));
+    await check('actual keyboard driving crosses the city-to-airport bridge on physical decks above water', async () => withTerrainPage(browser, externalRequests, checkBridgeDriving));
+    await check('a raised garage allows real car entry, collection access and ground-relative exit', async () => withTerrainPage(browser, externalRequests, checkElevatedGarage));
     const physicsContext = await createTestContext(browser, { viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
     try {
       await physicsContext.route('**/*', route => {
@@ -1631,7 +1819,7 @@ async function main() {
         assertFiniteBody(fallen);
         assert.notDeepEqual(fallen.joints, early.joints, 'Joint positions must evolve through physical motion.');
         assert.notDeepEqual(fallen.matrices, early.matrices, 'Rendered segments must follow the moving physical joints.');
-        assert.ok(fallen.joints.head.y < 1.25, 'Gravity should bring the head below standing height.');
+        assert.ok(fallen.joints.head.y - fallen.groundHeight < 1.25, 'Gravity should bring the head below standing height above the local ground.');
         assert.equal((await sceneState(physicsPage)).cameraMode, 'foot');
         diagnostics.playerRagdoll = fallen;
         await physicsPage.screenshot({ path: path.join(evidence, 'desktop-player-ragdoll.png'), fullPage: true });
@@ -1713,7 +1901,7 @@ async function main() {
           const lane = globalThis.__browserCheckLane();
           Object.assign(car, { ...lane.point(-150, 25), angle: lane.angle, speed: 0, vx: 0, vy: 0, traffic: false });
           game.vehiclePhysics.reset(car);
-          Object.assign(game.player, { ...lane.point(), angle: lane.angle, elevation: 0, verticalVelocity: 0, grounded: true, vehicleId: null });
+          Object.assign(game.player, { ...lane.point(), angle: lane.angle, verticalVelocity: 0, grounded: true, vehicleId: null });
           Object.assign(ped, { ...lane.point(36), stunned: 0, ragdollGrace: 0, pace: 0 });
           ped.homeX = ped.x; ped.homeY = ped.y;
           globalThis.__browserCheckPopHeading = lane.angle;
@@ -1749,7 +1937,7 @@ async function main() {
           const lane = globalThis.__browserCheckLane();
           Object.assign(car, { ...lane.point(), angle: lane.angle, speed: 0, vx: 0, vy: 0, traffic: false, health: 100 });
           game.vehiclePhysics.reset(car);
-          Object.assign(game.player, { ...lane.point(0, -32), angle: lane.angle, vehicleId: null, elevation: 0, verticalVelocity: 0, grounded: true });
+          Object.assign(game.player, { ...lane.point(0, -32), angle: lane.angle, vehicleId: null, verticalVelocity: 0, grounded: true });
           Object.assign(ped, { ...lane.point(62), stunned: 0, ragdollGrace: 0, pace: 0 });
           ped.homeX = ped.x; ped.homeY = ped.y;
           return { id: ped.id, ux: lane.ux, uy: lane.uy };
@@ -1787,7 +1975,7 @@ async function main() {
           game.vehiclePhysics.bodies.get(car.id).body.addEventListener('collide', event => {
             if (event.body.entity) globalThis.__browserCheckContacts.push({ other: event.body.entity.id, closing: Math.abs(event.contact.getImpactVelocityAlongNormal()) });
           });
-          Object.assign(game.player, { ...lane.point(0, -32), elevation: 0, grounded: true, angle: lane.angle, vehicleId: null });
+          Object.assign(game.player, { ...lane.point(0, -32), grounded: true, angle: lane.angle, vehicleId: null });
           return { x: lane.x, y: lane.y, ux: lane.ux, uy: lane.uy, nx: lane.nx, ny: lane.ny };
         });
         await physicsPage.keyboard.press('e');
@@ -1818,22 +2006,8 @@ async function main() {
           const wall = globalThis.__browserCheckWall();
           Object.assign(car, { ...wall.point(70), angle: wall.angle, traffic: false, health: 100 });
           game.vehiclePhysics.reset(car);
-          // This is an approach speed, not a fabricated collision outcome.
-          // The normal fixed-step loop and Cannon wall contact produce flight.
-          Object.assign(car, { speed: 300, vx: wall.ux * 300, vy: wall.uy * 300 });
           Object.assign(game.player, { vehicleId: car.id, x: car.x, y: car.y });
           globalThis.__browserCheckContacts = [];
-          const startTime = game.time;
-          globalThis.__browserCheckWallTrace = { maxElevation: 0, maxTilt: 0, minVx: 0, maxVx: 0, samples: [] };
-          function sample() {
-            const trace = globalThis.__browserCheckWallTrace;
-            trace.maxElevation = Math.max(trace.maxElevation, car.elevation);
-            trace.maxTilt = Math.max(trace.maxTilt, Math.abs(car.orientation.x) + Math.abs(car.orientation.z));
-            trace.minVx = Math.min(trace.minVx, car.vx); trace.maxVx = Math.max(trace.maxVx, car.vx);
-            if (trace.samples.length < 100) trace.samples.push({ time: game.time - startTime, x: car.x, elevation: car.elevation, vx: car.vx, tilt: Math.abs(car.orientation.x) + Math.abs(car.orientation.z) });
-            if (game.time - startTime < 2.5) requestAnimationFrame(sample);
-          }
-          requestAnimationFrame(sample);
           game.vehiclePhysics.bodies.get(car.id).body.addEventListener('collide', event => {
             if (event.body.kind === 'building') globalThis.__browserCheckContacts.push({ kind: 'building', closing: Math.abs(event.contact.getImpactVelocityAlongNormal()) });
           });
@@ -1842,22 +2016,41 @@ async function main() {
         });
         await waitForScene(physicsPage, 'drive');
         await physicsPage.keyboard.press('c');
+        await physicsPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame, car = game.current, wall = globalThis.__browserCheckWallNormal;
+          // Launch the real approach after awaited camera setup so the browser
+          // observes the impact itself, rather than starting after its flight.
+          Object.assign(car, { speed: 300, vx: wall.ux * 300, vy: wall.uy * 300 });
+          const startTime = game.time;
+          globalThis.__browserCheckWallTrace = { maxElevation: 0, maxTilt: 0, minVx: 0, maxVx: 0, samples: [] };
+          function sample() {
+            const trace = globalThis.__browserCheckWallTrace;
+            trace.maxElevation = Math.max(trace.maxElevation, car.elevation);
+            trace.maxTilt = Math.max(trace.maxTilt, Math.abs(car.orientation.x) + Math.abs(car.orientation.z));
+            trace.minVx = Math.min(trace.minVx, car.vx); trace.maxVx = Math.max(trace.maxVx, car.vx);
+            if (trace.samples.length < 100) trace.samples.push({ time: game.time - startTime, x: car.x, y: car.y,
+              elevation: car.elevation, groundHeight: globalThis.__browserCheckGround(car), vx: car.vx, vy: car.vy,
+              reverseSpeed: -(car.vx * wall.ux + car.vy * wall.uy), tilt: Math.abs(car.orientation.x) + Math.abs(car.orientation.z) });
+            if (game.time - startTime < 2.5) requestAnimationFrame(sample);
+          }
+          requestAnimationFrame(sample);
+        });
         try {
           await physicsPage.waitForFunction(() => {
             const car = globalThis.__browserCheckGame.current;
             const wall = globalThis.__browserCheckWallNormal;
-            return globalThis.__browserCheckContacts.length > 0 && car.elevation > 0.2 && car.vx * wall.ux + car.vy * wall.uy < -10 && Math.abs(car.orientation.x) + Math.abs(car.orientation.z) > 0.015;
+            return globalThis.__browserCheckContacts.length > 0 && car.elevation - globalThis.__browserCheckGround(car) > 0.2 && car.vx * wall.ux + car.vy * wall.uy < -10 && Math.abs(car.orientation.x) + Math.abs(car.orientation.z) > 0.015;
           }, null, { timeout: 3000 });
         } finally { diagnostics.airborneWallTrace = await physicsPage.evaluate(() => ({ ...globalThis.__browserCheckWallTrace, contacts: [...globalThis.__browserCheckContacts] })); }
         const airborne = await vehicleState(physicsPage);
         assertRenderedVehicle(airborne);
         assert.ok((airborne.x - wall.center.x) * wall.ux + (airborne.y - wall.center.y) * wall.uy < -wall.w / 2, 'The car must rebound outside the solid rotated building frontage.');
         assert.ok(airborne.vx * wall.ux + airborne.vy * wall.uy < -10, 'The impact must reverse velocity along the rotated wall normal.');
-        assert.ok(airborne.elevation > 0.2 && airborne.renderedHeight > 0.2, 'Physical and visible car must both leave the road.');
+        assert.ok(airborne.elevation - airborne.groundHeight > 0.2 && airborne.renderedHeight - airborne.groundHeight > 0.2, 'Physical and visible car must both leave the local road surface.');
         assert.ok(Math.abs(airborne.orientation.x) + Math.abs(airborne.orientation.z) > 0.015, 'The impact must create real pitch or roll, not only a yaw turn.');
         diagnostics.airborneWallImpact = airborne;
         await physicsPage.screenshot({ path: path.join(evidence, 'desktop-wall-rebound.png'), fullPage: true });
-        await physicsPage.waitForFunction(() => Math.abs(globalThis.__browserCheckGame.current.verticalVelocity) < 0.5 && globalThis.__browserCheckGame.current.elevation < 0.6, null, { timeout: 4000 });
+        await physicsPage.waitForFunction(() => { const car = globalThis.__browserCheckGame.current; return Math.abs(car.verticalVelocity) < 0.5 && car.elevation - globalThis.__browserCheckGround(car) < 0.6; }, null, { timeout: 4000 });
         assertRenderedVehicle(await vehicleState(physicsPage));
       });
 
@@ -1883,17 +2076,17 @@ async function main() {
         await physicsPage.keyboard.press('c');
         await physicsPage.waitForFunction(() => {
           const car = globalThis.__browserCheckGame.current;
-          return globalThis.__browserCheckContacts.length > 0 && car.elevation > 0.9 && Math.abs(car.orientation.x) + Math.abs(car.orientation.z) > 0.015;
+          return globalThis.__browserCheckContacts.length > 0 && car.elevation - globalThis.__browserCheckGround(car) > 0.9 && Math.abs(car.orientation.x) + Math.abs(car.orientation.z) > 0.015;
         }, null, { timeout: 3000 });
         const airborne = await vehicleState(physicsPage), struck = await vehicleState(physicsPage, struckId);
         assertRenderedVehicle(airborne); assertRenderedVehicle(struck);
-        assert.ok(airborne.elevation > 0.9, 'The actual collision must send the driven car clearly above the street.');
+        assert.ok(airborne.elevation - airborne.groundHeight > 0.9, 'The actual collision must send the driven car clearly above its local street.');
         assert.ok(Math.hypot(struck.x - fixture.x, struck.y - fixture.y) > 2 || Math.hypot(struck.vx, struck.vy) > 10, 'The struck body must receive real momentum.');
         diagnostics.airborneCarImpact = { driven: airborne, struck };
         await physicsPage.screenshot({ path: path.join(evidence, 'desktop-airborne-impact.png'), fullPage: true });
         await physicsPage.waitForFunction(() => {
           const car = globalThis.__browserCheckGame.current;
-          return car.elevation < 0.7 && Math.abs(car.verticalVelocity) < 0.5;
+          return car.elevation - globalThis.__browserCheckGround(car) < 0.7 && Math.abs(car.verticalVelocity) < 0.5;
         }, null, { timeout: 5000 });
         assertRenderedVehicle(await vehicleState(physicsPage));
       });
@@ -1906,7 +2099,7 @@ async function main() {
           for (const tree of game.staticObjects.filter(object => object.kind === 'tree')) {
             for (const angle of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
               const ux = Math.cos(angle), uy = Math.sin(angle);
-              if ([30, 50, 70, 95, 115].every(gap => game._vehicleFree({ ...car, x: tree.x - ux * gap, y: tree.y - uy * gap, angle, orientation: null, elevation: 0, upright: true }))) {
+              if ([30, 50, 70, 95, 115].every(gap => game._vehicleFree({ ...car, ...globalThis.__browserCheckPose({ x: tree.x - ux * gap, y: tree.y - uy * gap }), angle, orientation: null, upright: true }))) {
                 fixture = { id: tree.id, x: tree.x, y: tree.y, angle, ux, uy }; break;
               }
             }
@@ -1937,22 +2130,41 @@ async function main() {
 
       await check('R rights a flipped physical car, resets angular motion and returns usable real driving controls', async () => {
         await physicsPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame, car = game.cars[0], lane = globalThis.__browserCheckLane();
+          game.cars = [car]; game.peds = []; game.police = []; game.physics.clearAll(); game.heat = 0; game.graceTimer = 120;
+          Object.assign(car, { ...lane.point(), angle: lane.angle, health: game.maxHealth, traffic: false, vx: 0, vy: 0, speed: 0, orientation: null });
+          game.vehiclePhysics.reset(car, car);
+          Object.assign(game.player, { ...lane.point(0, -32), angle: lane.angle, vehicleId: null, verticalVelocity: 0, grounded: true });
+        });
+        await captureMouse(physicsPage); await physicsPage.keyboard.press('e'); await waitForScene(physicsPage, 'drive');
+        await physicsPage.evaluate(() => {
           const game = globalThis.__browserCheckGame, car = game.current;
           const lane = globalThis.__browserCheckLane();
-          Object.assign(car, { ...lane.point(), angle: lane.angle, elevation: 0.8, verticalVelocity: 0, vx: 0, vy: 0, speed: 0,
+          Object.assign(car, { ...lane.point(), angle: lane.angle, elevation: lane.point().elevation + 0.8, verticalVelocity: 0, vx: 0, vy: 0, speed: 0,
             orientation: { x: 1, y: 0, z: 0, w: 0 } });
         });
         await waitForFreshFrames(physicsPage);
         const flipped = await vehicleState(physicsPage);
         assert.equal(flipped.upright, false, 'The setup must produce an actual inverted vehicle before recovery.');
         assertRenderedVehicle(flipped);
+        await physicsPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame, recover = game.recover;
+          game.recover = function (...args) {
+            const result = recover.apply(this, args), body = this.vehiclePhysics.get(this.current.id);
+            globalThis.__browserCheckRecoveryReset = { linear: body.velocity.length(), angular: body.angularVelocity.length(), upright: this.current.upright };
+            return result;
+          };
+        });
         await physicsPage.keyboard.press('r');
         await waitForFreshFrames(physicsPage);
+        const reset = await physicsPage.evaluate(() => globalThis.__browserCheckRecoveryReset);
         const recovered = await vehicleState(physicsPage);
+        diagnostics.flippedCarRecovery = { ...recovered, reset };
         assertRenderedVehicle(recovered);
         assert.equal(recovered.upright, true);
-        assert.ok(Math.abs(recovered.elevation) < 0.05, 'Recovery must place the physical car back on the road.');
-        assert.ok(Math.hypot(...Object.values(recovered.bodyAngularVelocity)) < 0.2, 'Recovery must clear real angular velocity.');
+        assert.equal(recovered.grounded, true, 'Recovered car must remain supported by its local sloping road.');
+        assert.ok(Math.abs(recovered.elevation - recovered.groundHeight) < 0.25, 'Recovery must place the physical car back on its local road.');
+        assert.ok(reset && reset.upright && reset.linear < 0.0001 && reset.angular < 0.0001, 'The actual recovery call must clear real linear and angular motion before terrain contacts settle.');
         const start = { x: recovered.x, y: recovered.y };
         await physicsPage.keyboard.down('w');
         await physicsPage.waitForTimeout(250);
@@ -1960,7 +2172,7 @@ async function main() {
         const driven = await vehicleState(physicsPage);
         assert.ok(Math.hypot(driven.x - start.x, driven.y - start.y) > 4, 'Recovered car must respond to actual throttle input.');
         assert.ok(driven.health > 0);
-        diagnostics.flippedCarRecovery = recovered;
+        diagnostics.flippedCarRecovery = { ...recovered, reset, driven };
       });
     } finally { await closeTestContext(physicsContext); }
     const inventoryContext = await createTestContext(browser, { viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
@@ -2049,7 +2261,7 @@ async function main() {
           const visit = globalThis.__browserCheckService();
           Object.assign(car, { ...visit.car, speed: 0, vx: 0, vy: 0, traffic: false });
           game.vehiclePhysics.reset(car);
-          Object.assign(game.player, { x: visit.garage.x, y: visit.garage.y, angle: visit.car.angle, vehicleId: null });
+          Object.assign(game.player, { ...visit.garage, angle: visit.car.angle, verticalVelocity: 0, grounded: true, vehicleId: null });
           game.money = 1500; game.heat = 0;
         });
         await openInventory(inventoryPage);

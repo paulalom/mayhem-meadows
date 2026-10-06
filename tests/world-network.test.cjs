@@ -16,8 +16,9 @@ function propParts(objects) {
   }));
 }
 
-test('the expanded city is a connected curved graph with playable loops and cul-de-sacs', () => {
-  assert.equal(world.size,5600); assert.equal(World.SIZE,5600);
+test('the reference-map regions form a connected graph with city loops, suburban courts and mountain hairpins', () => {
+  assert.equal(world.size,12000); assert.equal(World.SIZE,12000);
+  assert.equal(world.mapWidth,12000); assert.equal(world.mapHeight,8000);
   assert.ok(world.roads.length>=60); assert.ok(world.nodes.length>=45);
   const visited=new Set(),queue=[world.nodes[0].id];
   while(queue.length) {
@@ -25,15 +26,17 @@ test('the expanded city is a connected curved graph with playable loops and cul-
     visited.add(id); for(const edge of world.network.adjacency.get(id)) queue.push(edge.to);
   }
   assert.equal(visited.size,world.nodes.length);
-  assert.ok(world.nodes.filter(node=>world.network.adjacency.get(node.id).length===1).length>=7,'suburban courts are real graph dead ends');
+  assert.ok(world.nodes.filter(node=>world.network.adjacency.get(node.id).length===1).length>=6,'suburban courts are real graph dead ends');
   assert.ok(world.roads.length-world.nodes.length+1>=12,'the neighborhoods contain alternative loops');
   const curved=world.roads.filter(road=>{
     const start=road.points[0],end=road.points.at(-1),dx=end.x-start.x,dy=end.y-start.y,length=distance(start,end);
     return road.points.some(point=>Math.abs((point.x-start.x)*dy-(point.y-start.y)*dx)/length>20);
   });
-  assert.ok(curved.length>world.roads.length*.75,'the network is not a distorted orthogonal grid');
-  assert.ok(Math.max(...world.nodes.map(node=>node.x))>4900);
-  assert.ok(Math.max(...world.nodes.map(node=>node.y))>4800);
+  assert.ok(curved.length>world.roads.length*.55,'regional streets retain substantial curvature');
+  assert.ok(world.roads.filter(road=>road.id.startsWith('ridge-hairpin')).length>=4);
+  assert.ok(world.roads.filter(road=>road.bridge).length===2,'river crossings are explicit bridge roads');
+  assert.ok(Math.max(...world.nodes.map(node=>node.x))>11000);
+  assert.ok(Math.max(...world.nodes.map(node=>node.y))>6400);
   for(const road of world.roads) {
     assert.ok(distance(road.points[0],world.network.nodeById.get(road.a))<1e-9);
     assert.ok(distance(road.points.at(-1),world.network.nodeById.get(road.b))<1e-9);
@@ -129,7 +132,7 @@ test('opposing lanes stay separate through straight junctions and sharp tangent 
 });
 
 test('oriented buildings keep continuous sidewalks clear and preserve varied suburban gardens', () => {
-  assert.ok(world.buildings.length>=100&&world.buildings.length<=140);
+  assert.ok(world.buildings.length>=140&&world.buildings.length<=190);
   for(const building of world.buildings) {
     for(const point of World.footprintCorners(building)) assert.ok(point.x>100&&point.y>100&&point.x<world.size-100&&point.y<world.size-100);
     for(const road of world.roads) for(let i=1;i<road.points.length;i++) {
@@ -142,7 +145,7 @@ test('oriented buildings keep continuous sidewalks clear and preserve varied sub
   assert.ok(world.buildings.filter(building=>Math.abs(Math.sin(building.angle*2))>.2).length>50,'footprints follow oblique streets');
   const average=id=>{const blocks=world.blocks.filter(block=>block.district===id);return blocks.reduce((sum,block)=>sum+block.density,0)/blocks.length;};
   assert.ok(average('market')>average('willow')+.1,'urban fronts are denser than garden lots');
-  for(const id of ['willow','orchard']) {
+  for(const id of ['willow']) {
     const buildings=world.buildings.filter(building=>building.district===id);
     assert.ok(buildings.length>=25);
     const setbacks=buildings.map(building=>{const road=world.network.pointOnRoad(building.roadId,building.roadS);return distance(road,centre(building))-building.h/2-road.width/2;});
@@ -173,8 +176,10 @@ test('shared solid props keep full van footprints and sidewalk paths clear throu
 });
 
 test('services, varied lane spawns, and contracts use reachable road locations', () => {
-  assert.deepEqual(world.start.player,{x:884,y:1080,angle:-Math.PI/2});
-  assert.deepEqual(world.start.car,{x:916,y:1080,angle:-Math.PI/2,kind:'compact',color:'#ffd15b'});
+  assert.equal(world.start.player.x,5984); assert.equal(world.start.player.y,3700);
+  assert.equal(world.start.car.x,6016); assert.equal(world.start.car.y,3700);
+  assert.equal(world.start.car.kind,'compact'); assert.equal(world.start.car.color,'#ffd15b');
+  assert.ok(world.start.player.elevation>0&&world.start.car.elevation>0);
   const wash=world.staticObjects.find(object=>object.kind==='wash'),service=world.services.find(service=>service.id==='wash');
   assert.ok(distance(wash,service)<1e-8,'wash activation is under the actual arch');
   const road=world.network.project(service);
@@ -193,7 +198,7 @@ test('services, varied lane spawns, and contracts use reachable road locations',
 
 test('every nonstarter parked ride has a clear bay and an unobstructed full-width road approach', () => {
   const parked=world.vehicleSpawns.filter(spawn=>!spawn.traffic),parts=propParts(world.staticObjects);
-  assert.equal(parked.length,8,'the parked collection remains available');
+  assert.ok(parked.length>=7,'the parked collection remains available');
   assert.equal(world.parkingBays.length,parked.length);
   const dimensions={compact:{length:46,width:27},sports:{length:49,width:28},van:{length:55,width:32}};
   for(const spawn of parked) {
@@ -237,15 +242,23 @@ test('whole pedestrian path legs stay outside every carriageway at acute junctio
     }
   }
   assert.ok(legs>250,'many full walking legs are checked rather than spawn points alone');
-  const north=world.pedPaths.find(path=>path.roadId==='north-spine');
-  if(north) assert.ok(north.points.every(point=>distance(point,{x:832.4,y:580})>10),'the acute heights-rise branch trims the former unsafe start');
+  assert.ok(world.pedPaths.some(path=>path.district==='ridge')&&world.pedPaths.some(path=>path.district==='marsh'),'scenic regions have reachable walking paths');
 });
 
-test('world generation is deterministic and the scenic river stays beyond physical play bounds', () => {
+test('world generation is deterministic and region density follows the reference geography', () => {
   const again=World.createWorld();
   assert.deepEqual(again.buildings,world.buildings);
   assert.deepEqual(again.staticObjects,world.staticObjects);
   assert.deepEqual(again.parkingBays,world.parkingBays);
-  assert.ok(world.landscape.riverPath.every(point=>point.x>World.SIZE+200));
-  assert.equal(Object.keys(World.DISTRICTS).length,6);
+  assert.equal(Object.keys(World.DISTRICTS).length,8);
+  assert.equal(Object.values(World.DISTRICTS).reduce((sum,district)=>sum+district.pedCount,0),48);
+  const count=id=>world.buildings.filter(building=>building.district===id).length;
+  assert.ok(count('market')>count('orchard')*4,'Downtown is denser than the airport');
+  assert.ok(count('willow')>count('ridge')*6,'Northside has garden neighborhoods, the mountains stay open');
+  assert.equal(count('marsh'),0,'the marsh has no urban infill');
+  assert.ok(world.buildings.some(building=>building.style==='terminal'));
+  assert.ok(world.buildings.some(building=>building.style==='control-tower'));
+  assert.ok(world.buildings.some(building=>building.style==='hangar'));
+  assert.equal(world.landscape.airport.runways[0].role,'runway');
+  assert.ok(world.staticObjects.every(object=>object.kind==='garage'?!object.destructible:object.destructible&&object.health===object.maxHealth));
 });

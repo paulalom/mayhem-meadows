@@ -16,17 +16,20 @@ const pathDistance = (point,points) => {
   return best;
 };
 
-test('the stable world has connected city and suburban streets while preserving the welcome and garage', () => {
+test('the stable terrain world has connected city, northside, airport and mountain streets with a usable welcome', () => {
   const game=makeGame(),other=new Game({seed:999});
-  assert.equal(SIZE,5600); assert.equal(Game.SIZE,SIZE); assert.equal(game.world.size,SIZE);
+  assert.equal(SIZE,12000); assert.equal(Game.SIZE,SIZE); assert.equal(game.world.size,SIZE);
+  assert.equal(game.world.mapWidth,12000); assert.equal(game.world.mapHeight,8000);
   assert.deepEqual(game.buildings,other.buildings); assert.deepEqual(game.staticObjects,other.staticObjects);
-  assert.equal(Object.keys(DISTRICTS).length,6);
-  assert.deepEqual([game.player.x,game.player.y],[884,1080]);
-  assert.deepEqual([game.cars[0].x,game.cars[0].y],[916,1080]);
-  assert.deepEqual(game.services.find(service=>service.id==='garage'),{id:'garage',x:900,y:900,label:'Sprinkle Garage'});
+  assert.equal(Object.keys(DISTRICTS).length,8);
+  assert.deepEqual([game.player.x,game.player.y],[5984,3700]);
+  assert.deepEqual([game.cars[0].x,game.cars[0].y],[6016,3700]);
+  const garage=game.services.find(service=>service.id==='garage');
+  assert.deepEqual([garage.x,garage.y,garage.label],[6000,3500,'Sprinkle Garage']);
+  assert.equal(garage.elevation,game._ground(garage)); assert.ok(garage.elevation>1);
   assert.ok(game._personFree(game.player.x,game.player.y,PLAYER_RADIUS)); assert.equal(game.interact(),true);
   for(const anchor of game.world.missionAnchors.suburbs) {
-    assert.equal(game.districtAt(anchor).suburban,true);
+    assert.ok(['willow','orchard'].includes(game.districtAt(anchor).id));
     const route=game._roadRoute(game.current,anchor);
     assert.ok(route.length>70); assert.ok(route.length<600); assert.ok(distance(route.at(-1),anchor)<.01);
   }
@@ -34,7 +37,7 @@ test('the stable world has connected city and suburban streets while preserving 
 
 test('navigation consumes bounded samples of real curved roads through every connected graph node', () => {
   const game=makeGame();
-  assert.ok(game.roads.some(road=>road.width<80)); assert.ok(new Set(game.roads.map(road=>road.width)).size>=4);
+  assert.ok(game.roads.some(road=>road.width<=90)); assert.ok(new Set(game.roads.map(road=>road.width)).size>=4);
   assert.ok(game.nodes.some(node=>game.network.adjacency.get(node.id).length===1),'suburban courts have real dead ends');
   assert.ok(game.roads.some(road=>road.length>distance(road.points[0],road.points.at(-1))*1.02),'roads include actual bends');
   for(const node of game.nodes) {
@@ -46,7 +49,7 @@ test('navigation consumes bounded samples of real curved roads through every con
       assert.ok(road); assert.ok(point.s>=0 && point.s<=road.length);
       assert.ok(point.x>=0 && point.y>=0 && point.x<=SIZE && point.y<=SIZE);
       if(i) assert.ok(distance(point,route[i-1])<30,'lane offsets join smoothly at junctions');
-      if(i%5===0) assert.ok(game._vehicleFree({...point,kind:'van',elevation:0}),node.id+' route clears the actual fixed geometry');
+      if(i%5===0) assert.ok(game._vehicleFree({...point,kind:'van',elevation:game._ground(point)}),node.id+' route clears the actual fixed geometry');
     }
   }
 });
@@ -59,10 +62,11 @@ test('rotated lots have varied physical footprints, open gardens and distinctly 
   assert.ok(game.buildings.length>=90);
   assert.ok(new Set(game.buildings.map(b=>Math.round(b.w)+'x'+Math.round(b.h))).size>35);
   assert.ok(game.buildings.filter(b=>Math.abs(Math.sin(2*b.angle))>.15).length>game.buildings.length*.75);
-  assert.ok(average('market')>average('willow')*1.3); assert.ok(average('works')>average('orchard')*1.5);
+  assert.ok(average('market')>average('willow')*1.3); assert.ok(average('works')>average('willow')*1.5);
+  assert.ok(game.buildings.filter(b=>b.district==='market').length>game.buildings.filter(b=>b.district==='orchard').length*3,'the airport reserves open runway and apron space');
   for(const building of game.buildings) {
     const block=game.blocks.find(b=>b.id===building.blockId);
-    assert.equal(block.district,building.district); assert.ok(block.density<.75);
+    assert.equal(block.district,building.district); assert.ok(block.density<.8);
     assert.ok(World.footprintCorners(building).every(p=>p.x>0 && p.y>0 && p.x<SIZE && p.y<SIZE));
     for(const other of game.buildings) if(other!==building) assert.equal(World.boxesOverlap(building,other),false);
   }
@@ -86,17 +90,18 @@ test('mission gates, suburban destinations and services fit a van at every appro
   for(const car of game._vehicles()) assert.ok(game._vehicleFree(car));
 });
 
-test('forty-eight residents start on safe sidewalk paths with busier markets and quiet suburbs', () => {
+test('forty-eight residents start on safe raised sidewalk paths with busier downtown and quieter outlying districts', () => {
   const game=makeGame(); assert.equal(game.peds.length,48);
   const count=id=>game.peds.filter(ped=>ped.district===id).length;
   assert.ok(count('market')>count('heights')); assert.ok(count('market')>count('works'));
-  assert.equal(count('willow'),8); assert.equal(count('orchard'),8);
+  for(const district of Object.values(DISTRICTS))assert.equal(count(district.id),district.pedCount);
   for(const ped of game.peds) {
     assert.ok(game._personFree(ped.x,ped.y,NPC_RADIUS));
     const path=game.pedPaths.find(path=>path.id===ped.pathId),road=game.network.roadById.get(path.roadId);
     assert.ok(pathDistance(ped,path.points)<.01);
     const projection=game.network.project(ped);
-    assert.ok(projection.distance>=road.width/2+NPC_RADIUS,'residents start outside the carriageway');
+    assert.ok(projection.distance>=projection.width/2+NPC_RADIUS,'residents start outside the carriageway');
+    assert.equal(ped.elevation,game._ground(ped)); assert.equal(game._dry(ped),true);
     for(const other of game.peds) if(other!==ped) assert.ok(distance(ped,other)>NPC_RADIUS*2);
   }
 });
@@ -111,8 +116,12 @@ test('ordinary residents follow curved sidewalks in both directions without ente
   for(const ped of game.peds) {
     const path=game.pedPaths.find(path=>path.id===ped.pathId);
     assert.ok(game._isFree(ped.x,ped.y,NPC_RADIUS));
+    assert.equal(ped.elevation,game._ground(ped));
     assert.ok(pathDistance(ped,path.points)<3.1,ped.id+' stays on its actual sidewalk');
-    assert.ok(traveled.get(ped.id)>ped.pace*24*.8,ped.id+' keeps walking instead of stalling against scenery');
+    const pathLength=path.points.reduce((sum,point,index)=>sum+(index?distance(point,path.points[index-1]):0),0);
+    // A short, busy frontage has frequent physical encounters and turnarounds;
+    // residents still need sustained motion rather than a scenery deadlock.
+    assert.ok(traveled.get(ped.id)>ped.pace*24*(pathLength<75?.75:.8),ped.id+' keeps walking instead of stalling against scenery');
   }
 });
 
@@ -142,7 +151,7 @@ test('real Cannon traffic completes consecutive suburban curves without orbiting
       assert.equal(car.upright,true);
     }
   }
-  assert.ok(closest<25,'the chosen suburban endpoint was actually reached'); assert.ok(traveled>1700);
+  assert.ok(closest<25,'the chosen northside endpoint was actually reached'); assert.ok(traveled>1300);
 });
 
 test('opposing real traffic passes in separate lanes without a false obstacle stop', () => {
@@ -163,23 +172,17 @@ test('opposing real traffic passes in separate lanes without a false obstacle st
 
 test('blocking traffic pairs clear curved lanes and a shared junction with real Cannon bodies', () => {
   const fixtures=[
-    {name:'meadow-link',poses:[{id:'car-15',x:2294.360184,y:3065.592243,angle:.2838149,goal:'meadow-hub'},
-      {id:'car-24',x:2324.747861,y:3041.947799,angle:-2.9211267,goal:'meadow'}]},
-    {name:'meadow-quay',poses:[{id:'car-7',x:1693.201988,y:2480.159385,angle:1.1714513,goal:'meadow'},
-      {id:'car-18',x:1734.158353,y:2490.661452,angle:-2.0478383,goal:'canal'}]},
-    {name:'garden-junction'}
+    {name:'garden-junction',incoming:'heights-lane',outgoing:'garden-lane',firstGoal:'garden',secondGoal:'heights'},
+    {name:'northside-junction',incoming:'willow-lake-road',outgoing:'willow-bottom-road',firstGoal:'willow-end',secondGoal:'willow-bend'},
+    {name:'docklands-junction',incoming:'warehouse-road',outgoing:'works-road',firstGoal:'worksyard',secondGoal:'quay'}
   ];
   for(const fixture of fixtures) {
     const game=makeGame(); game.police=[]; game.peds=[];
-    let poses=fixture.poses;
-    if(!poses) {
-      const road=game.network.roadById.get('heights-lane');
-      const a=game.network.pointOnRoad('heights-lane',road.length-140,18),b=game.network.pointOnRoad('garden-lane',140,-18);
-      poses=[{...a,id:'car-3',goal:'garden'},{...b,id:'car-4',angle:b.angle+Math.PI,goal:'heights'}];
-    }
-    const cars=poses.map(pose=>game.cars.find(car=>car.id===pose.id)); game.cars=cars;
+    const road=game.network.roadById.get(fixture.incoming),a=game.network.pointOnRoad(road.id,road.length-140,18),b=game.network.pointOnRoad(fixture.outgoing,140,-18);
+    const poses=[{...a,goal:fixture.firstGoal},{...b,angle:b.angle+Math.PI,goal:fixture.secondGoal}];
+    const cars=game.cars.slice(0,2); game.cars=cars;
     poses.forEach((pose,index)=>{
-      const car=cars[index]; Object.assign(car,pose,{traffic:true,elevation:0,orientation:null,speed:0,vx:0,vy:0,verticalVelocity:0,upright:true});
+      const car=cars[index]; Object.assign(car,game._vehicleState('compact'),pose,{traffic:true,elevation:game._ground(pose),orientation:null,speed:0,vx:0,vy:0,verticalVelocity:0,upright:true});
       car.route=game._roadRoute(car,game.world.missionAnchors.byName[pose.goal],18); car.wanderGoal=pose.goal;
       game.vehiclePhysics.reset(car,car);
     });
@@ -217,11 +220,11 @@ test('a calm patrol follows the opposing lane and passes real civilian traffic',
 test('recovery finds a free tangent placement on curved suburban roads and preserves progress', () => {
   const game=makeGame(),car=game.cars[0],point=game.network.pointOnRoad('orchard-pond-road',250);
   game.player.vehicleId=car.id; game.money=470; game.heat=2;
-  Object.assign(car,point,{elevation:7,verticalVelocity:-5,orientation:{x:1,y:0,z:0,w:0},upright:false});
-  const blocker=game.cars[1]; Object.assign(blocker,point,{elevation:0,angle:point.angle,orientation:null});
+  Object.assign(car,point,{elevation:game._ground(point)+7,verticalVelocity:-5,orientation:{x:1,y:0,z:0,w:0},upright:false});
+  const blocker=game.cars[1]; Object.assign(blocker,point,{elevation:game._ground(point),angle:point.angle,orientation:null});
   const save=game.exportSave(); game.recover();
   assert.equal(game.money,470); assert.equal(game.heat,2); assert.deepEqual(game.exportSave(),save);
-  assert.equal(car.elevation,0); assert.equal(car.upright,true); assert.equal(car.verticalVelocity,0);
+  assert.ok(Math.abs(car.elevation-game._ground(car))<.2); assert.equal(car.upright,true); assert.equal(car.verticalVelocity,0);
   assert.ok(game._vehicleFree(car)); assert.equal(game._vehicleContact(car,blocker),null);
   assert.ok(game.network.project(car).distance<20); assert.ok(distance(car,point)<400);
 });

@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Game, GADGETS, POCKET_ITEMS, PAINT_COLORS } = require('../core.js');
 const { MUZZLE_HEIGHT } = require('../physics.js');
-const makeGame = () => new Game({ seed: 42 });
+const { makeFlatGame: makeGame } = require('./helpers/flat-game.cjs');
 const shop = game => { game.player.x = 900; game.player.y = 900; game.money = 2000; };
 const advance = (game, seconds) => { for (let elapsed = 0; elapsed < seconds - 0.000001; elapsed += 1 / 60) game.update(1 / 60); };
 const driveToGarage = game => {
@@ -82,12 +82,14 @@ test('Party Cannon travels before bursting, expends ammo, tumbles a crowd, and s
   const game = makeGame(); shop(game); game.purchaseGadget('cannon');
   game.buildings = []; game.cars = []; game.police = []; game.player.x = 1080; game.player.y = 1080;
   game.peds = game.peds.slice(0, 2);
-  Object.assign(game.peds[0], { x: 1290, y: 1080, pace: 0 });
-  Object.assign(game.peds[1], { x: 1290, y: 1120, pace: 0 });
+  // The lob clears a standing head at its apex, then reaches the crowd on its
+  // descending arc; the burst must still come from an actual 3D collision.
+  Object.assign(game.peds[0], { x: 1450, y: 1080, pace: 0 });
+  Object.assign(game.peds[1], { x: 1450, y: 1120, pace: 0 });
   assert.equal(game.action(0), true); assert.equal(game.inventory.ammo.cannon, 5); assert.equal(game.projectiles.length, 1);
   assert.equal(game.physics.bodies.size, 0); advance(game, 0.1);
   assert.ok(game.projectiles[0].x > 1105); assert.ok(game.projectiles[0].height > MUZZLE_HEIGHT);
-  advance(game, 0.35); assert.equal(game.projectiles.length, 0); assert.equal(game.physics.bodies.size, 2);
+  advance(game, 0.55); assert.equal(game.projectiles.length, 0); assert.equal(game.physics.bodies.size, 2);
   assert.equal(game.heat, 1);
   game._actionCooldown = 0; game.inventory.ammo.cannon = 0;
   assert.equal(game.action(0), false); assert.equal(game._actionCooldown, 0);

@@ -26,10 +26,11 @@ test('standing clearance uses the smaller player radius at building corners', ()
 test('cannon muzzle follows the scaled shoulder while jump speed stays unchanged', () => {
   const game = new Game({ seed: 17 });
   game.inventory.unlocked.push('cannon'); game.inventory.equipped = 'cannon'; game.inventory.ammo.cannon = 2;
-  game.player.elevation = 2;
+  const base=game._ground(game.player);
+  game.player.elevation = base+2;
   assert.equal(game.action(0, { pitch: 0 }), true);
-  assert.equal(game.projectiles[0].startHeight, 2 + MUZZLE_HEIGHT);
-  game.player.elevation = 0; game.player.grounded = true;
+  assert.equal(game.projectiles[0].startHeight, base+2 + MUZZLE_HEIGHT);
+  game.player.elevation = base; game.player.grounded = true;
   assert.equal(game.jump(), true);
   assert.equal(game.player.verticalVelocity, 7.2, 'character size does not change the fun jump arc');
 });

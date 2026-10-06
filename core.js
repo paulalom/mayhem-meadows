@@ -74,6 +74,22 @@
     return true;
   }
 
+  function segmentHitsVolume(a,b,rect,fromHeight,toHeight) {
+    const angle=rect.angle || 0,c=Math.cos(angle),s=Math.sin(angle),cx=rect.x+rect.w/2,cy=rect.y+rect.h/2;
+    const local=point=>({x:(point.x-cx)*c+(point.y-cy)*s,y:-(point.x-cx)*s+(point.y-cy)*c});
+    const p=local(a),q=local(b); let low=0,high=1;
+    for(const [origin,delta,min,max] of [[p.x,q.x-p.x,-rect.w/2,rect.w/2],[p.y,q.y-p.y,-rect.h/2,rect.h/2],
+      [fromHeight,toHeight-fromHeight,rect.elevation,rect.elevation+finite(rect.height,8)]]) {
+      if(Math.abs(delta)<.000001) { if(origin<min || origin>max) return false; }
+      else {
+        let near=(min-origin)/delta,far=(max-origin)/delta;
+        if(near>far) [near,far]=[far,near]; low=Math.max(low,near); high=Math.min(high,far);
+        if(low>high) return false;
+      }
+    }
+    return true;
+  }
+
   class Game {
     constructor(options = {}) {
       this._seed = (typeof options === 'number' ? options : finite(options.seed, Date.now())) >>> 0;
@@ -121,13 +137,37 @@
 
     get current() { return this.cars.find(car => car.id === this.player.vehicleId) || this.player; }
     districtAt(point = this.current) { return districtAt(point); }
+    _ground(point,y) {
+      const x=typeof point==='object' ? point.x : point;
+      y=typeof point==='object' ? point.y : y;
+      return finite(this.world?.terrain?.surfaceHeight(x,y),0);
+    }
+    _base(entity) {
+      return Number.isFinite(entity.elevation) ? entity.elevation : this._ground(entity.x+(entity.w || 0)/2,entity.y+(entity.h || 0)/2);
+    }
+    _onGround(entity) {
+      const normal=this.world?.terrain?.surfaceNormalAt?.(entity.x,entity.y) || this.world?.terrain?.normalAt?.(entity.x,entity.y);
+      const allowance='speed' in entity ? Math.max(.2,VehiclePhysics.height(entity)/2*(1/Math.max(.35,finite(normal?.y,1))-1)+.1) : .2;
+      return Math.abs(this._base(entity)-this._ground(entity))<allowance && Math.abs(finite(entity.verticalVelocity,0))<2;
+    }
+    _buildingVolume(building) {
+      const base=this._base(building),bottom=finite(building.foundationBottom,base);
+      return {elevation:bottom,height:base+finite(building.height,8)-bottom};
+    }
+    _blockedLine(a,b,fromHeight=this._base(a)+MUZZLE_HEIGHT,toHeight=this._base(b)+MUZZLE_HEIGHT) {
+      return this.buildings.some(building=>segmentHitsVolume(a,b,{...building,...this._buildingVolume(building)},fromHeight,toHeight));
+    }
+    _dry(point) {
+      const terrain=this.world?.terrain;
+      return !terrain || !terrain.isWater(point.x,point.y) || this._ground(point)>=finite(terrain.waterLevel,0)+.25;
+    }
     get escapeGoal() { return this.heat > 0 ? 8 + this.heat * 6 : 0; }
     get maxHealth() { return 100 + this.upgrades.armor * 25; }
     get garageAvailable() {
       const garage = this.services.find(service => service.id === 'garage');
       return Boolean(garage && distance(this.current, garage) < 115 &&
-        (!this.player.vehicleId || Math.abs(this.current.speed) <= 45 && this.current.upright !== false && this.current.elevation < 0.16) &&
-        this.player.elevation < 0.16 && !this.ragdolls.get(this.player.id));
+        (!this.player.vehicleId || Math.abs(this.current.speed) <= 45 && this.current.upright !== false && this._onGround(this.current)) &&
+        (this.player.vehicleId || this._onGround(this.player)) && !this.ragdolls.get(this.player.id));
     }
 
     _random() { this._seed = (Math.imul(this._seed, 1664525) + 1013904223) >>> 0; return this._seed / 4294967296; }
@@ -137,47 +177,49 @@
     drainEvents() { return this._events.splice(0); }
 
     _makeTown() {
-      this.world = World.createWorld(); this.network = this.world.network;
+      this.world = World.createWorld(); this.network = this.world.network; this.terrain=this.world.terrain;
       this.roads = this.world.roads; this.nodes = this.world.nodes;
       this.blocks = this.world.blocks; this.areas = this.world.areas;
       this.buildings = this.world.buildings; this.staticObjects = this.world.staticObjects;
       this.services = this.world.services; this.pedPaths = this.world.pedPaths;
       Object.assign(this.player, this.world.start.player);
+      this.player.elevation=this._ground(this.player);
       const starter = this.world.start.car;
       this._addCar(starter.x, starter.y, starter.angle, starter.kind, starter.color);
       for (const spawn of this.world.vehicleSpawns) {
         if (distance(spawn, starter) < 5) continue;
-        const candidate = { ...spawn, elevation: 0 };
+        const candidate = { ...spawn, elevation: this._ground(spawn) };
         if (!this._vehicleFree(candidate) || this._vehicles().some(other => this._vehicleContact(candidate, other))) continue;
         const car = this._addCar(spawn.x, spawn.y, spawn.angle, spawn.kind, spawn.color, spawn.traffic);
         car.roadId = spawn.roadId;
         if (car.traffic) car.route = this._wanderRoute(car);
       }
       this._makePedestrians();
-      const patrolPoint = this.nodes.find(node => distance(node, this.player) > 500 && this._vehicleFree({ ...node, kind: 'compact', angle: 0 })) || this._safeRoadPosition({ x: 1260, y: 180 });
+      const patrolPoint = this.nodes.find(node => distance(node, this.player) > 500 && this._dry(node) && this._vehicleFree({ ...node, kind: 'compact', angle: 0 })) || this._safeRoadPosition(this.player);
       this.police.push({ id: 'police-' + this._nextId++, x: patrolPoint.x, y: patrolPoint.y, angle: patrolPoint.angle || 0,
-        ...this._vehicleState('compact'), speed: 0, route: [], routeTimer: 0, lastSeen: { x: this.player.x, y: this.player.y } });
+        ...this._vehicleState('compact'),elevation:this._ground(patrolPoint),verticalVelocity:0,grounded:true,speed: 0, route: [], routeTimer: 0, lastSeen: { x: this.player.x, y: this.player.y } });
     }
 
     _makePedestrians() {
-      const budgets = { heights:6,works:6,market:12,riverfront:8,willow:8,orchard:8 }, used = {};
+      const used = {};
       for (const path of this.pedPaths) {
         const paths = this.pedPaths.filter(candidate => candidate.district===path.district).length;
         const indexInDistrict = used[path.district] || 0; used[path.district] = indexInDistrict + 1;
-        const budget = budgets[path.district] || paths;
+        const budget = finite(DISTRICTS[path.district]?.pedCount,paths);
         const count = Math.floor((indexInDistrict+1)*budget/paths)-Math.floor(indexInDistrict*budget/paths);
         for (let n = 0; n < count; n++) {
           let index = Math.min(path.points.length - 2, Math.floor((n + 0.4) / count * (path.points.length - 1)));
           let point = null;
           for (let trial = 0; trial < path.points.length; trial++) {
             const candidate = path.points[(index + trial) % path.points.length];
-            if (this._personFree(candidate.x, candidate.y, NPC_RADIUS) && this.peds.every(ped => distance(ped, candidate) > NPC_RADIUS * 3)) {
+            if (this._dry(candidate) && this._personFree(candidate.x, candidate.y, NPC_RADIUS) && this.peds.every(ped => distance(ped, candidate) > NPC_RADIUS * 3)) {
               point = candidate; index = (index + trial) % path.points.length; break;
             }
           }
           if (!point) continue;
           const next = path.points[Math.min(index + 1,path.points.length - 1)], id = this.peds.length;
           this.peds.push({ id: 'ped-' + id, x: point.x, y: point.y, angle: Math.atan2(next.y-point.y,next.x-point.x),
+            elevation:this._ground(point),verticalVelocity:0,grounded:true,
             stunned: 0, bubble: '', bubbleTimer: 0, homeX: point.x, homeY: point.y, district: path.district,
             pathId: path.id, pathIndex: index + 1 < path.points.length ? index + 1 : index - 1,
             pathDirection: index + 1 < path.points.length ? 1 : -1, color: COLORS[id % COLORS.length], pace: 15 + this._random() * 12 });
@@ -190,7 +232,7 @@
       const models = Object.values(CAR_MODELS).filter(model => model.kind === kind);
       // Stable variety without consuming the town's seeded random sequence.
       if (models.length) state.modelId = models[(this._nextId - 1) % models.length].id;
-      const car = { id: 'car-' + this._nextId++, x, y, angle, speed: 0, ...state, color, kind, traffic, vx: 0, vy: 0, borrowed: false, route: [], elevation: 0, verticalVelocity: 0, grounded: true, upright: true };
+      const car = { id: 'car-' + this._nextId++, x, y, angle, speed: 0, ...state, color, kind, traffic, vx: 0, vy: 0, borrowed: false, route: [], elevation: this._ground(x,y), verticalVelocity: 0, grounded: true, upright: true };
       this.cars.push(car);
       return car;
     }
@@ -202,10 +244,10 @@
 
     vehicleStats(vehicle = this.current) { return VehicleStats.performance(vehicle); }
 
-    _isFree(x, y, radius = PLAYER_RADIUS) {
+    _isFree(x, y, radius = PLAYER_RADIUS, elevation=this._ground(x,y)) {
       if (x < radius || y < radius || x > SIZE - radius || y > SIZE - radius) return false;
-      return !this.buildings.some(b => this._circlePart({ x, y }, radius, { box: this._buildingBox(b) })) &&
-        !this._staticParts().some(part => part.bottom < PERSON_HEIGHT && this._circlePart({ x, y }, radius, part));
+      return !this.buildings.some(b => { const volume=this._buildingVolume(b); return this._heightOverlap({elevation},volume,PERSON_HEIGHT,volume.height) && this._circlePart({ x, y }, radius, { box: this._buildingBox(b) }); }) &&
+        !this._staticParts().some(part => part.bottom<elevation+PERSON_HEIGHT-.025 && part.top>elevation+.025 && this._circlePart({ x, y }, radius, part));
     }
 
     _vehicles() { return this.cars.concat(this.police); }
@@ -236,25 +278,26 @@
       const ex = Math.abs(box.axes[0].x) * box.half[0] + Math.abs(box.axes[1].x) * box.half[1];
       const ey = Math.abs(box.axes[0].y) * box.half[0] + Math.abs(box.axes[1].y) * box.half[1];
       return entity.x >= ex && entity.x <= SIZE - ex && entity.y >= ey && entity.y <= SIZE - ey &&
-        !this.buildings.some(b => boxContact(box, this._buildingBox(b))) &&
-        !this._staticParts().some(part => part.bottom < VehiclePhysics.height(entity) && boxContact(box, part.box));
+        !this.buildings.some(b => { const volume=this._buildingVolume(b); return this._heightOverlap(entity,volume,VehiclePhysics.height(entity),volume.height) && boxContact(box,this._buildingBox(b)); }) &&
+        !this._staticParts().some(part => part.bottom<this._base(entity)+VehiclePhysics.height(entity)-.025 && part.top>this._base(entity)+.025 && boxContact(box, part.box));
     }
 
     _heightOverlap(a, b, ah = PERSON_HEIGHT, bh = PERSON_HEIGHT) {
-      const ay = finite(a.elevation, 0), by = finite(b.elevation, 0);
+      const ay = this._base(a), by = this._base(b);
       return ay < by + bh - 0.025 && ay + ah > by + 0.025;
     }
 
     _staticParts() {
-      if (this._streetParts && this._streetObjects === this.staticObjects && this._streetVersion === this._environmentVersion) return this._streetParts;
+      if (this._streetParts && this._streetObjects === this.staticObjects && this._streetVersion === this._environmentVersion && this._streetTerrain===this.world?.terrain) return this._streetParts;
       this._streetObjects = this.staticObjects;
+      this._streetTerrain=this.world?.terrain;
       this._streetVersion = this._environmentVersion;
       return this._streetParts = this.staticObjects.filter(object => !object.destroyed).flatMap(object => object.parts.map(part => {
         const angle = object.angle || 0, c = Math.cos(angle), s = Math.sin(angle);
         const x = object.x + (part.offset[0] * c - part.offset[2] * s) * 20;
         const y = object.y + (part.offset[0] * s + part.offset[2] * c) * 20;
         return { box: orientedBox({ x, y, angle }, part.half[0] * 40, part.half[2] * 40),
-          bottom: finite(object.elevation, 0) + part.offset[1] - part.half[1], top: finite(object.elevation, 0) + part.offset[1] + part.half[1], cylinder: part.shape === 'cylinder' };
+          bottom: this._base(object)+part.offset[1] - part.half[1], top: this._base(object)+part.offset[1] + part.half[1], cylinder: part.shape === 'cylinder' };
       }));
     }
 
@@ -291,7 +334,7 @@
     }
 
     _personFree(x, y, radius = PLAYER_RADIUS, ignore = null) {
-      const point = { x, y };
+      const point = { x, y, elevation:this._ground(x,y) };
       return this._isFree(x, y, radius) && !this._vehicles().some(car => car !== ignore && this._personVehicleContact(point, car, radius));
     }
 
@@ -305,7 +348,7 @@
           const hit = this._personVehicleContact(entity, vehicle, radius);
           if (!hit) continue;
           if (hit.vertical) {
-            entity.elevation = Math.max(0, finite(entity.elevation, 0) + hit.up * hit.depth / 20);
+            entity.elevation = Math.max(this._ground(entity), this._base(entity) + hit.up * hit.depth / 20);
             if (entity.verticalVelocity * hit.up < 0) entity.verticalVelocity = 0;
             if (hit.up > 0) entity.grounded = true;
             changed = collision = true; continue;
@@ -347,6 +390,8 @@
         const x = clamp(entity.x, ex, SIZE - ex), y = clamp(entity.y, ey, SIZE - ey);
         if (x !== entity.x || y !== entity.y) { entity.x = x; entity.y = y; changed = collided = true; }
         for (const b of this.buildings) {
+          const volume=this._buildingVolume(b);
+          if(!this._heightOverlap(entity,volume,VehiclePhysics.height(entity),volume.height)) continue;
           const bounds = this._buildingBounds(b);
           if (entity.x + ex <= bounds.x || entity.x - ex >= bounds.x + bounds.w || entity.y + ey <= bounds.y || entity.y - ey >= bounds.y + bounds.h) continue;
           const rect = this._buildingBox(b);
@@ -403,14 +448,15 @@
       for (let pass = 0; pass < 3; pass++) {
         let changed = false;
         for (const b of this.buildings) {
-          if (!this._heightOverlap(entity, { elevation: 0 }, PERSON_HEIGHT, b.height)) continue;
+          const volume=this._buildingVolume(b);
+          if (!this._heightOverlap(entity,volume,PERSON_HEIGHT,volume.height)) continue;
           const bounds = this._buildingBounds(b);
           if (entity.x + radius <= bounds.x || entity.x - radius >= bounds.x + bounds.w || entity.y + radius <= bounds.y || entity.y - radius >= bounds.y + bounds.h) continue;
           const hit = this._circlePart(entity,radius,{ box: this._buildingBox(b) });
           if (hit) { entity.x += hit.nx * (hit.depth + 0.002); entity.y += hit.ny * (hit.depth + 0.002); changed = collision = true; }
         }
         for (const part of this._staticParts()) {
-          if (finite(entity.elevation, 0) >= part.top - 0.025 || finite(entity.elevation, 0) + PERSON_HEIGHT <= part.bottom + 0.025) continue;
+          if (this._base(entity) >= part.top - 0.025 || this._base(entity) + PERSON_HEIGHT <= part.bottom + 0.025) continue;
           const hit = this._circlePart(entity, radius, part);
           if (hit) { entity.x += hit.nx * (hit.depth + 0.002); entity.y += hit.ny * (hit.depth + 0.002); changed = collision = true; }
         }
@@ -424,8 +470,10 @@
     _safeRoadPosition(point, radius = 18, ignore = null) {
       const road = this._roadPosition(point);
       const free = candidate => {
+        if(!this._dry(candidate)) return false;
+        candidate.elevation=this._ground(candidate);
         if (ignore) {
-          const vehicle = { ...ignore, ...candidate, elevation: 0, orientation: null, upright: true };
+          const vehicle = { ...ignore, ...candidate, orientation: null, upright: true };
           return this._vehicleFree(vehicle) && !this._vehicles().some(other => other !== ignore && this._vehicleContact(vehicle, other));
         }
         return this._personFree(candidate.x,candidate.y,radius);
@@ -441,7 +489,7 @@
           if (free(candidate)) return candidate;
         }
       }
-      return { x: road.x, y: road.y, angle: road.angle };
+      return { x: road.x, y: road.y, angle: road.angle, elevation:this._ground(road) };
     }
 
     _nearestNode(point) { return this.nodes.reduce((a,b) => distance(a,point) < distance(b,point) ? a : b); }
@@ -503,7 +551,7 @@
       for (let i = 0; i < count && this.particles.length < 360; i++) {
         const angle = this._random() * Math.PI * 2, speed = 30 + this._random() * 150, life = 0.5 + this._random() * 0.8;
         const particle = { x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, life, maxLife: life, color: this._pick(COLORS), size: 3 + this._random() * 4 };
-        if (Number.isFinite(height)) particle.height = Math.max(0.12, height);
+        particle.height=finite(height,this._ground(x,y)+.5);
         this.particles.push(particle);
       }
     }
@@ -518,7 +566,7 @@
         const v = clamp(-dx * s + dy * c, -part.half[2] * 20, part.half[2] * 20);
         const x = cx + u * c - v * s, y = cy + u * s + v * c;
         const aimHeight = origin.height + (Number.isFinite(pitch) ? Math.tan(pitch) * Math.hypot(x - origin.x, y - origin.y) / 20 : 0);
-        const height = clamp(aimHeight, finite(object.elevation, 0) + part.offset[1] - part.half[1], finite(object.elevation, 0) + part.offset[1] + part.half[1]);
+        const height = clamp(aimHeight, this._base(object) + part.offset[1] - part.half[1], this._base(object) + part.offset[1] + part.half[1]);
         return { x, y, height };
       });
     }
@@ -531,7 +579,7 @@
     _damageProp(object, amount, origin, playerCaused = true) {
       if (!object || object.destroyed || object.destructible === false || object.kind === 'garage' ||
         !this.staticObjects.includes(object) || !Number.isFinite(amount) || amount <= 0) return false;
-      const maxHealth = finite(object.maxHealth, World.PROP_HEALTH[object.kind] || 45);
+      const maxHealth = finite(object.maxHealth, World.PROP_HEALTH?.[object.kind] || 45);
       object.maxHealth = maxHealth;
       object.health = Math.max(0, finite(object.health, maxHealth) - amount);
       if (object.health > 0) return true;
@@ -546,7 +594,7 @@
         const life = 3 + this._random() * 1.5;
         const away = origin ? Math.atan2(object.y - origin.y, object.x - origin.x) : spread;
         this.debris.push({ x: object.x + (part.offset[0] * c - part.offset[2] * s) * 20,
-          y: object.y + (part.offset[0] * s + part.offset[2] * c) * 20, elevation: finite(object.elevation, 0) + part.offset[1],
+          y: object.y + (part.offset[0] * s + part.offset[2] * c) * 20, elevation: this._base(object) + part.offset[1],
           vx: Math.cos(spread) * speed + Math.cos(away) * 35, vy: Math.sin(spread) * speed + Math.sin(away) * 35,
           verticalVelocity: 2 + this._random() * 3, angle: spread, spin: (this._random() - .5) * 8,
           size: part.half.map(half => clamp(half * (0.6 + this._random() * .5), .08, .65)), color: part.color || colors[object.kind] || '#b8a1e0', life, maxLife: life });
@@ -615,22 +663,22 @@
     interact() {
       if (this.ragdolls.get(this.player.id)) return false;
       if (this.player.vehicleId && this.current.burning) return this._exitCar(this.current, true);
-      if (this.player.elevation > 0.16) { this._toast('Land before hopping in or out.'); return false; }
+      if (!this.player.vehicleId && !this._onGround(this.player)) { this._toast('Land before hopping in or out.'); return false; }
       if (this.player.vehicleId) {
         const car = this.current;
-        if (car.upright === false || car.elevation > 0.16) { this._toast('Your ride needs its wheels on the road. Press R to recover.'); return false; }
+        if (car.upright === false || !this._onGround(car)) { this._toast('Your ride needs its wheels on the road. Press R to recover.'); return false; }
         if (Math.abs(car.speed) > 45) { this._toast('Slow down before hopping out.'); return false; }
         const wash = this.services.find(s => s.id === 'wash' && distance(s, car) < 85);
         if (wash && (this.heat > 0 || VehicleStats.isDamaged(car))) return this._useService(wash);
         return this._exitCar(car);
       }
-      const nearby = this.cars.filter(car => car.health > 0 && !car.burning && !car.exploded && distance(car, this.player) < 75 && Math.abs(car.speed) < 110 && car.elevation < 0.16 && car.upright !== false).sort((a, b) => distance(a, this.player) - distance(b, this.player));
+      const nearby = this.cars.filter(car => car.health > 0 && !car.burning && !car.exploded && distance(car, this.player) < 75 && Math.abs(car.speed) < 110 && this._onGround(car) && car.upright !== false).sort((a, b) => distance(a, this.player) - distance(b, this.player));
       if (nearby.length) {
         const car = nearby[0];
         this.player.vehicleId = car.id;
         car.traffic = false;
         car.speed = car.vx = car.vy = 0;
-        this.player.x = car.x; this.player.y = car.y;
+        this.player.x = car.x; this.player.y = car.y; this.player.elevation=car.elevation; this.player.grounded=true;
         if (!car.borrowed) { car.borrowed = true; this._raiseHeat(1, 'Borrowed a ride! The Fun Police are mildly interested.'); }
         this._toast('Nice wheels. Hold Shift for boost; Space for handbrake.'); this._sound('enter');
         return true;
@@ -647,14 +695,14 @@
         const x = car.x + Math.cos(car.angle + offset) * 40, y = car.y + Math.sin(car.angle + offset) * 40;
         if (this._personFree(x, y, PLAYER_RADIUS)) {
           this.player.vehicleId = null; this.player.x = x; this.player.y = y; this.player.angle = car.angle;
-          this.player.elevation = this.player.verticalVelocity = 0; this.player.grounded = true;
+          this.player.elevation = this._ground(x,y); this.player.verticalVelocity = 0; this.player.grounded = true;
           car.speed = car.vx = car.vy = 0;
           this._sound('exit'); return true;
         }
       }
       if (forced) {
         const position = this._safeRoadPosition(car, PLAYER_RADIUS); this.player.vehicleId = null; this.player.x = position.x; this.player.y = position.y;
-        this.player.elevation = this.player.verticalVelocity = 0; this.player.grounded = true;
+        this.player.elevation = this._ground(position); this.player.verticalVelocity = 0; this.player.grounded = true;
         return true;
       }
       this._toast('A little more room to hop out, please.'); return false;
@@ -681,12 +729,12 @@
       this.player.aimPitch = pitch;
       const aimHeight = range => this.player.elevation + MUZZLE_HEIGHT + Math.tan(pitch) * range / 20;
       const inAimHeight = person => {
-        if (!aimed) return true;
+        if (!aimed) return Math.abs(this._base(person)-this.player.elevation)<PERSON_HEIGHT+.35*CHARACTER_SCALE;
         const dx = person.x - this.player.x, dy = person.y - this.player.y;
         const forward = dx * Math.cos(angle) + dy * Math.sin(angle);
         const height = aimHeight(Math.hypot(dx, dy));
-        return forward >= 0 && height >= finite(person.elevation, 0) + 0.1 * CHARACTER_SCALE && height <= finite(person.elevation, 0) + PERSON_HEIGHT + 0.35 * CHARACTER_SCALE &&
-          !this.buildings.some(building => segmentHitsRect(this.player, person, building));
+        return forward >= 0 && height >= this._base(person) + 0.1 * CHARACTER_SCALE && height <= this._base(person) + PERSON_HEIGHT + 0.35 * CHARACTER_SCALE &&
+          !this._blockedLine(this.player,person,this.player.elevation+MUZZLE_HEIGHT,height);
       };
       const equipped = this.inventory.equipped;
       if (equipped === 'cannon' && this.inventory.ammo.cannon <= 0) { this._toast('Party Cannon is empty. Use a Party Refill from your pockets.'); return false; }
@@ -695,7 +743,7 @@
         this.inventory.ammo.cannon--;
         const life = 360 / 560;
         const projectile = { id: 'party-' + this._nextId++, x: this.player.x + Math.cos(angle) * 25 * cosPitch, y: this.player.y + Math.sin(angle) * 25 * cosPitch, angle, height: this.player.elevation + MUZZLE_HEIGHT, baseHeight: this.player.elevation, life, maxLife: life };
-        if (aimed) Object.assign(projectile, { aimed: true, startHeight: Math.max(0.15, this.player.elevation + MUZZLE_HEIGHT + sinPitch * 1.25), horizontalSpeed: 560 * cosPitch, verticalSpeed: 28 * sinPitch });
+        if (aimed) Object.assign(projectile, { aimed: true, startHeight: Math.max(this._ground(projectile)+.15, this.player.elevation + MUZZLE_HEIGHT + sinPitch * 1.25), horizontalSpeed: 560 * cosPitch, verticalSpeed: 28 * sinPitch });
         if (aimed) projectile.height = projectile.startHeight;
         this.projectiles.push(projectile);
         this._confetti(this.player.x, this.player.y, 8, this.player.elevation + MUZZLE_HEIGHT); this._sound('pop');
@@ -708,7 +756,7 @@
         const inReach = person => {
           const dx = person.x - this.player.x, dy = person.y - this.player.y, range = Math.hypot(dx, dy);
           return range < reach && inAimHeight(person) && (range < 1 || (dx * forwardX + dy * forwardY) / range > 0.5) &&
-            !this.buildings.some(building => segmentHitsRect(this.player, person, building));
+            !this._blockedLine(this.player,person,this.player.elevation+MUZZLE_HEIGHT,this._base(person)+MUZZLE_HEIGHT);
         };
         for (const ped of this.peds) if (ped.stunned <= 0 && inReach(ped)) {
           hit = this._knockDown(ped, { x: forwardX * 5.8, y: 3.2, z: forwardY * 5.8 }) || hit;
@@ -728,15 +776,15 @@
 
     _burstParty(projectile) {
       this._confetti(projectile.x, projectile.y, 85, projectile.aimed ? projectile.height : undefined); this._sound('party');
-      this._damagePropsNear({ x: projectile.x, y: projectile.y, height: finite(projectile.height, MUZZLE_HEIGHT) }, 85, 110);
-      if (projectile.aimed && projectile.height > 2.6) return;
+      this._damagePropsNear({ x: projectile.x, y: projectile.y, height: finite(projectile.height,this._ground(projectile)+MUZZLE_HEIGHT) }, 85, 110);
+      if (projectile.aimed && projectile.height > this._ground(projectile)+2.6) return;
       let hit = false;
-      for (const ped of this.peds) if (ped.stunned <= 0 && distance(ped, projectile) < 85 &&
-        !this.buildings.some(building => segmentHitsRect(projectile, ped, building))) {
+      for (const ped of this.peds) if (ped.stunned <= 0 && distance(ped, projectile) < 85 && Math.abs(projectile.height-this._base(ped))<2.6 &&
+        !this._blockedLine(projectile,ped,projectile.height,this._base(ped)+MUZZLE_HEIGHT)) {
         const angle = distance(ped, projectile) > 1 ? Math.atan2(ped.y - projectile.y, ped.x - projectile.x) : projectile.angle;
         hit = this._knockDown(ped, { x: Math.cos(angle) * 4.8, y: 3.8, z: Math.sin(angle) * 4.8 }) || hit;
       }
-      for (const cop of this.police) if (distance(cop, projectile) < 90) { cop.distracted = 3; this._confetti(cop.x, cop.y, 25); hit = true; }
+      for (const cop of this.police) if (distance(cop, projectile) < 90 && Math.abs(projectile.height-this._base(cop))<2.6) { cop.distracted = 3; this._confetti(cop.x, cop.y, 25); hit = true; }
       if (hit) this._raiseHeat(1, 'Party Cannon commotion! That was a very loud celebration.');
     }
 
@@ -754,12 +802,12 @@
           projectile.life = Math.max(0, projectile.life - step);
           const elapsed = projectile.maxLife - projectile.life;
           projectile.height = projectile.aimed ? projectile.startHeight + projectile.verticalSpeed * elapsed - 2 * elapsed * elapsed : finite(projectile.baseHeight, 0) + MUZZLE_HEIGHT + Math.sin(Math.PI * (1 - projectile.life / projectile.maxLife)) * 1.1;
-          const atHeight = height => !projectile.aimed || Math.min(before.height, projectile.height) <= height && Math.max(before.height, projectile.height) >= 0.1;
-          const walls = this.buildings.some(b => atHeight(finite(b.height, 8)) && segmentHitsRect(before, projectile, { x: b.x - 3, y: b.y - 3, w: b.w + 6, h: b.h + 6, angle: b.angle || 0 }));
+          const atHeight = (bottom,top) => Math.min(before.height, projectile.height)<=top && Math.max(before.height, projectile.height)>=bottom;
+          const walls = this.buildings.some(b => segmentHitsVolume(before,projectile,{x:b.x-3,y:b.y-3,w:b.w+6,h:b.h+6,angle:b.angle || 0,...this._buildingVolume(b)},before.height,projectile.height));
           const vehicles = this.vehiclePhysics.hitsSegment(before, projectile);
-          const people = atHeight(PERSON_HEIGHT + 0.35 * CHARACTER_SCALE) && this.peds.some(ped => ped.stunned <= 0 && distance(ped, projectile) < 16 * CHARACTER_SCALE);
-          const ground = projectile.aimed && projectile.height <= 0.12;
-          if (ground) projectile.height = 0.12;
+          const people = this.peds.some(ped => atHeight(this._base(ped)+.1,this._base(ped)+PERSON_HEIGHT+.35*CHARACTER_SCALE) && ped.stunned <= 0 && distance(ped, projectile) < 16 * CHARACTER_SCALE);
+          const surface=this._ground(projectile),ground=projectile.height<=surface+.12;
+          if (ground) projectile.height = surface+.12;
           burst = walls || vehicles || people || ground || projectile.life <= 0.000001 || projectile.x < 0 || projectile.y < 0 || projectile.x > SIZE || projectile.y > SIZE;
         }
         if (burst) this._burstParty(projectile); else remaining.push(projectile);
@@ -775,7 +823,7 @@
       this.peds.filter(p => distance(p, car) < 100 && p.stunned <= 0).forEach(p => { p.bubble = this._pick(['TOOT TOOT!', 'NICE HORN!', 'OH, CRUMBS!']); p.bubbleTimer = 2; });
       if (this.mission && this.mission.type === 'party') {
         const target = this.mission.targets[this.mission.targetIndex];
-        if (distance(car, target) < 95 && Math.abs(car.speed) < 65) {
+        if (distance(car, target) < 95 && Math.abs(car.speed) < 65 && Math.abs(this._base(car)-this._base(target))<3) {
           this._confetti(target.x, target.y, 65); this._raiseHeat(1, 'That party is loud enough to attract the Fun Police!'); this._advanceMission(); return true;
         }
         if (distance(car, target) < 130) this._toast('Slow down, then honk inside the party ring.');
@@ -785,7 +833,7 @@
 
     _knockDown(person, impulse) {
       if (this.ragdolls.get(person.id) || person.ragdollGrace > 0) return false;
-      const body = this.ragdolls.trigger(person, impulse);
+      const body = this.ragdolls.trigger(person, impulse,{terrain:this.world?.terrain});
       if (!body) return false;
       person.stunned = 3.8; person.bubble = this._pick(CURSES); person.bubbleTimer = 3;
       this._confetti(person.x, person.y, 32); this._sound('flop');
@@ -806,11 +854,11 @@
       this.ragdolls.clear(this.player.id);
       this.player.stunned = 0; this.player.ragdollGrace = 1.4;
       const entity = this.current, p = this._safeRoadPosition(entity, this.player.vehicleId ? 18 : PLAYER_RADIUS, this.player.vehicleId ? entity : null);
-      entity.x = p.x; entity.y = p.y;
+      entity.x = p.x; entity.y = p.y; entity.elevation=this._ground(p);
       if (this.player.vehicleId && Number.isFinite(p.angle)) entity.angle = p.angle;
       if (this.player.vehicleId) this.vehiclePhysics.reset(entity);
       this.player.x = p.x; this.player.y = p.y; this.player.composure = Math.max(60, this.player.composure);
-      this.player.elevation = this.player.verticalVelocity = 0; this.player.grounded = true;
+      this.player.elevation = entity.elevation; this.player.verticalVelocity = 0; this.player.grounded = true;
       this.graceTimer = 2; this.score = Math.max(0, this.score - 20);
       this._toast('Unstuck! Back on the road. −20 style; your cash is safe.'); this._confetti(p.x, p.y, 22);
       return true;
@@ -821,16 +869,17 @@
       this.player.stunned = 0; this.player.ragdollGrace = 1.4;
       const car = this.player.vehicleId ? this.current : null;
       if (car) { car.speed = car.vx = car.vy = 0; this._exitCar(car, true); }
-      this.player.vehicleId = null; this.player.x = 884; this.player.y = 1080; this.player.composure = 100;
-      this.player.elevation = this.player.verticalVelocity = 0; this.player.grounded = true;
+      const start=this.world.start.player;
+      this.player.vehicleId = null; this.player.x = start.x; this.player.y = start.y; this.player.composure = 100;
+      this.player.elevation = this._ground(start); this.player.verticalVelocity = 0; this.player.grounded = true;
       this.money = Math.max(0, this.money - 50); this.heat = 0; this.escapeTimer = 0; this.graceTimer = 3;
-      this._toast('BUSTED-ISH! $50 cleanup fee. Back to the fun—your gig is still active.', 'warning'); this._sound('busted'); this._confetti(884, 1080, 45);
+      this._toast('BUSTED-ISH! $50 cleanup fee. Back to the fun—your gig is still active.', 'warning'); this._sound('busted'); this._confetti(start.x,start.y,45);
     }
 
     acceptMission(type) {
       if (this.mission) { this._toast('Finish or abandon your current gig first.'); return false; }
       const variation = this.completed % 2;
-      const anchors = this.world.missionAnchors, copyTargets = points => points.map(point => ({ x: point.x, y: point.y }));
+      const anchors = this.world.missionAnchors, copyTargets = points => points.map(point => ({ x: point.x, y: point.y, elevation:this._ground(point) }));
       const recipes = {
         delivery: { title: 'Emergency Disco', description: 'Collect the disco ball, then deliver it to the dance hall.', stage: 'pickup', targets: copyTargets(variation ? anchors.deliveryAlt : anchors.delivery), totalTime: 100, reward: 140 },
         dash: { title: 'Lawn Enforcement Slalom', description: 'Drive through six gates across town and the suburbs. Late finish? You still get base pay.', stage: 'checkpoints', targets: copyTargets(anchors.dash), totalTime: 170, reward: 180 },
@@ -907,7 +956,7 @@
         this.player.composure = Math.min(100, this.player.composure + 40);
       } else if (id === 'repairTape') {
         if (!this.player.vehicleId) { this._toast('Hop in a damaged car before using Repair Tape.'); return false; }
-        if (Math.abs(this.current.speed) > 45) { this._toast('Stop your car before applying Repair Tape.'); return false; }
+        if (Math.abs(this.current.speed) > 45 || !this._onGround(this.current) || this.current.upright===false) { this._toast('Stop your car before applying Repair Tape.'); return false; }
         if (!VehicleStats.isDamaged(this.current)) { this._toast('This ride needs no tape.'); return false; }
         VehicleStats.repair(this.current, this.maxHealth, 55);
         this._syncGarage();
@@ -964,7 +1013,8 @@
       // the full rotated body against walls, cars, and pedestrians before moving it.
       for (const dy of [0, -60, 60, -100, 100]) for (const dx of [0, -20, 20, -60, 60, -100, 100]) {
         if (position || Math.hypot(dx, dy) >= 110) continue;
-        const candidate = { ...preview, x: garage.x + dx, y: garage.y + dy };
+        const candidate = { ...preview, x: garage.x + dx, y: garage.y + dy, elevation:this._ground(garage.x+dx,garage.y+dy) };
+        if(!this._dry(candidate)) continue;
         if (this._vehicleFree(candidate) && !this._vehicles().some(other => other !== deployed && this._vehicleContact(candidate, other)) &&
           !this.peds.some(ped => this._personVehicleContact(ped, candidate, 9))) position = candidate;
       }
@@ -978,8 +1028,8 @@
         burning: false, fireTime: 0, exploded: false });
       delete car.explosionTime;
       car.speed = car.vx = car.vy = 0; car.traffic = false; car.borrowed = true;
-      this.player.vehicleId = car.id; this.player.x = car.x; this.player.y = car.y; this.player.angle = car.angle;
-      this.vehiclePhysics.reset(car);
+      car.elevation=position.elevation; this.vehiclePhysics.reset(car);
+      this.player.vehicleId = car.id; this.player.x = car.x; this.player.y = car.y; this.player.angle = car.angle; this.player.elevation=car.elevation; this.player.verticalVelocity=0; this.player.grounded=true;
       this._toast(VehicleStats.getModel(car).name + ' retrieved. Ready for a spin!', 'success'); this._sound('enter'); return true;
     }
 
@@ -1080,26 +1130,27 @@
       }
       this._projectiles(dt);
       this._propExplosions();
-      const finished = this.ragdolls.step(dt, { buildings: this.buildings, staticObjects: this.staticObjects, cars: this.cars, police: this.police, size: SIZE });
+      const finished = this.ragdolls.step(dt, { buildings: this.buildings, staticObjects: this.staticObjects, cars: this.cars, police: this.police, size: SIZE, terrain:this.world?.terrain });
       for (const body of finished) {
         const owner = body.owner;
         owner.stunned = 0; owner.ragdollGrace = 1.4;
         if (owner !== this.player) owner.angle = Math.atan2(owner.homeY - owner.y, owner.homeX - owner.x);
         this._resolvePerson(owner, owner === this.player ? PLAYER_RADIUS : NPC_RADIUS);
       }
+      this._waterRecovery(dt);
       if (this.mission) {
         this.missionStats.elapsed += dt;
         this.mission.timeLeft = Math.max(0, this.mission.timeLeft - dt);
         if (this.mission.timeLeft === 0 && !this.missionStats.overtime) { this.missionStats.overtime = true; this._toast('Overtime! Finish the gig anyway; base pay is safe.'); }
         const target = this.mission.targets[this.mission.targetIndex];
-        if (!this.ragdolls.get(this.player.id) && this.mission.type !== 'party' && (this.mission.type !== 'dash' || this.player.vehicleId) && distance(this.current, target) < 58) this._advanceMission();
+        if (!this.ragdolls.get(this.player.id) && this.mission.type !== 'party' && (this.mission.type !== 'dash' || this.player.vehicleId) && distance(this.current, target) < 58 && Math.abs(this._base(this.current)-this._base(target))<3) this._advanceMission();
       }
       for (const p of this.particles) { p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= Math.exp(-2 * dt); p.vy = p.vy * Math.exp(-2 * dt) + 18 * dt; }
       this.particles = this.particles.filter(p => p.life > 0);
       for (const piece of this.debris) {
         piece.life -= dt; piece.x += piece.vx * dt; piece.y += piece.vy * dt;
         piece.verticalVelocity -= 18 * dt; piece.elevation += piece.verticalVelocity * dt;
-        const floor = piece.size[1] / 2;
+        const floor = this._ground(piece) + piece.size[1] / 2;
         if (piece.elevation < floor) {
           piece.elevation = floor;
           piece.verticalVelocity = Math.abs(piece.verticalVelocity) > 1 ? -piece.verticalVelocity * .25 : 0;
@@ -1115,11 +1166,12 @@
       if (input.jump && !this._jumpHeld) this.jump();
       this._jumpHeld = Boolean(input.jump);
       const feet = this.player.elevation;
+      const onTerrain=this.player.grounded && Math.abs(feet-this._ground(this.player))<.2;
       this.player.verticalVelocity -= 18 * dt;
-      this.player.elevation = Math.max(0, feet + this.player.verticalVelocity * dt);
+      this.player.elevation = feet + this.player.verticalVelocity * dt;
       if (this.player.verticalVelocity > 0) {
         const ceiling = this.vehiclePhysics.ceiling(this.player.x, this.player.y, feet + PERSON_HEIGHT, this.player.elevation + PERSON_HEIGHT);
-        if (Number.isFinite(ceiling)) { this.player.elevation = Math.max(0, ceiling - PERSON_HEIGHT - 0.005); this.player.verticalVelocity = 0; }
+        if (Number.isFinite(ceiling)) { this.player.elevation = Math.max(this._ground(this.player), ceiling - PERSON_HEIGHT - 0.005); this.player.verticalVelocity = 0; }
       }
       const forward = Number(Boolean(input.up)) - Number(Boolean(input.down));
       const strafe = Number(Boolean(input.right)) - Number(Boolean(input.left));
@@ -1132,11 +1184,13 @@
       if (length) {
         x /= length; y /= length; this.player.angle = Math.atan2(y, x);
         const dx = x * (input.boost ? 220 : 155) * dt, dy = y * (input.boost ? 220 : 155) * dt;
+        if(onTerrain) { this.player.elevation=this._ground(this.player.x+dx,this.player.y+dy); this.player.verticalVelocity=0; }
         const landing = this.vehiclePhysics.support(this.player.x + dx, this.player.y + dy, feet + 0.045);
         if (this.player.verticalVelocity <= 0 && feet >= landing && this.player.elevation <= landing + 0.015) {
           this.player.elevation = landing; this.player.verticalVelocity = 0;
         }
         this._move(this.player, dx, dy, PLAYER_RADIUS);
+        if(onTerrain) this.player.elevation=this._ground(this.player);
       }
       const support = this.vehiclePhysics.support(this.player.x, this.player.y, Math.max(feet, this.player.elevation) + 0.045);
       if (this.player.verticalVelocity <= 0 && this.player.elevation <= support + 0.015) {
@@ -1147,6 +1201,28 @@
     jump() {
       if (this.player.vehicleId || this.ragdolls.get(this.player.id) || !this.player.grounded || this.player.stunned > 0) return false;
       this.player.verticalVelocity = 7.2; this.player.grounded = false; this._sound('jump'); return true;
+    }
+
+    _waterRecovery(dt) {
+      const terrain=this.world?.terrain;
+      if(!terrain) return;
+      for(const entity of this._vehicles().concat(this.player.vehicleId ? [] : [this.player])) {
+        const submerged=terrain.isWater(entity.x,entity.y) && this._base(entity)<finite(terrain.waterLevel,0)-.4;
+        if(!submerged) { if(entity.waterTimer) entity.waterTimer=0; continue; }
+        entity.waterTimer=(entity.waterTimer || 0)+dt;
+        if(entity.waterTimer<.6) continue;
+        const current=entity===this.current,vehicle=entity!==this.player;
+        const point=this._safeRoadPosition(entity,vehicle ? 18 : PLAYER_RADIUS,vehicle ? entity : null);
+        entity.x=point.x; entity.y=point.y; entity.angle=point.angle; entity.elevation=this._ground(point);
+        entity.waterTimer=0; entity.verticalVelocity=0; entity.grounded=true;
+        if(vehicle) { this.vehiclePhysics.reset(entity); entity.route=[]; entity.routeTimer=0; }
+        if(current) {
+          this.ragdolls.clear(this.player.id); this.player.stunned=0; this.player.ragdollGrace=1.4;
+          this.player.x=entity.x; this.player.y=entity.y; this.player.elevation=entity.elevation;
+          this.player.verticalVelocity=0; this.player.grounded=true; this.graceTimer=2;
+          this._toast('Splash! Back to the road.','warning'); this._confetti(point.x,point.y,28);
+        }
+      }
     }
 
     _drive(car, dt, input) {
@@ -1315,10 +1391,12 @@
           ped.angle = Math.atan2(target.y-ped.y,target.x-ped.x);
         } else if (distance(ped, { x: ped.homeX, y: ped.homeY }) > 85) ped.angle = Math.atan2(ped.homeY - ped.y, ped.homeX - ped.x);
         const dx = Math.cos(ped.angle) * ped.pace * dt, dy = Math.sin(ped.angle) * ped.pace * dt;
+        ped.elevation=this._ground(ped.x+dx,ped.y+dy);
         if (this._move(ped, dx, dy, NPC_RADIUS)) {
           if (path) { ped.pathDirection *= -1; ped.pathIndex = clamp(ped.pathIndex + ped.pathDirection,0,path.points.length-1); }
           else ped.angle = wrapAngle(ped.angle + Math.PI * (0.65 + this._random() * 0.2));
         }
+        ped.elevation=this._ground(ped); ped.verticalVelocity=0; ped.grounded=true;
       }
     }
 
@@ -1328,18 +1406,18 @@
       this.police = this.police.filter(cop => cop.health > 0 && !cop.burning && !cop.exploded).slice(0, wanted).concat(disabled);
       let activeCount = this.police.length - disabled.length;
       while (activeCount < wanted) {
-        const candidates = this.nodes.map(node => ({ ...node, angle: this._roadPosition(node).angle })).filter(node => distance(this.current,node)>440 &&
+        const candidates = this.nodes.map(node => ({ ...node, angle: this._roadPosition(node).angle,elevation:this._ground(node) })).filter(node => distance(this.current,node)>440 && this._dry(node) &&
           this._vehicleFree({ ...node,kind:'compact' }) && this._vehicles().every(vehicle => distance(vehicle,node)>100));
         candidates.sort((a, b) => Math.abs(distance(this.current, a) - 650) - Math.abs(distance(this.current, b) - 650));
         const point = candidates.length ? candidates[0] : this._safeRoadPosition({ x:this.current.x+650,y:this.current.y },18);
-        this.police.push({ id: 'police-' + this._nextId++, ...this._vehicleState('compact'), x:point.x,y:point.y,angle:point.angle || 0, speed: 0, route: [], routeTimer: 0, lastSeen: { x: this.current.x, y: this.current.y } });
+        this.police.push({ id: 'police-' + this._nextId++, ...this._vehicleState('compact'), x:point.x,y:point.y,angle:point.angle || 0,elevation:this._ground(point),verticalVelocity:0,grounded:true,speed: 0, route: [], routeTimer: 0, lastSeen: { x: this.current.x, y: this.current.y } });
         activeCount++;
       }
       let seen = false, contact = false;
       for (const cop of this.police) {
         if (cop.health <= 0 || cop.burning || cop.exploded) continue;
         cop.distracted = Math.max(0, (cop.distracted || 0) - dt);
-        const sight = this.heat > 0 && cop.distracted <= 0 && this.graceTimer <= 0 && distance(cop, this.current) < 340 + this.heat * 65 && !this.buildings.some(b => segmentHitsRect(cop, this.current, b));
+        const sight = this.heat > 0 && cop.distracted <= 0 && this.graceTimer <= 0 && distance(cop, this.current) < 340 + this.heat * 65 && !this._blockedLine(cop,this.current);
         if (sight) { seen = true; cop.lastSeen = { x: this.current.x, y: this.current.y }; }
         cop.routeTimer -= dt;
         if (cop.routeTimer <= 0 || !cop.route.length) {

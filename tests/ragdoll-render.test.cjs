@@ -48,7 +48,7 @@ function matchesPoint(actual, joint, label) {
 function addCamera(scene) {
   const cameraTown = Object.create(Scene3D.prototype);
   Object.assign(cameraTown, { T, game: scene.game, _geometries: [], _buildingVolumes: [], _propVolumes: [] });
-  for (const name of ['_staticBox', '_static', '_material', '_sign', '_roads', '_park', '_services', '_lamp', '_tree', '_landscape']) cameraTown[name] = () => {};
+  for (const name of ['_staticBox', '_static', '_surfaceBox', '_material', '_sign', '_roads', '_park', '_services', '_lamp', '_tree', '_landscape']) cameraTown[name] = () => {};
   cameraTown._town();
   Object.assign(scene, {
     camera: new T.PerspectiveCamera(57, 1280 / 720, 0.06, 175),
@@ -130,23 +130,27 @@ test('the camera follows physical fallen height and keeps a safe boom at walls, 
       { x: x - 0.19, z: z - 0.19, height: 0 },
       { x: x + w + 0.19, z: z + d + 0.19, height: 0 },
       { x: x + w / 2, z: z + d / 2, height: building.height + 0.5 }
-    ].map(point => ({ x: cx + (point.x - cx) * cosine - (point.z - cz) * sine, z: cz + (point.x - cx) * sine + (point.z - cz) * cosine, height: point.height }));
+    ].map(point => {
+      const px = cx + (point.x - cx) * cosine - (point.z - cz) * sine, pz = cz + (point.x - cx) * sine + (point.z - cz) * cosine;
+      return { x: px, z: pz, height: point.height > 0 ? building.elevation + point.height : game.world.terrain.surfaceHeight(px * 20, pz * 20), roofHeight: point.height > 0 ? building.elevation + building.height : null };
+    });
     for (const point of points) {
       game.ragdolls.clearAll();
-      Object.assign(player, { x: point.x * 20, y: point.z * 20, angle: -Math.PI / 2 });
+      Object.assign(player, { x: point.x * 20, y: point.z * 20, elevation: point.height, angle: -Math.PI / 2 });
       game.ragdolls.trigger(player, { x: 2, y: 3, z: -1 }, { height: point.height });
       scene.recenter();
       for (let i = 0; i < 30; i++) {
-        game.ragdolls.step(1 / 60, { buildings: game.buildings, size: core.SIZE });
+        game.ragdolls.step(1 / 60, { buildings: game.buildings, size: core.SIZE, terrain: game.world.terrain });
         scene.orbit(i % 2 ? -4 : 6, 0); scene._cameraStep(1 / 60);
         const info = scene.cameraInfo;
         for (const value of Object.values(info).filter(value => typeof value === 'number')) assert.ok(Number.isFinite(value));
         assert.ok(info.distance > 0.05, 'fallen pivot never collapses the camera boom: ' + JSON.stringify({ point, i, info }));
         assert.equal(scene._insideBuilding(info.x, info.y, info.z), false, 'fallen camera stays outside geometry');
+        assert.ok(info.y >= game.world.terrain.surfaceHeight(info.x * 20, info.z * 20) + .2, 'fallen camera remains above the real hillside');
         scene.camera.updateMatrixWorld();
         const direction = scene.camera.getWorldDirection(new T.Vector3());
         assert.ok(Math.abs(Math.atan2(Math.sin(info.viewYaw - Math.atan2(direction.z, direction.x)), Math.cos(info.viewYaw - Math.atan2(direction.z, direction.x)))) < 0.000001);
-        if (point.height > 0 && i < 2) assert.ok(info.targetY > 3, 'a launched or rooftop body raises the camera pivot');
+        if (point.roofHeight !== null && i < 2) assert.ok(info.targetY > point.roofHeight, 'a rooftop body raises the camera pivot above its actual roof elevation');
         checked++;
       }
     }

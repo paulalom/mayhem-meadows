@@ -111,16 +111,18 @@ Money, purchases, completed-contract counts, settings, and best score are stored
 
 ## The town is a toybox
 
-The playable world spans 280 metres in each direction. A compact city center opens into residential neighborhoods and meadow edges. Its streets follow a connected network of winding avenues, irregular junctions, branching side streets and suburban loops. Short trips around the garage remain quick; longer outings now reach quieter neighborhoods beyond the center.
+The playable world spans 600 metres in each direction, with the supplied map covering a 600 × 400 metre coastal region and ocean to the south. The height map supplies the real ground shape. Dense city streets open into curving suburbs, northwest hill roads and coastal neighborhoods; bridges reach the airport side of the river. Short trips around the downtown garage remain quick, while longer outings offer different scenery and elevation.
 
 | District | Layout and identity | Play purpose |
 | --- | --- | --- |
-| Biscuit Heights | Small homes, garden gaps, trees and quiet courts | A forgiving place to stroll, change cars and recover from a busy street |
-| Waffle Works | Brick warehouses, larger roofs and loading yards | Strong industrial silhouettes and open turning space between solid buildings |
-| Market Mile | Closely spaced shops, taller corners and lively fronts | More visual activity and tight pedestrian shortcuts, with the garage and Sprinkle Park as anchors |
-| Riverfront | Low cafes and pavilions, broad open courts and planted spaces | A calmer change of pace, views toward the river and an easy approach to the car wash |
-| Willow Gardens | Winding residential streets, detached homes, gardens and a neighborhood green | A relaxed loop for exploring and practicing corners |
-| Orchard Park | More widely spaced homes, branching lanes and cul-de-sacs near meadow land | A destination beyond town with longer scenic driving routes and room to turn around |
+| Old Town | Winding streets, small homes and closely spaced fronts west of the center | Shortcuts and readable corners around a compact neighborhood |
+| Downtown | Denser shops, taller corners, broad sidewalks and the garage | A lively starting point with quick access to services and contracts |
+| Northside | Curving residential loops, detached homes, gardens and quiet courts | A relaxed change of pace with alternative routes and turnaround space |
+| West Beach & Marina | Coastal cafes and homes following the bay | Scenic driving beside the shore and harbor |
+| Docklands | Warehouses, loading yards and a southern pier approach | Industrial silhouettes, open yards and the car wash |
+| Ridge Heights | Northwest hills, hairpins, a summit road and a viewpoint branch | Climbing, coasting and exploring a different kind of road |
+| Airport | Terminal, hangars and runway landmarks across the river | A destination reached by two physical bridge routes |
+| Tidewell Marsh | Quiet roads along the southeast wetland edge | Open terrain and a quieter lookout beyond the busy city |
 
 Buildings face their streets, with changing setbacks and spacing as the city opens into suburbs. Each rotated building footprint drives rendering, car collision, ragdoll collision and sight obstruction. Open gaps stay open. Sidewalks follow the actual road curves. Houses have deeper garden setbacks; urban fronts keep room for walking past furniture and doorways. Trees, benches and other solid street props use shared visual and physical shapes.
 
@@ -128,7 +130,9 @@ Traffic and patrols follow the same road network that the player sees. Navigatio
 
 People are 14% smaller, including their standing contacts, ragdoll joints and toy origins. This gives roads, cars and buildings more presence while preserving the jump and driving feel. Camera height follows the new character proportions.
 
-The countryside supplies depth beyond the neighborhoods: rolling terrain, layered hills, tree lines and a winding river. Warm daylight and varied rooflines make each direction recognizable. The active road network remains level in this milestone; the exterior hills and water are scenery around the expanded playable world. The initial yellow car, garage access and car wash remain reachable.
+The countryside is playable ground. Bright source pixels create higher northwest hills, while the dark coastal and river regions become water beds. A shared triangulated heightfield drives rendering, vehicle contact, walking, jumps, ragdolls and camera clearance. Road cuts soften steep slopes for the arcade handling, and solid foundations support level buildings on uneven lots. Bridges keep their decks above the river bed. A short submerged delay returns a splashed player or car to a clear road position while preserving progress.
+
+The supplied height PNG is 8-bit RGB, despite the original 16-bit description. Numeric grayscale samples preserve that source precision and load synchronously from bundled JavaScript. Elevation is scaled for the toy world, reaching roughly 32 metres rather than the printed mountain heights. No image request, backend, or network connection is required.
 
 The HUD names the current district. The minimap colors neighborhoods and draws actual curved roads and rotated building footprints, helping players recognize loops, branches, open yards and gaps before choosing a route. Large signs, recognizable rooftops and village greens provide landmarks at street level. Confetti, patrols and objective rings keep their bright accent colors so decoration does not hide the next action.
 
@@ -157,7 +161,7 @@ Technical shape: plain HTML/CSS/JavaScript, local geometry and audio, checked-in
 
 ## Deliberate cuts
 
-No multiplayer, huge procedural city, interiors, stairs, elevated road routes, character customization editor, loot grids or weight management, realistic damage, complex combat, story campaign, licensed music, or online economy in this slice. Touch controls and gamepad support can follow once keyboard driving and the camera are good.
+No multiplayer, huge procedural city, interiors, stairs, swimming, aircraft, character customization editor, loot grids or weight management, realistic damage, complex combat, story campaign, licensed music, or online economy in this slice. Touch controls and gamepad support can follow once keyboard driving and the camera are good.
 
 ## Playtest questions and acceptance checks
 

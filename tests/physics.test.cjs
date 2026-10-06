@@ -453,3 +453,137 @@ test('extended suburbs retain local recovery and the new perimeter bounds every 
     assert.equal(person.elevation, 0);
   }
 });
+
+test('mountain and below-sea-level tumbles recover at sampled absolute feet height', () => {
+  for (const height of [52.35, -3]) {
+    const terrain = { heightAt: () => height, surfaceHeight: () => height, normalAt: () => ({ x: 0, y: 1, z: 0 }) };
+    const world = new RagdollWorld(), person = entity('mountain-' + height, 8400, 8800);
+    world.trigger(person, { x: 4, y: 2, z: 1 }, { terrain });
+    const body = world.get(person.id);
+    assert.equal(body.joints.pelvis.y, height + 0.72 * CHARACTER_SCALE, 'trigger samples missing owner height, including peaks above forty metres');
+    for (let i = 0; i < 456; i++) {
+      world.step(STEP, { terrain, size: 12000 });
+      allFinite(body);
+      for (const joint of Object.values(body.joints)) assert.ok(joint.y >= height + FLOOR + joint.radius - 0.002, 'each joint clears the elevated or negative terrain floor');
+    }
+    assert.equal(world.bodies.size, 0);
+    assert.equal(person.elevation, height, 'standing feet retain terrain height instead of snapping to zero');
+    assert.equal(person.verticalVelocity, 0);
+    assert.ok(Math.abs(body.joints.pelvis.y - height - 0.72 * CHARACTER_SCALE) < 0.045, 'get-up reaches the local standing pose');
+    assert.ok(person.x > 8400 && person.y > 8790, 'expanded terrain recovery stays near the landing');
+  }
+});
+
+test('slope contacts keep joint spheres and bone interiors outside the hill plane', () => {
+  const gradientX = 0.32, gradientZ = 0.16, inverseLength = 1 / Math.hypot(gradientX, 1, gradientZ);
+  const normal = { x: -gradientX * inverseLength, y: inverseLength, z: -gradientZ * inverseLength };
+  const terrain = {
+    heightAt: (x, y) => 9 + gradientX * (x / 20 - 50) + gradientZ * (y / 20 - 50),
+    normalAt: () => normal
+  };
+  // Independent signed distance to the analytic slope plane, measured along
+  // its normal. A vertical floor clamp would leave spheres inside this plane.
+  const separation = p => normal.x * (p.x - 50) + normal.y * (p.y - 9 - FLOOR) + normal.z * (p.z - 50);
+  const world = new RagdollWorld(), person = entity('slope');
+  world.trigger(person, { x: 5, y: 3, z: 2 }, { terrain });
+  const body = world.get(person.id);
+  let contact = false;
+  for (let i = 0; i < 335; i++) {
+    world.step(STEP, { terrain });
+    allFinite(body);
+    for (const joint of Object.values(body.joints)) {
+      const gap = separation(joint) - joint.radius;
+      contact ||= gap < 0.01;
+      assert.ok(gap >= -0.002, 'joint clears the actual slope normal');
+    }
+    for (const part of BODYPARTS) for (const t of [1 / 3, 2 / 3]) {
+      const a = body.joints[part.from], b = body.joints[part.to];
+      const p = { x: a.x * (1 - t) + b.x * t, y: a.y * (1 - t) + b.y * t, z: a.z * (1 - t) + b.z * t };
+      assert.ok(separation(p) >= part.radius - 0.04 * CHARACTER_SCALE, 'bone interior remains above the hill plane');
+    }
+  }
+  assert.ok(contact, 'the tumbling body actually lands on the slope');
+  advance(world, 1.1, { terrain });
+  assert.equal(world.bodies.size, 0);
+  assert.equal(person.elevation, terrain.heightAt(person.x, person.y));
+  assert.ok(body.joints.leftFoot.y - terrain.heightAt(body.joints.leftFoot.x * 20, body.joints.leftFoot.z * 20) < 0.35, 'feet recover on the slope instead of floating at the original elevation');
+});
+
+test('bridge-aware surfaces support limbs and recovery above the lower river bed', () => {
+  const terrain = {
+    heightAt: () => -3,
+    surfaceHeight: (x, y) => x >= 800 && x <= 1200 && y >= 800 && y <= 1200 ? 18 : -3,
+    normalAt: () => ({ x: -0.6, y: 0.8, z: 0 }),
+    surfaceNormalAt: () => ({ x: 0, y: 1, z: 0 })
+  };
+  const world = new RagdollWorld(), person = entity('bridge');
+  world.trigger(person, { x: 0.2, y: 1 }, { terrain, height: 2 });
+  const body = world.get(person.id);
+  assert.equal(body.joints.pelvis.y, 20 + 0.72 * CHARACTER_SCALE);
+  for (let i = 0; i < 456; i++) {
+    world.step(STEP, { terrain });
+    for (const joint of Object.values(body.joints)) assert.ok(joint.y >= 18 + FLOOR + joint.radius - 0.002, 'joints land on the bridge, never its river bed');
+  }
+  assert.equal(world.bodies.size, 0);
+  assert.equal(person.elevation, 18);
+  assert.ok(Math.abs(body.joints.pelvis.y - 18 - 0.72 * CHARACTER_SCALE) < 0.045);
+  assert.ok(Math.abs(person.x - 1000) < 50, 'bridge deck normal avoids a false hillside shove');
+});
+
+test('crossing an antidiagonal terrain seam changes the support plane without clipping', () => {
+  // A four-metre cell with low SW/SE/NW vertices and a raised NE vertex
+  // contains a flat triangle and a slope split along fractional x+y=1.
+  const invLength = 1 / Math.hypot(0.25, 1, 0.25);
+  const terrain = {
+    heightAt: (x, y) => 8 + Math.max(0, (x / 20 + y / 20 - 100) * 0.25),
+    normalAt: (x, y) => x / 20 + y / 20 <= 100 ? { x: 0, y: 1, z: 0 } : { x: -0.25 * invLength, y: invLength, z: -0.25 * invLength }
+  };
+  const world = new RagdollWorld(), person = entity('triangle-seam', 980, 980);
+  world.trigger(person, { x: 4, y: 1, z: 4 }, { terrain });
+  const body = world.get(person.id);
+  let flat = false, slope = false;
+  for (let i = 0; i < 335; i++) {
+    world.step(STEP, { terrain });
+    allFinite(body);
+    for (const joint of Object.values(body.joints)) {
+      const sum = joint.x + joint.z;
+      flat ||= sum <= 100; slope ||= sum > 100;
+      const normalY = sum <= 100 ? 1 : invLength;
+      const separation = (joint.y - terrain.heightAt(joint.x * 20, joint.z * 20) - FLOOR) * normalY;
+      assert.ok(separation >= joint.radius - 0.003, 'each joint follows the triangle beneath it across the seam');
+    }
+  }
+  assert.ok(flat && slope, 'fixture traverses both rendered triangle planes');
+  advance(world, 1.1, { terrain });
+  assert.equal(person.elevation, terrain.heightAt(person.x, person.y));
+});
+
+test('elevated building facades and compound props retain their local bases', () => {
+  const height = 32, terrain = { heightAt: () => height, normalAt: () => ({ x: 0, y: 1, z: 0 }) };
+  const building = { x: 1000, y: 1000, w: 100, h: 100, height: 5.3, elevation: height };
+  const bench = { id: 'bench', x: 1200, y: 1100, elevation: height + 1, parts: [{ offset: [0, 0.5, 0], half: [0.8, 0.12, 0.3] }] };
+  const world = new RagdollWorld(), person = entity('elevated-wall', 995, 1050);
+  const environment = { terrain, buildings: [building], staticObjects: [bench] };
+  const [wall, seat] = world._colliders(environment);
+  assert.equal(wall.y - wall.hy, height, 'building base includes source elevation');
+  assert.equal(wall.y + wall.hy, height + building.height);
+  assert.equal(seat.y, height + 1.5, 'compound prop height includes source elevation');
+  const sampled = world._colliders({ terrain, buildings: [{ ...building, elevation: undefined }], staticObjects: [{ ...bench, elevation: undefined }] });
+  assert.equal(sampled[0].y - sampled[0].hy, height, 'legacy building without a base samples its terrain');
+  assert.equal(sampled[1].y, height + 0.5, 'legacy prop without a base samples its terrain');
+  world.trigger(person, { x: 7, y: 2.5 }, { terrain });
+  const body = world.get(person.id);
+  let contact = false;
+  for (let i = 0; i < 335; i++) {
+    world.step(STEP, environment);
+    for (const joint of Object.values(body.joints)) {
+      const gap = solidClearance(joint, wall) - joint.radius;
+      contact ||= gap < 0.01;
+      assert.ok(gap >= -0.002, 'joint clears the raised facade');
+    }
+  }
+  assert.ok(contact, 'the elevated body really hits the raised wall');
+  advance(world, 1, environment);
+  assert.equal(person.elevation, height);
+  for (const joint of Object.values(body.joints)) assert.ok(solidClearance(joint, wall) >= joint.radius - 0.002, 'get-up leaves the raised footprint');
+});

@@ -1,0 +1,236 @@
+/* Shared terrain triangles, road grading, lot pads, and bridge walking surfaces. */
+(function(root) {
+  'use strict';
+  const Data=root.MayhemHeightData||(typeof require==='function'?require('./height-data.js'):null);
+  const UNIT=20, COUNT=257, MAX_ROAD_GRADE=.14;
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+  const mix=(a,b,t)=>a+(b-a)*t;
+  const smooth=t=>t*t*(3-2*t);
+  function closest(x,y,a,b) {
+    const dx=b.x-a.x,dy=b.y-a.y,length2=dx*dx+dy*dy;
+    const t=length2?clamp(((x-a.x)*dx+(y-a.y)*dy)/length2,0,1):0;
+    return {t,distance:Math.hypot(x-a.x-dx*t,y-a.y-dy*t)};
+  }
+  function createTerrain(world) {
+    const size=world.size||12000,mapWidth=world.mapWidth||12000,mapHeight=world.mapHeight||8000;
+    const count=COUNT,step=size/(count-1),heights=new Float32Array(count*count);
+    const rawHeight=(x,y)=>Data.rawHeight(x,y,mapWidth,mapHeight);
+    for(let row=0;row<count;row++) for(let col=0;col<count;col++) heights[row*count+col]=rawHeight(col*step,row*step);
+    function heightAt(x,y) {
+      const gx=clamp(x/step,0,count-1),gy=clamp(y/step,0,count-1);
+      const col=Math.min(count-2,Math.floor(gx)),row=Math.min(count-2,Math.floor(gy)),fx=gx-col,fy=gy-row;
+      const a=heights[row*count+col],b=heights[row*count+col+1],c=heights[(row+1)*count+col],d=heights[(row+1)*count+col+1];
+      // Cannon's Heightfield splits each cell on fx+fy=1, not bilinearly.
+      return fx+fy<=1 ? a+(b-a)*fx+(c-a)*fy : d+(c-d)*(1-fx)+(b-d)*(1-fy);
+    }
+    function normalAt(x,y) {
+      const gx=clamp(x/step,0,count-1),gy=clamp(y/step,0,count-1);
+      const col=Math.min(count-2,Math.floor(gx)),row=Math.min(count-2,Math.floor(gy)),fx=gx-col,fy=gy-row;
+      const a=heights[row*count+col],b=heights[row*count+col+1],c=heights[(row+1)*count+col],d=heights[(row+1)*count+col+1];
+      const dx=(fx+fy<=1?b-a:d-c)/(step/UNIT),dz=(fx+fy<=1?c-a:d-b)/(step/UNIT),length=Math.hypot(dx,1,dz);
+      return {x:-dx/length,y:1/length,z:-dz/length};
+    }
+
+    // Junctions share profile vertices. Relax the entire graph so hill routes
+    // have bounded grades even where independently smoothed streets meet.
+    const junctions=new Map(),segments=[],bridgeSegments=[];
+    for(const road of world.roads||[]) {
+      for(let i=0;i<road.points.length;i++) {
+        const point=road.points[i],end=i===0?road.a:i===road.points.length-1?road.b:null;
+        let vertex=end?junctions.get(end):null;
+        if(!vertex) {
+          vertex={height:Math.max(.35,rawHeight(point.x,point.y)),points:[]};
+          if(end) junctions.set(end,vertex);
+        }
+        vertex.points.push(point); point._terrainVertex=vertex;
+      }
+      if(road.bridge) {
+        const first=road.points[0]._terrainVertex,last=road.points.at(-1)._terrainVertex;
+        first.height=Math.max(first.height,2);last.height=Math.max(last.height,2);
+        for(let i=1;i<road.points.length-1;i++) road.points[i]._terrainVertex.height=Math.max(2,mix(first.height,last.height,i/(road.points.length-1)));
+      } else {
+        const smoothed=road.points.map((point,i)=>{
+          if(i===0||i===road.points.length-1)return point._terrainVertex.height;
+          let sum=0,weight=0;
+          for(let k=Math.max(0,i-8);k<=Math.min(road.points.length-1,i+8);k++) {const w=9-Math.abs(k-i);sum+=road.points[k]._terrainVertex.height*w;weight+=w;}
+          return sum/weight;
+        });
+        for(let i=1;i<road.points.length-1;i++)road.points[i]._terrainVertex.height=smoothed[i];
+      }
+      for(let i=1;i<road.points.length;i++) {
+        const a=road.points[i-1],b=road.points[i],segment={a,b,road,length:Math.hypot(b.x-a.x,b.y-a.y)};
+        segments.push(segment);if(road.bridge)bridgeSegments.push(segment);
+      }
+    }
+    const vertices=new Set(),heap=[];
+    function push(item) {let i=heap.length;heap.push(item);while(i){const p=(i-1)>>1;if(heap[p].height<=item.height)break;heap[i]=heap[p];i=p;}heap[i]=item;}
+    function pop() {
+      const first=heap[0],last=heap.pop();if(!heap.length)return first;
+      let i=0;while(i*2+1<heap.length){let child=i*2+1;if(child+1<heap.length&&heap[child+1].height<heap[child].height)child++;
+        if(heap[child].height>=last.height)break;heap[i]=heap[child];i=child;}heap[i]=last;return first;
+    }
+    for(const segment of segments)for(const vertex of [segment.a._terrainVertex,segment.b._terrainVertex])vertices.add(vertex);
+    for(const vertex of vertices){vertex.edges=[];push({vertex,height:vertex.height});}
+    for(const segment of segments){const a=segment.a._terrainVertex,b=segment.b._terrainVertex,cost=segment.length/UNIT*MAX_ROAD_GRADE;a.edges.push({vertex:b,cost});b.edges.push({vertex:a,cost});}
+    // Multi-source shortest paths form the lower grade envelope in one pass.
+    // Unlike iterative relaxation, this converges even on long fine-sampled
+    // mountain roads and keeps exactly shared junction heights.
+    while(heap.length){const item=pop();if(item.height>item.vertex.height+.000001)continue;
+      for(const edge of item.vertex.edges){const candidate=item.height+edge.cost;if(candidate<edge.vertex.height){edge.vertex.height=candidate;push({vertex:edge.vertex,height:candidate});}}}
+    for(const road of world.roads||[]) for(const point of road.points) {point.elevation=point._terrainVertex.height;delete point._terrainVertex;}
+    const gradeHeight=new Float32Array(heights.length),gradeDistance=new Float32Array(heights.length),gradeMax=new Float32Array(heights.length);
+    gradeDistance.fill(Infinity);
+    function cells(minX,minY,maxX,maxY,visit) {
+      for(let row=Math.max(0,Math.floor(minY/step));row<=Math.min(count-1,Math.ceil(maxY/step));row++)
+        for(let col=Math.max(0,Math.floor(minX/step));col<=Math.min(count-1,Math.ceil(maxX/step));col++)visit(col*step,row*step,row*count+col);
+    }
+    for(const segment of segments) {
+      const {a,b,road}=segment,inner=road.width/2+(world.sidewalkWidth||32)+step*.6,outer=inner+step*1.3;
+      cells(Math.min(a.x,b.x)-outer,Math.min(a.y,b.y)-outer,Math.max(a.x,b.x)+outer,Math.max(a.y,b.y)+outer,(x,y,index)=>{
+        const hit=closest(x,y,a,b);if(hit.distance>outer)return;
+        // Only bridge approaches touch ground. The river keeps its seabed.
+        if(road.bridge&&Data.isWaterRaw(x,y,mapWidth,mapHeight))return;
+        const weight=hit.distance<=inner?1:1-smooth((hit.distance-inner)/(outer-inner));
+        const normalizedDistance=hit.distance/inner;
+        if(normalizedDistance<gradeDistance[index]) {
+          gradeDistance[index]=normalizedDistance;gradeHeight[index]=mix(a.elevation,b.elevation,hit.t);gradeMax[index]=weight;
+        }
+      });
+    }
+    for(let i=0;i<heights.length;i++) if(gradeMax[i])heights[i]=mix(heights[i],gradeHeight[i],gradeMax[i]);
+    // Close hairpins can occupy neighboring grid vertices. Bound the physical
+    // corridor's grade too, so interpolation cannot create a steep kink between
+    // individually gentle road profiles. Hills outside the road cuts stay raw.
+    const gridHeap=[],active=index=>index>=0&&index<heights.length&&gradeMax[index]>.98;
+    function gridPush(item){let i=gridHeap.length;gridHeap.push(item);while(i){const p=(i-1)>>1;if(gridHeap[p].height<=item.height)break;gridHeap[i]=gridHeap[p];i=p;}gridHeap[i]=item;}
+    function gridPop(){const first=gridHeap[0],last=gridHeap.pop();if(!gridHeap.length)return first;let i=0;while(i*2+1<gridHeap.length){let child=i*2+1;if(child+1<gridHeap.length&&gridHeap[child+1].height<gridHeap[child].height)child++;if(gridHeap[child].height>=last.height)break;gridHeap[i]=gridHeap[child];i=child;}gridHeap[i]=last;return first;}
+    for(let index=0;index<heights.length;index++)if(active(index))gridPush({index,height:heights[index]});
+    while(gridHeap.length){const item=gridPop();if(item.height>heights[item.index]+.00001)continue;
+      const col=item.index%count,row=Math.floor(item.index/count);
+      for(const [dx,dy] of [[-1,0],[1,0],[0,-1],[0,1],[-1,1],[1,-1]]) {
+        if(col+dx<0||col+dx>=count||row+dy<0||row+dy>=count)continue;
+        const index=item.index+dy*count+dx;if(!active(index))continue;
+        const candidate=item.height+step/UNIT*.13*Math.hypot(dx,dy);
+        if(candidate<heights[index]){heights[index]=candidate;gridPush({index,height:heights[index]});}
+      }
+    }
+    for(const building of world.buildings||[]) {
+      const cx=building.x+building.w/2,cy=building.y+building.h/2,c=Math.cos(building.angle||0),s=Math.sin(building.angle||0);
+      const base=heightAt(cx,cy),hw=building.w/2,hh=building.h/2,blend=step*1.5,radius=Math.hypot(hw+blend,hh+blend);
+      cells(cx-radius,cy-radius,cx+radius,cy+radius,(x,y,index)=>{
+        const localX=(x-cx)*c+(y-cy)*s,localY=-(x-cx)*s+(y-cy)*c;
+        const edge=Math.max(Math.abs(localX)-hw,Math.abs(localY)-hh);
+        if(edge>blend||gradeMax[index]>.99)return;
+        const weight=edge<=step*.7?1:1-smooth((edge-step*.7)/(blend-step*.7));
+        heights[index]=mix(heights[index],base,weight);
+      });
+      // The level foundation reaches the highest corner, including narrow
+      // roadside lots whose blend must preserve the carriageway's grading.
+      building.elevation=Math.max(base,...[[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]].map(([x,y])=>heightAt(cx+x*c-y*s,cy+x*s+y*c)));
+    }
+    // Small parking lots need level support across the entire rigid chassis.
+    // Keep the surrounding cell vertices level too: each bay is narrower than
+    // a terrain cell, so merely flattening points inside its painted rectangle
+    // would leave sloped physical triangles beneath the wheels and body.
+    const parkingPads=[],parkingCells=new Map(),parkingShoulders=new Set(),support=step*Math.SQRT2,blend=step*2;
+    function parkingGroup(pad){while(pad.parent!==pad){pad.parent=pad.parent.parent;pad=pad.parent;}return pad;}
+    for(const bay of world.parkingBays||[]) {
+      const cx=bay.x+bay.w/2,cy=bay.y+bay.h/2,c=Math.cos(bay.angle||0),s=Math.sin(bay.angle||0),hw=bay.w/2,hh=bay.h/2;
+      const pad={cx,cy,c,s,hw,hh,base:heightAt(cx,cy),indices:[]};pad.parent=pad;parkingPads.push(pad);
+      const radius=Math.hypot(hw+support,hh+support);
+      cells(cx-radius,cy-radius,cx+radius,cy+radius,(x,y,index)=>{
+        const edge=Math.max(Math.abs((x-cx)*c+(y-cy)*s)-hw,Math.abs(-(x-cx)*s+(y-cy)*c)-hh);
+        if(edge>support)return;
+        pad.indices.push(index);
+        if(parkingCells.has(index))parkingGroup(pad).parent=parkingGroup(parkingCells.get(index));
+        else parkingCells.set(index,pad);
+      });
+    }
+    // Nearby bays can share physical cell vertices. Give those connected pads
+    // one elevation, then restore all support vertices after shoulder blending.
+    const parkingGroups=new Map();
+    for(const pad of parkingPads){const root=parkingGroup(pad),group=parkingGroups.get(root)||{sum:0,count:0};group.sum+=pad.base;group.count++;parkingGroups.set(root,group);}
+    for(const pad of parkingPads) {
+      const {cx,cy,c,s,hw,hh}=pad,group=parkingGroups.get(parkingGroup(pad)),base=group.sum/group.count;
+      pad.base=base;
+      const radius=Math.hypot(hw+support+blend,hh+support+blend);
+      cells(cx-radius,cy-radius,cx+radius,cy+radius,(x,y,index)=>{
+        const localX=(x-cx)*c+(y-cy)*s,localY=-(x-cx)*s+(y-cy)*c;
+        const edge=Math.max(Math.abs(localX)-hw,Math.abs(localY)-hh);
+        if(edge>support+blend)return;
+        if(!Data.isWaterRaw(x,y,mapWidth,mapHeight))parkingShoulders.add(index);
+        const weight=edge<=support?1:1-smooth((edge-support)/blend);
+        heights[index]=mix(heights[index],base,weight);
+      });
+    }
+    for(const pad of parkingPads)for(const index of pad.indices)heights[index]=pad.base;
+    // Parking shoulders can reach an adjacent carriageway. Apply the same
+    // physical grade bound again, treating each level pad as one linked node
+    // so its entire support surface moves together when a road cut is lowered.
+    for(const group of parkingGroups.values()){group.indices=new Set();group.level=Infinity;}
+    for(const pad of parkingPads){const group=parkingGroups.get(parkingGroup(pad));for(const index of pad.indices){group.indices.add(index);group.level=Math.min(group.level,heights[index]);}}
+    const padGradeActive=index=>active(index)||parkingShoulders.has(index)||parkingCells.has(index);
+    function lowerPadGrade(index,value) {
+      const pad=parkingCells.get(index),group=pad&&parkingGroups.get(parkingGroup(pad));
+      if(group){
+        if(value>=group.level-.000001)return;
+        group.level=Math.fround(value);
+        for(const member of group.indices){heights[member]=group.level;gridPush({index:member,height:group.level});}
+      } else if(value<heights[index]-.000001){heights[index]=value;gridPush({index,height:heights[index]});}
+    }
+    for(let index=0;index<heights.length;index++)if(padGradeActive(index))gridPush({index,height:heights[index]});
+    while(gridHeap.length){const item=gridPop();if(item.height>heights[item.index]+.00001)continue;
+      const col=item.index%count,row=Math.floor(item.index/count);
+      for(const [dx,dy] of [[-1,0],[1,0],[0,-1],[0,1],[-1,1],[1,-1]]){
+        if(col+dx<0||col+dx>=count||row+dy<0||row+dy>=count)continue;
+        const index=item.index+dy*count+dx;if(!padGradeActive(index))continue;
+        lowerPadGrade(index,item.height+step/UNIT*.13*Math.hypot(dx,dy));
+      }
+    }
+    // Recheck after all neighboring pads have blended. Solid foundations cover
+    // the full footprint down to its lowest ground point instead of leaving
+    // accessible gaps beneath level walls on slopes.
+    for(const building of world.buildings||[]) {
+      const cx=building.x+building.w/2,cy=building.y+building.h/2,c=Math.cos(building.angle||0),s=Math.sin(building.angle||0),hw=building.w/2,hh=building.h/2;
+      const samples=[];
+      for(let i=0;i<=4;i++)for(let j=0;j<=4;j++){const x=-hw+building.w*i/4,y=-hh+building.h*j/4;samples.push(heightAt(cx+x*c-y*s,cy+x*s+y*c));}
+      building.elevation=Math.max(...samples);building.foundationBottom=Math.min(...samples)-.12;
+    }
+    for(const road of world.roads||[])if(!road.bridge)for(const point of road.points)point.elevation=heightAt(point.x,point.y);
+    function bridgeAt(x,y) {
+      let best=null;
+      for(const segment of bridgeSegments) {
+        const hit=closest(x,y,segment.a,segment.b);
+        if(hit.distance>segment.road.width/2+(world.sidewalkWidth||32))continue;
+        const height=mix(segment.a.elevation,segment.b.elevation,hit.t);
+        if(!best||height>best.height)best={height,segment};
+      }
+      return best;
+    }
+    const surfaceHeight=(x,y)=>Math.max(heightAt(x,y),bridgeAt(x,y)?.height??-Infinity);
+    function surfaceNormalAt(x,y) {
+      const bridge=bridgeAt(x,y);if(!bridge||bridge.height<heightAt(x,y))return normalAt(x,y);
+      const {a,b,length}=bridge.segment,grade=(b.elevation-a.elevation)/(length/UNIT),nx=-(b.x-a.x)/length*grade,nz=-(b.y-a.y)/length*grade,l=Math.hypot(nx,1,nz);
+      return {x:nx/l,y:1/l,z:nz/l};
+    }
+    function roadHeight(roadId,s) {
+      const road=(world.roads||[]).find(road=>road.id===roadId);if(!road)return 0;
+      s=clamp(s,0,road.length);let i=0;
+      while(i<road.arc.length-2&&road.arc[i+1]<s)i++;
+      const span=road.arc[i+1]-road.arc[i],t=span?(s-road.arc[i])/span:0;
+      return road.bridge?mix(road.points[i].elevation,road.points[i+1].elevation,t)
+        :heightAt(mix(road.points[i].x,road.points[i+1].x,t),mix(road.points[i].y,road.points[i+1].y,t));
+    }
+    const terrain={size,mapWidth,mapHeight,count,step,heights,waterLevel:0,sourceBitDepth:Data.sourceBitDepth,sourceSha256:Data.sourceSha256,
+      heightAt,surfaceHeight,normalAt,surfaceNormalAt,roadHeight,rawHeight,
+      isWater:(x,y)=>Data.isWaterRaw(x,y,mapWidth,mapHeight)&&heightAt(x,y)<.05};
+    for(const object of world.staticObjects||[])object.elevation=surfaceHeight(object.x,object.y);
+    for(const service of world.services||[])service.elevation=surfaceHeight(service.x,service.y);
+    for(const spawn of world.vehicleSpawns||[])spawn.elevation=surfaceHeight(spawn.x,spawn.y);
+    for(const bay of world.parkingBays||[])bay.elevation=surfaceHeight(bay.x+bay.w/2,bay.y+bay.h/2);
+    for(const entity of Object.values(world.start||{}))if(entity&&Number.isFinite(entity.x))entity.elevation=surfaceHeight(entity.x,entity.y);
+    return terrain;
+  }
+  const api={createTerrain,COUNT,MAX_ROAD_GRADE};root.MayhemTerrain=api;
+  if(typeof module!=='undefined'&&module.exports)module.exports=api;
+})(globalThis);

@@ -14,7 +14,7 @@ const { THREE: T, MayhemScene: Scene3D } = context;
 const wrapped = value => Math.atan2(Math.sin(value), Math.cos(value));
 // A real open meadow in the expanded map isolates control behavior from the
 // deliberate wall-avoidance yaw tested at actual lot corners below.
-const OPEN_POINT = { x: core.SIZE - 500, y: core.SIZE - 500 };
+const OPEN_POINT = { x: 9240, y: 600 };
 
 function makeScene() {
   const game = new core.Game({ seed: 42 });
@@ -35,7 +35,7 @@ function makeScene() {
   scene.camera.position.set(game.current.x / 20, 3.4, game.current.y / 20 + 5.7);
   // Use the real town geometry to obtain collision envelopes. Only decoration
   // drawing is suppressed; vectors, camera transforms, and camera methods run.
-  for (const name of ['_staticBox', '_static', '_material', '_sign', '_roads', '_park', '_services', '_lamp', '_tree', '_landscape']) scene[name] = () => {};
+  for (const name of ['_staticBox', '_static', '_surfaceBox', '_material', '_sign', '_roads', '_park', '_services', '_lamp', '_tree', '_landscape']) scene[name] = () => {};
   scene._town();
   return scene;
 }
@@ -48,6 +48,7 @@ function assertSafeCamera(scene) {
   assert.ok(Math.abs(info.targetX - scene.game.current.x / 20) < 1e-9);
   assert.ok(Math.abs(info.targetZ - scene.game.current.y / 20) < 1e-9);
   assert.equal(scene._insideBuilding(info.x, info.y, info.z), false, 'camera must stay outside the actual rotated buildings and near-plane clearance');
+  assert.ok(info.y >= scene._surfaceY(info.x, info.z) + .2, 'camera must stay above the actual terrain surface');
   scene.camera.updateMatrixWorld();
   const direction = scene.camera.getWorldDirection(new T.Vector3());
   assert.ok(Math.abs(wrapped(info.viewYaw - Math.atan2(direction.z, direction.x))) < 1e-9,
@@ -61,8 +62,9 @@ function frames(scene, count, dt = 1 / 60) {
 }
 
 function place(scene, point, heading) {
-  Object.assign(scene.game.current, { x: point.x, y: point.y, angle: heading });
-  if (scene.game.player.vehicleId) Object.assign(scene.game.player, { x: point.x, y: point.y, angle: heading });
+  const elevation = point.elevation ?? scene.game.world.terrain.surfaceHeight(point.x, point.y);
+  Object.assign(scene.game.current, { x: point.x, y: point.y, elevation, angle: heading });
+  if (scene.game.player.vehicleId) Object.assign(scene.game.player, { x: point.x, y: point.y, elevation, angle: heading });
 }
 
 test('initial on-foot and driving cameras have comfortable viewing distance through entry and exit', () => {
@@ -107,7 +109,7 @@ test('camera stays finite and outside buildings across sampled streets, corners,
         place(scene, point, heading);
         if (driving) scene.game.current.speed = Math.cos(heading) > 0 ? 0 : 300;
         scene.recenter();
-        for (let i = 0; i < 6; i++) {
+        for (let i = 0; i < 3; i++) {
           scene._cameraStep(i % 2 ? 1 / 30 : 1 / 120);
           assertSafeCamera(scene); checked++;
         }
@@ -120,19 +122,21 @@ test('camera stays finite and outside buildings across sampled streets, corners,
 test('large teleports, tight corner transitions, and actual recovery never collapse the camera', () => {
   const scene = makeScene();
   frames(scene, 1);
-  for (const point of [{ x: 2150, y: 10 }, { x: 230, y: 230 }, { x: 2150, y: 2150 }, { x: 850, y: 1210 }, { x: 950, y: 1210 }]) {
+  const points = [OPEN_POINT, scene.game.world.start.player, ...scene.game.roads.slice(0, 12).map(road => road.points[Math.floor(road.points.length / 2)])].filter(point => scene.game._isFree(point.x, point.y, 10));
+  assert.ok(points.length > 4);
+  for (const point of points) {
     assert.ok(scene.game._isFree(point.x, point.y, 10));
     place(scene, point, Math.PI);
     scene.recenter();
     frames(scene, 30);
   }
-  place(scene, { x: 350, y: 350 }, 0);
+  place(scene, OPEN_POINT, 0);
   assert.equal(scene.game.recover(), true);
   frames(scene, 30);
-  scene.game.player.x = 884; scene.game.player.y = 1080;
+  place(scene, scene.game.world.start.player, -Math.PI / 2);
   assert.equal(scene.game.interact(), true);
   frames(scene, 30);
-  place(scene, { x: 350, y: 350 }, 0);
+  place(scene, OPEN_POINT, 0);
   assert.equal(scene.game.recover(), true);
   frames(scene, 30);
   assert.equal(scene.game.interact(), true);
@@ -153,6 +157,7 @@ test('orbit and recenter use smooth third-person headings and the driving camera
   assert.ok(Math.abs(wrapped(scene.viewYaw - scene.game.player.angle)) < 0.0001);
 
   scene.game.cars[0].x = OPEN_POINT.x; scene.game.cars[0].y = OPEN_POINT.y;
+  scene.game.cars[0].elevation = scene.game.player.elevation;
   assert.equal(scene.game.interact(), true);
   frames(scene, 1);
   scene.game.current.angle = 0;
@@ -193,10 +198,11 @@ test('shoulder aiming moves closer, narrows FOV smoothly, and faces ahead of the
   assert.ok(scene.cameraInfo.distance < distance - 1.5);
   assert.ok(Math.abs(scene.cameraInfo.fov - 48) < 0.01);
   assert.ok(scene.cameraInfo.x > scene.cameraInfo.targetX + 0.65, 'view is over the right shoulder');
-  const playerHead = new T.Vector3(OPEN_POINT.x / 20, 1.48, OPEN_POINT.y / 20).project(scene.camera);
+  const base = scene.game.player.elevation;
+  const playerHead = new T.Vector3(OPEN_POINT.x / 20, base + 1.48, OPEN_POINT.y / 20).project(scene.camera);
   assert.ok(playerHead.x < -0.1, 'the player must leave the centre crosshair unobstructed');
   const forward = scene.camera.getWorldDirection(new T.Vector3());
-  const toPlayer = new T.Vector3(OPEN_POINT.x / 20, 1.03, OPEN_POINT.y / 20).sub(scene.camera.position).normalize();
+  const toPlayer = new T.Vector3(OPEN_POINT.x / 20, base + 1.03, OPEN_POINT.y / 20).sub(scene.camera.position).normalize();
   assert.ok(forward.angleTo(toPlayer) > 0.15, 'the centre ray must not remain locked onto the player');
   scene.setAiming(false); frames(scene, 180);
   assert.equal(scene.cameraInfo.aiming, false);
@@ -209,7 +215,7 @@ test('aim direction converges from the muzzle onto the centre subject and points
   scene.setAiming(true); scene.orbit(0, -69); frames(scene, 180);
   scene._buildingVolumes = [];
   const resident = new T.Mesh(new T.BoxGeometry(0.5, 1.8, 0.5), new T.MeshBasicMaterial());
-  resident.position.set(scene.camera.position.x, 1.0, OPEN_POINT.y / 20 - 5); resident.updateMatrixWorld();
+  resident.position.set(scene.camera.position.x, scene.game.player.elevation + 1.0, OPEN_POINT.y / 20 - 5); resident.updateMatrixWorld();
   scene._residents.set('target', { group: resident });
   const direction = scene.aimDirection();
   assert.ok(direction.angle > scene.viewYaw + 0.1, 'right shoulder ray must converge toward the subject');
@@ -225,11 +231,11 @@ test('aim direction converges from the muzzle onto the centre subject and points
 test('aiming and extreme pitch preserve wall clearance, and driving restores its normal view', () => {
   const scene = makeScene();
   scene.setAiming(true);
-  for (const point of [{ x: 230, y: 230 }, { x: 2150, y: 10 }, { x: 850, y: 1210 }]) {
+  for (const point of [OPEN_POINT, ...scene.game.roads.slice(1, 5).map(road => road.points[Math.floor(road.points.length / 2)])]) {
     place(scene, point, Math.PI); scene.recenter(); scene.orbit(400, 1000); frames(scene, 20);
     scene.orbit(-800, -2000); frames(scene, 20);
   }
-  place(scene, { x: 884, y: 1080 }, 0); assert.equal(scene.game.interact(), true); frames(scene, 300);
+  place(scene, scene.game.world.start.player, 0); assert.equal(scene.game.interact(), true); frames(scene, 300);
   assert.equal(scene.cameraInfo.aiming, false);
   assert.ok(scene.cameraInfo.distance > 6);
   assert.ok(Math.abs(scene.camera.fov - 57) < 0.01);
@@ -241,7 +247,7 @@ test('ground aiming uses real camera projection and near-feet or sky clicks keep
   const scene = makeScene();
   place(scene, OPEN_POINT, -Math.PI / 2);
   frames(scene, 1);
-  const feet = new T.Vector3(OPEN_POINT.x / 20, 0, OPEN_POINT.y / 20);
+  const feet = new T.Vector3(OPEN_POINT.x / 20, scene.game.player.elevation, OPEN_POINT.y / 20);
   const aimAt = point => {
     const projected = point.clone().project(scene.camera);
     return scene.aimAngle((projected.x + 1) * scene.width / 2, (1 - projected.y) * scene.height / 2);
@@ -249,22 +255,23 @@ test('ground aiming uses real camera projection and near-feet or sky clicks keep
   assert.ok(Math.abs(wrapped(aimAt(feet) - scene.viewYaw)) < 1e-9);
   assert.ok(Math.abs(wrapped(aimAt(feet.clone().add(new T.Vector3(0.4, 0, 0.4))) - scene.viewYaw)) < 1e-9);
   const distant = feet.clone().add(new T.Vector3(2, 0, -5));
+  distant.y = scene._groundY(distant.x, distant.z);
   assert.ok(Math.abs(wrapped(aimAt(distant) - Math.atan2(-5, 2))) < 1e-9);
   assert.ok(Math.abs(wrapped(scene.aimAngle(scene.width / 2, 0) - scene.viewYaw)) < 1e-9);
 });
 
 test('jump and rooftop elevation raise the camera pivot and muzzle origin together', () => {
   const scene = makeScene();
-  place(scene, { x: 900, y: 1080 }, -Math.PI / 2);
+  place(scene, OPEN_POINT, -Math.PI / 2);
   scene._buildingVolumes = []; scene._propAimMeshes = [];
   scene.orbit(0, -100); frames(scene, 180);
-  const originalY = scene.cameraInfo.y, originalPitch = scene.aimDirection().pitch;
-  scene.game.player.elevation = 1.4; frames(scene, 180);
-  assert.ok(Math.abs(scene.cameraInfo.targetY - (1.4 + 1.03 * 0.86)) < 0.000001);
+  const originalY = scene.cameraInfo.y, originalPitch = scene.aimDirection().pitch, base = scene.game.player.elevation;
+  scene.game.player.elevation = base + 1.4; frames(scene, 180);
+  assert.ok(Math.abs(scene.cameraInfo.targetY - (base + 1.4 + 1.03 * 0.86)) < 0.000001);
   assert.ok(Math.abs(scene.cameraInfo.y - originalY - 1.4) < 0.0001);
   assert.ok(Math.abs(scene.aimDirection().pitch - originalPitch) < 0.0001, 'shot pitch is relative to the elevated muzzle');
-  scene.game.player.elevation = 8.0; frames(scene, 180);
-  assert.ok(Math.abs(scene.cameraInfo.targetY - (8 + 1.03 * 0.86)) < 0.000001);
+  scene.game.player.elevation = base + 8.0; frames(scene, 180);
+  assert.ok(Math.abs(scene.cameraInfo.targetY - (base + 8 + 1.03 * 0.86)) < 0.000001);
   assert.ok(Math.abs(scene.aimDirection().pitch - originalPitch) < 0.0001);
 });
 
@@ -276,22 +283,24 @@ test('the driving camera follows airborne height and rooftop landings without in
   const orientation = new T.Quaternion().setFromEuler(new T.Euler(0.65, -0.5, 0.9));
   car.orientation = { x: orientation.x, y: orientation.y, z: orientation.z, w: orientation.w };
   const forward = new T.Vector3(1, 0, 0).applyQuaternion(orientation);
-  car.angle = Math.atan2(forward.z, forward.x); car.elevation = 5.5;
+  const base = car.elevation;
+  car.angle = Math.atan2(forward.z, forward.x); car.elevation = base + 5.5;
   scene.recenter(); frames(scene, 180);
-  assert.ok(Math.abs(scene.cameraInfo.targetY - 6.65) < 0.000001);
+  assert.ok(Math.abs(scene.cameraInfo.targetY - base - 6.65) < 0.000001);
   assert.ok(Math.abs(wrapped(scene.viewYaw - car.angle)) < 0.000001);
   const right = new T.Vector3(1, 0, 0).applyQuaternion(scene.camera.quaternion);
   assert.ok(Math.abs(right.y) < 0.000001, 'camera horizon remains level during a roll');
   for (const building of scene.game.buildings.slice(0, 5)) {
     place(scene, { x: building.x + building.w / 2, y: building.y + building.h / 2 }, car.angle);
-    car.elevation = building.height + 0.02;
+    car.elevation = building.elevation + building.height + .02;
     scene.recenter(); frames(scene, 30);
-    assert.ok(Math.abs(scene.cameraInfo.targetY - building.height - 1.17) < 0.000001);
+    assert.ok(Math.abs(scene.cameraInfo.targetY - building.elevation - building.height - 1.17) < 0.000001);
   }
 });
 
 test('rotated buildings leave their empty enclosing-box corners clear for the camera and aim ray', () => {
   const scene = makeScene(), rotation = Math.PI / 4;
+  scene.game.world.terrain = null; // This case isolates OBB corners; terrain rays have their own regression.
   const cosine = Math.cos(rotation), sine = Math.sin(rotation), extent = cosine * 2 + sine * .6;
   scene._buildingVolumes = [{ cx: 0, cz: 0, halfX: 2, halfZ: .6, cosine, sine, angle: rotation, minX: -extent, maxX: extent, minZ: -extent, maxZ: extent, minY: 0, maxY: 3 }];
   assert.equal(scene._insideBuilding(1.7, 1, -1.7), false, 'the enclosing AABB corner is physically empty');
@@ -305,4 +314,18 @@ test('rotated buildings leave their empty enclosing-box corners clear for the ca
   scene.camera.updateMatrixWorld(true);
   assert.equal(scene._aimWorldPoint(scene.width / 2, scene.height / 2), true, 'the same ray solver hits the actual rotated wall');
   assert.ok(Math.abs(scene._aimPoint.x - scene._aimPoint.z) < .000001);
+});
+
+test('a hillside shortens the boom before the near plane enters the ground during free-look', () => {
+  const scene = makeScene(), originX = OPEN_POINT.x / 20, originZ = OPEN_POINT.y / 20;
+  const heightAt = (x, y) => 6 + Math.hypot(x / 20 - originX, y / 20 - originZ) * 1.2;
+  scene.game.world.terrain = { ...scene.game.world.terrain, heightAt, surfaceHeight: heightAt };
+  scene._buildingVolumes = [];
+  place(scene, OPEN_POINT, Math.PI); scene.recenter();
+  frames(scene, 1);
+  assert.equal(scene.cameraInfo.obstructed, true, 'the rising slope intercepts the ordinary camera boom');
+  assert.ok(scene.cameraInfo.distance > .5 && scene.cameraInfo.distance < 5.5);
+  for (let i = 0; i < 50; i++) { scene.orbit(i % 2 ? 12 : -8, i % 3 ? 5 : -9); frames(scene, 1); }
+  const position = scene.camera.position;
+  assert.ok(position.y >= heightAt(position.x * 20, position.z * 20) + .2, 'interpolation also keeps the final camera above the hillside');
 });

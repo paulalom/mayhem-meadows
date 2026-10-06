@@ -4,6 +4,7 @@
   const Physics = root.MayhemPhysics || (typeof require === 'function' ? require('./physics.js') : null);
   const VehicleStats = root.MayhemVehicleStats || (typeof require === 'function' ? require('./vehicle-stats.js') : null);
   const SCALE = 20;
+  const NO_ROADS = Object.freeze([]);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const height = entity => entity.kind === 'van' ? 1.7 : 1.3;
   const finite = (v, fallback = 0) => Number.isFinite(v) ? v : fallback;
@@ -50,9 +51,8 @@
       // Tyre grip is applied by the arcade controller. Chassis friction would
       // pin the flat body to the road before its driving force can accelerate.
       this.world.addContactMaterial(new C.ContactMaterial(this.carMaterial, this.floorMaterial, { friction: 0, restitution: 0.08 }));
-      this.floor = new C.Body({ mass: 0, material: this.floorMaterial });
-      this.floor.addShape(new C.Plane()); this.floor.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
-      this.world.addBody(this.floor);
+      this._makeFloor();
+      this._makeBridges();
       this._townBodies = [];
       for (const building of game.buildings) this._building(building);
       for (const object of game.staticObjects) if (!object.destroyed) this._fixed(object.kind, object.x, object.y, object.parts, object);
@@ -63,11 +63,142 @@
       this.sync();
     }
 
+    _terrain() { return this.game.terrain || this.game.world?.terrain || null; }
+
+    groundHeight(x, z) {
+      const terrain = this._terrain();
+      return terrain ? finite((terrain.surfaceHeight || terrain.heightAt).call(terrain, x, z)) : 0;
+    }
+
+    _surfaceNormal(x, z) {
+      const terrain = this._terrain(), sample = terrain && (terrain.surfaceNormalAt || terrain.normalAt);
+      const value = sample ? sample.call(terrain, x, z) : null;
+      const normal = new C.Vec3(finite(value?.x), finite(value?.y, 1), finite(value?.z));
+      if (normal.lengthSquared() < 0.01 || normal.y < 0.2) normal.set(0, 1, 0);
+      normal.normalize(); return normal;
+    }
+
+    _surfaceQuaternion(x, z, angle) {
+      const normal = this._surfaceNormal(x, z);
+      return new C.Quaternion().setFromVectors(new C.Vec3(0, 1, 0), normal)
+        .mult(new C.Quaternion().setFromEuler(0, -finite(angle), 0));
+    }
+
+    _groundPose(x, z, angle, half) {
+      const yaw = new C.Quaternion().setFromEuler(0, -finite(angle), 0);
+      const cornerHeight = (localX, localZ) => {
+        const offset = yaw.vmult(new C.Vec3(localX, 0, localZ));
+        return this.groundHeight(x + offset.x * SCALE, z + offset.z * SCALE);
+      };
+      const a = cornerHeight(-half.x, -half.z), b = cornerHeight(half.x, -half.z);
+      const c = cornerHeight(-half.x, half.z), d = cornerHeight(half.x, half.z);
+      // A chassis spans several terrain triangles. Fit its resting plane to
+      // the footprint rather than tilting a long van to one centre triangle.
+      const normal = yaw.vmult(new C.Vec3(-(b + d - a - c) / (4 * half.x), 1, -(c + d - a - b) / (4 * half.z)));
+      normal.normalize();
+      const quaternion = new C.Quaternion().setFromVectors(new C.Vec3(0, 1, 0), normal).mult(yaw);
+      const restingHeight = this._footprintHeight(x, z, quaternion, half);
+      return { quaternion, centreHeight: restingHeight + 0.006, elevation: restingHeight - half.y };
+    }
+
+    _footprintHeight(x, z, quaternion, half) {
+      const normal = quaternion.vmult(new C.Vec3(0, 1, 0));
+      if (normal.y < 0.2) return Infinity;
+      let centreHeight = -Infinity;
+      const sample = (dx, dz) => {
+        const offsetY = (-half.y - normal.x * dx - normal.z * dz) / normal.y;
+        centreHeight = Math.max(centreHeight, this.groundHeight(x + dx * SCALE, z + dz * SCALE) - offsetY);
+      };
+      for (const localX of [-half.x, 0, half.x]) for (const localZ of [-half.z, 0, half.z]) {
+        const offset = quaternion.vmult(new C.Vec3(localX, -half.y, localZ));
+        sample(offset.x, offset.z);
+      }
+      const step = finite(this._terrain()?.step) / SCALE;
+      if (step > 0) {
+        const corners = [[-half.x,-half.z],[half.x,-half.z],[half.x,half.z],[-half.x,half.z]]
+          .map(([localX,localZ]) => quaternion.vmult(new C.Vec3(localX,-half.y,localZ)));
+        const worldX = x / SCALE, worldZ = z / SCALE;
+        const minX = Math.min(...corners.map(p=>p.x)) + worldX, maxX = Math.max(...corners.map(p=>p.x)) + worldX;
+        const minZ = Math.min(...corners.map(p=>p.z)) + worldZ, maxZ = Math.max(...corners.map(p=>p.z)) + worldZ;
+        const inside = (dx,dz) => corners.every((a,i) => {
+          const b = corners[(i+1)%4]; return (b.x-a.x)*(dz-a.z)-(b.z-a.z)*(dx-a.x) >= -1e-9;
+        });
+        // Peaks can lie between wheel samples. Include the terrain vertices
+        // and every footprint/grid edge crossing, including cell diagonals.
+        for (let ix=Math.ceil(minX/step);ix<=Math.floor(maxX/step);ix++) for (let iz=Math.ceil(minZ/step);iz<=Math.floor(maxZ/step);iz++) {
+          const dx=ix*step-worldX,dz=iz*step-worldZ; if(inside(dx,dz)) sample(dx,dz);
+        }
+        for (let i=0;i<4;i++) {
+          const a=corners[i],b=corners[(i+1)%4];
+          for (const axis of ['x','z','diagonal']) {
+            const av=axis==='diagonal'?a.x+a.z:a[axis], bv=axis==='diagonal'?b.x+b.z:b[axis];
+            const origin=axis==='diagonal'?worldX+worldZ:axis==='x'?worldX:worldZ;
+            if(Math.abs(bv-av)<1e-9) continue;
+            for(let k=Math.ceil((Math.min(av,bv)+origin)/step);k<=Math.floor((Math.max(av,bv)+origin)/step);k++) {
+              const t=(k*step-origin-av)/(bv-av); sample(a.x+(b.x-a.x)*t,a.z+(b.z-a.z)*t);
+            }
+          }
+        }
+      }
+      return centreHeight;
+    }
+
+    _makeFloor() {
+      if (this.floor) this.world.removeBody(this.floor);
+      const terrain = this._terrain();
+      this.floor = new C.Body({ mass: 0, material: this.floorMaterial });
+      if (terrain && terrain.count > 1 && terrain.step > 0 && terrain.heights?.length === terrain.count * terrain.count) {
+        const data = Array.from({ length: terrain.count }, (_, row) => Array.from(terrain.heights.subarray
+          ? terrain.heights.subarray(row * terrain.count, (row + 1) * terrain.count)
+          : terrain.heights.slice(row * terrain.count, (row + 1) * terrain.count)));
+        this.heightfield = new C.Heightfield(data, { elementSize: terrain.step / SCALE });
+        this.floor.addShape(this.heightfield);
+        // Cannon's grid lives in local X/Y with height along local Z. This
+        // cyclic rotation maps row Y to world Z, column X to world X, and
+        // height to world up, preserving the shared anti-diagonal triangles.
+        this.floor.quaternion.set(-0.5, -0.5, -0.5, 0.5);
+        this.floor.kind = 'terrain';
+      } else {
+        this.heightfield = null;
+        this.floor.addShape(new C.Plane()); this.floor.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+        this.floor.kind = 'floor';
+      }
+      this.world.addBody(this.floor); this._terrainModel = terrain;
+    }
+
+    _makeBridges() {
+      for (const body of this.bridgeBodies || []) this.world.removeBody(body);
+      this.bridgeBodies = [];
+      const roads = this.game.roads || this.game.world?.roads || NO_ROADS;
+      if (this._terrain()) for (const road of roads) if (road.bridge) {
+        for (let i = 1; i < road.points.length; i++) {
+          const a = road.points[i - 1], b = road.points[i];
+          const dx = (b.x - a.x) / SCALE, dz = (b.y - a.y) / SCALE;
+          const ay = finite(a.elevation, this.groundHeight(a.x, a.y)), by = finite(b.elevation, this.groundHeight(b.x, b.y));
+          const horizontal = Math.hypot(dx, dz);
+          if (horizontal < 0.001) continue;
+          const dy = by - ay, length = Math.hypot(horizontal, dy), heading = Math.atan2(dz, dx);
+          const quaternion = new C.Quaternion().setFromEuler(0, -heading, 0)
+            .mult(new C.Quaternion().setFromEuler(0, 0, Math.atan2(dy, horizontal)));
+          const normal = quaternion.vmult(new C.Vec3(0, 1, 0)), halfHeight = 0.16;
+          const body = new C.Body({ mass: 0, material: this.floorMaterial,
+            position: new C.Vec3((a.x + b.x) / SCALE / 2 - normal.x * halfHeight,
+              (ay + by) / 2 - normal.y * halfHeight, (a.y + b.y) / SCALE / 2 - normal.z * halfHeight) });
+          body.addShape(new C.Box(new C.Vec3(length / 2 + 0.03, halfHeight, (road.width + 64) / SCALE / 2)));
+          body.quaternion.copy(quaternion); body.kind = 'bridge'; body.source = road;
+          this.world.addBody(body); this.bridgeBodies.push(body);
+        }
+      }
+      this._roads = roads;
+    }
+
     _building(building) {
       // Source rectangles rotate around their centre, matching the world lot
-      // footprint and the on-foot/ragdoll oriented boxes.
+      // footprint and the on-foot/ragdoll oriented boxes. The solid foundation
+      // extends down the hill while the roof remains elevation + height.
+      const base = finite(building.elevation), depth = Math.max(0, base - finite(building.foundationBottom, base));
       return this._fixed('building', building.x + building.w / 2, building.y + building.h / 2,
-        [{ half: [building.w / 40, building.height / 2, building.h / 40], offset: [0, building.height / 2, 0] }], building);
+        [{ half: [building.w / 40, (building.height + depth) / 2, building.h / 40], offset: [0, (building.height - depth) / 2, 0] }], building);
     }
 
     _worldSize() {
@@ -75,12 +206,13 @@
     }
 
     _boundaries() {
-      const size = this._worldSize(), wallHeight = 6;
+      const size = this._worldSize(), bottom = Math.min(-8, finite(this.heightfield?.minValue) - 8);
+      const top = Math.max(52, finite(this.heightfield?.maxValue) + 12), wallHeight = top - bottom, centre = (top + bottom) / 2;
       for (const body of this.world.bodies.slice()) if (body.kind === 'boundary') this.world.removeBody(body);
-      this._fixed('boundary', -10, size / 2, [{ half: [0.5, wallHeight / 2, size / 40], offset: [0, wallHeight / 2, 0] }]);
-      this._fixed('boundary', size + 10, size / 2, [{ half: [0.5, wallHeight / 2, size / 40], offset: [0, wallHeight / 2, 0] }]);
-      this._fixed('boundary', size / 2, -10, [{ half: [size / 40, wallHeight / 2, 0.5], offset: [0, wallHeight / 2, 0] }]);
-      this._fixed('boundary', size / 2, size + 10, [{ half: [size / 40, wallHeight / 2, 0.5], offset: [0, wallHeight / 2, 0] }]);
+      this._fixed('boundary', -10, size / 2, [{ half: [0.5, wallHeight / 2, size / 40], offset: [0, centre, 0] }]);
+      this._fixed('boundary', size + 10, size / 2, [{ half: [0.5, wallHeight / 2, size / 40], offset: [0, centre, 0] }]);
+      this._fixed('boundary', size / 2, -10, [{ half: [size / 40, wallHeight / 2, 0.5], offset: [0, centre, 0] }]);
+      this._fixed('boundary', size / 2, size + 10, [{ half: [size / 40, wallHeight / 2, 0.5], offset: [0, centre, 0] }]);
       this.size = size;
     }
 
@@ -105,8 +237,8 @@
       const positionChanged = entity.x !== old.x || entity.y !== old.y || entity.elevation !== old.elevation;
       const angleChanged = entity.angle !== old.angle, orientationChanged = JSON.stringify(entity.orientation) !== old.orientation;
       if (positionChanged) { body.position.set(entity.x / SCALE, finite(entity.elevation) + entry.height / 2 + 0.004, entity.y / SCALE); body.wakeUp(); body.aabbNeedsUpdate = true; }
-      if (orientationChanged && entity.orientation) body.quaternion.set(entity.orientation.x, entity.orientation.y, entity.orientation.z, entity.orientation.w);
-      else if (angleChanged) body.quaternion.setFromEuler(0, -entity.angle, 0);
+      if (orientationChanged && entity.orientation) { body.quaternion.set(entity.orientation.x, entity.orientation.y, entity.orientation.z, entity.orientation.w); body.wakeUp(); body.aabbNeedsUpdate = true; }
+      else if (angleChanged) { body.quaternion.setFromEuler(0, -entity.angle, 0); body.wakeUp(); body.aabbNeedsUpdate = true; }
       if (entity.vx !== old.vx || entity.vy !== old.vy) { body.velocity.x = finite(entity.vx) / SCALE; body.velocity.z = finite(entity.vy) / SCALE; body.wakeUp(); }
       else if (entity.speed !== old.speed) { body.velocity.x = Math.cos(entity.angle) * entity.speed / SCALE; body.velocity.z = Math.sin(entity.angle) * entity.speed / SCALE; body.wakeUp(); }
       if (entity.verticalVelocity !== old.verticalVelocity) { body.velocity.y = finite(entity.verticalVelocity); body.wakeUp(); }
@@ -120,8 +252,12 @@
       const body = new C.Body({ mass: 700 * type.mass, material: this.carMaterial, linearDamping: 0.015, angularDamping: 0.28,
         sleepSpeedLimit: 0.08, sleepTimeLimit: 1.5 });
       body.addShape(new C.Box(new C.Vec3(type.length / 40, h / 2, type.width / 40)));
-      body.position.set(entity.x / SCALE, finite(entity.elevation) + h / 2 + 0.004, entity.y / SCALE);
+      const ground = this.groundHeight(entity.x, entity.y), elevation = finite(entity.elevation, ground);
+      const groundedSpawn = !entity.orientation && Math.abs(elevation - ground) < 0.15;
+      const pose = groundedSpawn && this._groundPose(entity.x, entity.y, entity.angle, body.shapes[0].halfExtents);
+      body.position.set(entity.x / SCALE, pose ? pose.centreHeight : elevation + h / 2 + 0.004, entity.y / SCALE);
       if (entity.orientation) body.quaternion.set(entity.orientation.x, entity.orientation.y, entity.orientation.z, entity.orientation.w);
+      else if (pose) body.quaternion.copy(pose.quaternion);
       else body.quaternion.setFromEuler(0, -finite(entity.angle), 0);
       body.velocity.set(finite(entity.vx, Math.cos(entity.angle) * entity.speed) / SCALE, finite(entity.verticalVelocity), finite(entity.vy, Math.sin(entity.angle) * entity.speed) / SCALE);
       if (entity.speed && !entity.vx && !entity.vy) body.velocity.set(Math.cos(entity.angle) * entity.speed / SCALE, finite(entity.verticalVelocity), Math.sin(entity.angle) * entity.speed / SCALE);
@@ -129,14 +265,20 @@
       entity.colliderHeight = h; entity.collisionHeight = h;
       body.addEventListener('collide', event => this._collision(body, event.body, event.contact));
       this.world.addBody(body);
+      // Resting cars start with their parking brake set. Cannon sleep retains
+      // the dynamic collider and wakes it for driving, blasts and collisions.
+      if (pose && body.velocity.lengthSquared() < 0.0001) body.sleep();
       entry = { body, height: h, snapshot: this._snapshot(entity), control: null };
       this.bodies.set(entity.id, entry); return entry;
     }
 
     sync() {
-      if (this.size !== this._worldSize()) this._boundaries();
+      const terrainChanged = this._terrainModel !== this._terrain();
+      if (terrainChanged) this._makeFloor();
+      if (terrainChanged || this._roads !== (this.game.roads || this.game.world?.roads || NO_ROADS)) this._makeBridges();
+      if (terrainChanged || this.size !== this._worldSize()) this._boundaries();
       if (this._buildings !== this.game.buildings || this._objects !== this.game.staticObjects) {
-        for (const body of this.world.bodies.slice()) if (body.mass === 0 && body !== this.floor && body.kind !== 'boundary') this.world.removeBody(body);
+        for (const body of this.world.bodies.slice()) if (body.mass === 0 && body !== this.floor && body.kind !== 'boundary' && body.kind !== 'bridge') this.world.removeBody(body);
         for (const building of this.game.buildings) this._building(building);
         for (const object of this.game.staticObjects) if (!object.destroyed) this._fixed(object.kind, object.x, object.y, object.parts, object);
         this._buildings = this.game.buildings; this._objects = this.game.staticObjects;
@@ -162,6 +304,7 @@
       const entry = this._body(entity), body = entry.body;
       this._syncEntry(entity, entry, false);
       body.applyImpulse(new C.Vec3(finite(velocity.x) * body.mass, finite(velocity.y) * body.mass, finite(velocity.z) * body.mass));
+      body.freeRollUntil = this.world.time + 1;
       entity.vx = body.velocity.x * SCALE; entity.vy = body.velocity.z * SCALE; entity.verticalVelocity = body.velocity.y;
       entity.speed = entity.vx * Math.cos(finite(entity.angle)) + entity.vy * Math.sin(finite(entity.angle));
       for (const field of ['vx', 'vy', 'verticalVelocity', 'speed']) entry.snapshot[field] = entity[field];
@@ -172,13 +315,57 @@
       return this.world.contacts.some(contact => contact.bi === body && contact.ni.y < -0.65 || contact.bj === body && contact.ni.y > 0.65);
     }
 
+    _nearGround(body, halfHeight, tolerance = 0.15) {
+      if (Math.abs(body.position.y - halfHeight - this.groundHeight(body.position.x * SCALE, body.position.z * SCALE)) < tolerance) return true;
+      const restingHeight = this._footprintHeight(body.position.x * SCALE, body.position.z * SCALE, body.quaternion, body.shapes[0].halfExtents);
+      return Math.abs(body.position.y - restingHeight) < tolerance;
+    }
+
+    _contactNormal(body) {
+      const normal = new C.Vec3();
+      for (const contact of this.world.contacts) {
+        const direction = contact.bi === body ? -1 : contact.bj === body ? 1 : 0;
+        if (!direction || contact.ni.y * direction < 0.65) continue;
+        normal.x += contact.ni.x * direction; normal.y += contact.ni.y * direction; normal.z += contact.ni.z * direction;
+      }
+      if (normal.lengthSquared() < 0.01) return this._surfaceNormal(body.position.x * SCALE, body.position.z * SCALE);
+      normal.normalize(); return normal;
+    }
+
     _drive(entry, dt) {
       const body = entry.body, entity = body.entity, command = entry.control, base = VehicleStats.getModel(entity), type = VehicleStats.performance(entity);
       const up = body.quaternion.vmult(new C.Vec3(0, 1, 0)), forward = body.quaternion.vmult(new C.Vec3(1, 0, 0));
-      const grounded = (body.position.y - entry.height / 2 < 0.15 || this._supported(body)) && up.y > 0.55;
+      const grounded = (this._nearGround(body, entry.height / 2) || this._supported(body)) && up.y > 0.55;
       if (!grounded) return;
-      if (!command) { body.force.x -= body.velocity.x * body.mass * 0.5; body.force.z -= body.velocity.z * body.mass * 0.5; return; }
-      const heading = Math.atan2(forward.z, forward.x), speed = body.velocity.x * Math.cos(heading) + body.velocity.z * Math.sin(heading);
+      const normal = this._contactNormal(body), alongNormal = this.world.gravity.dot(normal);
+      const roadContact = this.world.contacts.some(contact =>
+        (contact.bi === body && (contact.bj === this.floor || contact.bj.kind === 'bridge') ||
+          contact.bj === body && (contact.bi === this.floor || contact.bi.kind === 'bridge')) && Math.abs(contact.ni.y) > 0.65);
+      if (roadContact && this.world.time >= (body.freeRollUntil || 0)) {
+        // A single chassis box has no wheel suspension. Bounded restoring
+        // torque absorbs ordinary terrain pitch/roll while keeping impacts
+        // and airborne rotations free to act on the real body.
+        const error = up.cross(normal), spin = body.angularVelocity.dot(normal);
+        const tilt = body.angularVelocity.vsub(normal.scale(spin));
+        body.torque.x += body.mass * clamp(error.x * 8 - tilt.x * 4, -12, 12);
+        body.torque.y += body.mass * clamp(error.y * 8 - tilt.y * 4, -12, 12);
+        body.torque.z += body.mass * clamp(error.z * 8 - tilt.z * 4, -12, 12);
+      }
+      // Cancel gravity along the driving surface. Hills remain solid terrain,
+      // while an ordinary compact can climb them and parked cars stay put.
+      body.force.x -= body.mass * (this.world.gravity.x - normal.x * alongNormal);
+      body.force.y -= body.mass * (this.world.gravity.y - normal.y * alongNormal);
+      body.force.z -= body.mass * (this.world.gravity.z - normal.z * alongNormal);
+      const normalForward = forward.dot(normal);
+      forward.x -= normal.x * normalForward; forward.y -= normal.y * normalForward; forward.z -= normal.z * normalForward; forward.normalize();
+      const side = forward.cross(normal), speed = body.velocity.dot(forward), lateral = body.velocity.dot(side);
+      if (!command) {
+        const vertical = body.velocity.dot(normal);
+        body.force.x -= (body.velocity.x - normal.x * vertical) * body.mass * 0.5;
+        body.force.y -= (body.velocity.y - normal.y * vertical) * body.mass * 0.5;
+        body.force.z -= (body.velocity.z - normal.z * vertical) * body.mass * 0.5; return;
+      }
+      const heading = Math.atan2(forward.z, forward.x);
       const speedRatio = type.maxSpeed / base.maxSpeed;
       const max = (command.maxSpeed || base.maxSpeed) * speedRatio / SCALE, reverseMax = 5.5 * speedRatio;
       let acceleration = 0, steer = command.steer || 0;
@@ -198,10 +385,10 @@
       if (type.driveable && speed > max) acceleration = Math.min(acceleration, (max - speed) * 8);
       if (type.driveable && speed < -reverseMax) acceleration = Math.max(acceleration, (-reverseMax - speed) * 8);
       if (command.brake) acceleration -= speed * 3.8;
-      const lateral = -body.velocity.x * Math.sin(heading) + body.velocity.z * Math.cos(heading);
       const grip = command.brake ? 2.4 * type.grip / base.grip : type.grip;
-      body.force.x += body.mass * (Math.cos(heading) * acceleration + Math.sin(heading) * lateral * grip);
-      body.force.z += body.mass * (Math.sin(heading) * acceleration - Math.cos(heading) * lateral * grip);
+      body.force.x += body.mass * (forward.x * acceleration - side.x * lateral * grip);
+      body.force.y += body.mass * (forward.y * acceleration - side.y * lateral * grip);
+      body.force.z += body.mass * (forward.z * acceleration - side.z * lateral * grip);
       const yawRate = steer * type.handling * clamp(Math.abs(speed) / 7.5, 0.2, 1) * (command.brake ? 1.35 : 1) * Math.sign(speed);
       // Steering controls only yaw. Collision roll/pitch are never overwritten.
       body.angularVelocity.y += (-yawRate - body.angularVelocity.y) * Math.min(1, 8 * dt);
@@ -209,10 +396,11 @@
     }
 
     _collision(body, other, contact) {
-      if (other === this.floor) return;
+      if (other === this.floor || other.kind === 'bridge') return;
       if (Math.abs(contact.ni.y) > 0.65) { contact.restitution = 0.08; return; }
       const closing = Math.abs(contact.getImpactVelocityAlongNormal());
       if (closing < 1.5) return;
+      body.freeRollUntil = this.world.time + 0.8;
       this.impacts.push({ entity: body.entity, other: other.entity || null, prop: other.source || null, speed: closing * SCALE, vehicle: Boolean(other.entity) });
       const pair = other.entity ? [body.entity.id, other.entity.id].sort().join(':') : body.entity.id + ':' + other.id;
       if (closing < (other.entity ? 6.5 : 9) || this.world.time - (this._launchAt.get(pair) ?? -10) < 0.8) return;
@@ -249,7 +437,7 @@
         entity.vx = body.velocity.x * SCALE; entity.vy = body.velocity.z * SCALE;
         entity.speed = entity.vx * Math.cos(entity.angle) + entity.vy * Math.sin(entity.angle);
         entity.verticalVelocity = body.velocity.y; entity.upright = up.y > 0.6;
-        entity.grounded = (entity.elevation < 0.12 || this._supported(body)) && entity.upright;
+        entity.grounded = (this._nearGround(body, entry.height / 2, 0.12) || this._supported(body)) && entity.upright;
         entity.collisionHeight = entry.height; entry.snapshot = this._snapshot(entity);
       }
       return this.impacts;
@@ -257,16 +445,20 @@
 
     reset(entity) {
       const entry = this._body(entity), body = entry.body;
-      body.position.set(entity.x / SCALE, entry.height / 2 + 0.006, entity.y / SCALE);
-      body.quaternion.setFromEuler(0, -entity.angle, 0); body.velocity.setZero(); body.angularVelocity.setZero(); body.force.setZero(); body.torque.setZero();
-      entity.elevation = 0; entity.verticalVelocity = 0; entity.vx = entity.vy = entity.speed = 0; entity.grounded = entity.upright = true;
+      const pose = this._groundPose(entity.x, entity.y, entity.angle, body.shapes[0].halfExtents);
+      body.position.set(entity.x / SCALE, pose.centreHeight, entity.y / SCALE);
+      body.quaternion.copy(pose.quaternion); body.velocity.setZero(); body.angularVelocity.setZero(); body.force.setZero(); body.torque.setZero();
+      body.freeRollUntil = 0;
+      entity.elevation = pose.elevation; entity.verticalVelocity = 0; entity.vx = entity.vy = entity.speed = 0; entity.grounded = true; entity.upright = body.quaternion.vmult(new C.Vec3(0, 1, 0)).y > 0.6;
       entity.orientation = { x: body.quaternion.x, y: body.quaternion.y, z: body.quaternion.z, w: body.quaternion.w };
-      entity.angularVelocity = { x: 0, y: 0, z: 0 }; entry.snapshot = this._snapshot(entity); body.wakeUp(); body.aabbNeedsUpdate = true;
+      entity.angularVelocity = { x: 0, y: 0, z: 0 }; entry.control = null; entry.snapshot = this._snapshot(entity); body.sleep(); body.aabbNeedsUpdate = true;
     }
 
     support(x, z, top = 100) {
-      const ray = this.world.raycastClosest(new C.Vec3(x / SCALE, top, z / SCALE), new C.Vec3(x / SCALE, -0.1, z / SCALE), { skipBackfaces: true }, this._ray || (this._ray = new C.RaycastResult()));
-      return ray ? Math.max(0, this._ray.hitPointWorld.y) : 0;
+      const ground = this.groundHeight(x, z), bottom = Math.min(-0.1, finite(this.heightfield?.minValue) - 1, ground - 1);
+      const ray = this.world.raycastClosest(new C.Vec3(x / SCALE, top, z / SCALE), new C.Vec3(x / SCALE, bottom, z / SCALE), { skipBackfaces: true }, this._ray || (this._ray = new C.RaycastResult()));
+      if (ray && this._ray.body === this.floor && !this.heightfield) return 0;
+      return ray ? this._ray.hitPointWorld.y : ground;
     }
 
     hitsSegment(from, to) {

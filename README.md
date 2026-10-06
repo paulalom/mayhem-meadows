@@ -2,7 +2,7 @@
 
 **A tiny town. Terrible errands. Excellent bad decisions.**
 
-A for-fun, original, GTA-inspired third-person 3D driving sandbox. Borrow a car, run silly errands, scatter confetti, and lose the overenthusiastic Fun Police. Residents yell fake curses and recover from cartoon tumbles. Explore garden neighborhoods, busy shop rows, warehouse yards and a relaxed riverfront, with hills and countryside beyond town.
+A for-fun, original, GTA-inspired third-person 3D driving sandbox. Borrow a car, run silly errands, scatter confetti, and lose the overenthusiastic Fun Police. Residents yell fake curses and recover from cartoon tumbles. Explore a coastal city, winding hill roads, suburbs, a marina, docks, and the airport across the river.
 
 ## Play
 
@@ -49,7 +49,8 @@ Compact, sports car, and van engines respond to speed, throttle, and boost. Near
 
 ## The toybox
 
-- **City and suburbs:** winding avenues, irregular junctions, side streets and residential loops connect six neighborhoods across a 280-metre playable world. Market Mile's shops and Waffle Works' yards open into quieter homes in Biscuit Heights, Willow Gardens and Orchard Park, with Riverfront as a scenic destination. Buildings face their streets, sidewalks follow the curves, and gardens become more spacious toward the outskirts. Characters remain 14% smaller with matching physical bodies. The HUD names your district; the minimap draws the actual roads and rotated footprints.
+- **Coastal city:** the supplied city map guides the layout: dense Downtown, winding Old Town, Northside homes, West Beach and Marina, Docklands, Ridge Heights, the airport, and Tidewell Marsh. Buildings face their streets and keep sidewalks clear; gardens and spacing open up outside the center. Characters remain 14% smaller with matching physical bodies. The HUD names your district; the minimap draws the coastline, terrain, actual roads, and rotated footprints.
+- **Playable terrain:** the supplied grayscale PNG shapes the ground, including the northern ridge, river, and coast. The reference covers roughly 600 × 400 metres inside a 600-metre square world. Road grades are softened for arcade handling, buildings have level foundations, and bridges carry cars and pedestrians over the river. Walking, jumping, car bodies, ragdolls, aiming, and the camera use the same ground triangles. A splash returns you to a safe road.
 - **Driving:** compact, sports car, and van handling; traffic; drifting and near-miss style points. Parked cars use clear roadside bays with access from the street. Cars are three-dimensional rigid bodies with gravity: impacts can bounce, lift, roll, or flip them before they land. Press R to right your ride and return to a safe road position.
 - **Car stats and damage:** six fictional make/model combinations have their own acceleration, top speed, handling, grip and durability. The current-ride display and collection show live performance plus body, engine and handling health. Crashes damage civilian traffic and patrols as well as your ride; dents, cracked windows and engine smoke accompany the reduced power and grip. Critical damage ignites the engine, with an eight-second warning before a blast can shove nearby vehicles and tumble people. Press E to bail out of a burning ride, even at speed. Stop and use Repair Tape to extinguish it; garage repairs and the wash fully restore its systems. Saved rides retain their model and component damage. R rights your vehicle without repairing it.
 - **Jumping:** press Space on foot for a jump with gravity and a landing, including onto low solid surfaces. Holding Space does not repeatedly jump; left-click remains the toy action.
@@ -72,7 +73,9 @@ Contract timers determine bonuses. Finishing overtime still pays the base reward
 
 The toy wheel and pocket/collection menus freeze the town and mission timer. Browse your collection anywhere, then visit **GARAGE** on the minimap to make purchases or manage rides. Biscuits cost $15, tape costs $35, and refill packs cost $30. Press I or G again, or Escape, to close the menu. Touch driving remains outside this prototype.
 
-The [gameplay design](DESIGN.md) explains the intended loops, neighborhood layouts, tuning, scope, and next playtest questions. This is a small playable slice with simple traffic and patrol AI. The town uses a flat road layout, surrounded by scenic terrain, hills and a river. Vehicles can leave the ground and rotate in three dimensions. On-foot jumping and ragdolls have vertical gravity. Fixed street/park obstacles have collision shapes. Exterior terrain is scenery; there are no stairs, elevated road routes, or building interiors.
+The [gameplay design](DESIGN.md) explains the intended loops, neighborhood layouts, tuning, scope, and next playtest questions. This is a small playable slice with simple traffic and patrol AI. Vehicles can leave the ground and rotate in three dimensions. On-foot jumping and ragdolls have vertical gravity. Fixed street/park obstacles have collision shapes. The hills and bridge routes are playable; building interiors, swimming, and aircraft are outside this prototype.
+
+The original reference images are preserved in **assets/**. The attached height map is actually a **1536 × 1024, 8-bit RGB PNG**. Its grayscale values are imported into local numeric data in **height-data.js**; the game does not require image downloads or runtime image decoding. Elevations use an arcade scale rather than the map's printed mountain heights, with additional grading around roads and building pads.
 
 The [story campaign design](CAMPAIGN.md) specifies **Operation Unboring**, a proposed ten-job campaign beginning with Spanner's phone call and directions to Sprinkle Garage. Its first playable milestone is the call, the drive, and the garage meeting; campaign gameplay is planned for a later build.
 
@@ -104,6 +107,8 @@ npm run vendor
 | File | Responsibility |
 | --- | --- |
 | world.js | Organic road network, neighborhoods, lots, shared landmarks and connected route planning |
+| height-data.js | Numeric grayscale samples and provenance of the supplied height map |
+| terrain.js | Shared ground triangles, softened road profiles, building pads and bridge surfaces |
 | core.js | Simulation, map, traffic, police, contracts, inventory, garage, rewards, and save validation |
 | vehicle-physics.js | Cannon vehicle bodies, gravity, orientation, elastic contacts, and fixed obstacle shapes |
 | physics.js | Ragdoll joints, gravity, contacts, and automatic get-up |
@@ -120,4 +125,4 @@ npm run vendor
 
 Next priorities: playtest toy reach and the garage economy, tune chases, add touch/gamepad controls, then add route variety and cosmetic rewards.
 
-Version 0.8.0 replaces the uniform road grid with an organic street network and expands the playable world into two suburbs. Traffic, recovery, missions, collisions, camera clearance and the minimap use the new layout. Automated Chrome checks continue to keep the desktop cursor free.
+Version 0.9.0 builds the world around the supplied map and height map, with physical hills, coastlines, river crossings, and distinct coastal districts. Automated Chrome checks continue to keep the desktop cursor free.

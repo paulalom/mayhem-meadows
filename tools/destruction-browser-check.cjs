@@ -26,7 +26,8 @@ async function main() {
       const game = globalThis.__browserCheckGame, scene = globalThis.__browserCheckScene;
       const fence = game.staticObjects.find(object => object.kind === 'fence');
       const normal = { x: -Math.sin(fence.angle), y: Math.cos(fence.angle) };
-      Object.assign(game.player, { x: fence.x - normal.x * 35, y: fence.y - normal.y * 35, angle: fence.angle + Math.PI / 2, elevation: 0, vehicleId: null });
+      Object.assign(game.player, { x: fence.x - normal.x * 35, y: fence.y - normal.y * 35, angle: fence.angle + Math.PI / 2, vehicleId: null });
+      game.player.elevation = game.world.terrain?.surfaceHeight(game.player.x, game.player.y) || 0;
       game.inventory.equipped = 'hammer'; game.inventory.unlocked.push('hammer'); game._actionCooldown = 0;
       scene.recenter(); for (let i = 0; i < 30; i++) scene.update(1 / 60, { paused: true });
       globalThis.__destructionFence = fence;

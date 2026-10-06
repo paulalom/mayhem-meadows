@@ -4,9 +4,10 @@ const assert = require('node:assert/strict');
 const { Game } = require('../core.js');
 const World = require('../world.js');
 const { MUZZLE_HEIGHT, PLAYER_RADIUS } = require('../physics.js');
+const { makeFlatGame } = require('./helpers/flat-game.cjs');
 
 const empty = () => {
-  const game = new Game({ seed: 42 });
+  const game = makeFlatGame();
   game.cars = []; game.police = []; game.peds = []; game.buildings = []; game.staticObjects = [];
   Object.assign(game.player, { x: 900, y: 900, angle: 0 });
   game.graceTimer = 0; game.vehiclePhysics.sync(); return game;

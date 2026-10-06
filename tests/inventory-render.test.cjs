@@ -75,8 +75,8 @@ test('held toy visibly follows upward and downward aim and lowers when aiming st
 
 test('a real jump lifts the whole character above the street and lands back on its feet', () => {
   const scene = makeScene(), game = scene.game;
-  game.player.x = 900; game.player.y = 1080;
   game.peds = [];
+  const base = game.world.terrain.surfaceHeight(game.player.x, game.player.y);
   assert.equal(game.jump(), true);
   let apex = 0;
   for (let frame = 0; frame < 90; frame++) {
@@ -85,9 +85,9 @@ test('a real jump lifts the whole character above the street and lands back on i
     apex = Math.max(apex, scene._player.group.position.y);
     assert.equal(scene._player.group.visible, true);
   }
-  assert.ok(apex > 1.3, 'jump has a clearly visible arc above the street');
+  assert.ok(apex - base > 1.3, 'jump has a clearly visible arc above the elevated street');
   assert.equal(game.player.grounded, true);
-  assert.ok(Math.abs(scene._player.group.position.y - 0.03) < 0.00001);
+  assert.ok(Math.abs(scene._player.group.position.y - game.world.terrain.surfaceHeight(game.player.x, game.player.y) - .03) < .01);
 });
 
 test('airborne cars render the full quaternion about the same chassis centre as physics', () => {
@@ -162,7 +162,8 @@ test('district facades follow real footprints and cottage roofs face outward', (
     assert.ok(Math.abs(volume.halfX - building.w / 40 - 0.12) < 0.000001);
     assert.ok(Math.abs(volume.halfZ - building.h / 40 - 0.12) < 0.000001);
     assert.equal(volume.angle, building.angle || 0);
-    assert.ok(Math.abs(volume.maxY - building.height - 0.45) < 0.000001);
+    assert.ok(Math.abs(volume.maxY - building.elevation - building.height - 0.45) < 0.000001);
+    assert.ok(Math.abs(volume.minY - building.foundationBottom + .2) < .000001);
     const frame = scene._buildingFrames.get(building.id);
     assert.equal(frame.yaw, -(building.angle || 0));
     assert.ok(Math.abs(Math.atan2(frame.front.z - volume.cz, frame.front.x - volume.cx) - building.frontAngle) < 0.000001);
@@ -196,16 +197,16 @@ test('curved road surfaces and continuous sidewalks follow the shared graph in t
   scene._roadGroup.updateMatrixWorld(true);
   for (const mesh of scene._roadGroup.children) {
     const normals = mesh.geometry.attributes.normal;
-    for (let i = 0; i < normals.count; i++) assert.ok(normals.getY(i) > .99, 'all road surfaces face upward');
+    for (let i = 0; i < normals.count; i++) assert.ok(normals.getY(i) > 0, 'sloped road surfaces face upward');
   }
   for (const road of scene.game.roads) {
     for (let i = 1; i < road.points.length; i++) {
       const a = road.points[i - 1], b = road.points[i], heading = Math.atan2(b.y - a.y, b.x - a.x);
       const x = (a.x + b.x) / 40, z = (a.y + b.y) / 40;
-      ray.set(new T.Vector3(x, 4, z), new T.Vector3(0, -1, 0));
+      ray.set(new T.Vector3(x, scene._surfaceY(x, z) + 100, z), new T.Vector3(0, -1, 0));
       assert.ok(ray.intersectObject(asphalt).length > 0, 'actual road mesh covers every graph segment');
       const side = road.width / 40 + scene.worldInfo.sidewalkWidth / 2;
-      ray.set(new T.Vector3(x - Math.sin(heading) * side, 4, z + Math.cos(heading) * side), new T.Vector3(0, -1, 0));
+      ray.set(new T.Vector3(x - Math.sin(heading) * side, scene._surfaceY(x, z) + 100, z + Math.cos(heading) * side), new T.Vector3(0, -1, 0));
       assert.ok(ray.intersectObject(sidewalk).length > 0, 'sidewalk extends continuously outside the road edge');
       checked++;
     }
@@ -213,36 +214,24 @@ test('curved road surfaces and continuous sidewalks follow the shared graph in t
   assert.ok(checked > 150);
 });
 
-test('the landscape contains real rolling terrain and a winding river outside active town roads', () => {
+test('the playable map renders its shared hills, coast and actual supported river crossings', () => {
   const scene = makeScene();
   scene._staticParts = new Map(); scene._worldInfo = { districts: {}, landscape: {} };
   scene._landscape(core.SIZE / 20);
-  const terrain = scene._landscapeGroup.getObjectByName('Rolling terrain');
+  const terrain = scene._landscapeGroup.getObjectByName('Shared heightmap');
   assert.ok(terrain?.isMesh && terrain.geometry.index.count > 10000);
   const vertices = terrain.geometry.attributes.position;
   let low=Infinity, high=-Infinity;
   for(let i=0;i<vertices.count;i++){ low=Math.min(low,vertices.getY(i));high=Math.max(high,vertices.getY(i)); }
   assert.ok(high-low > 5, 'the backdrop has true height variation');
-  const indices = terrain.geometry.index;
-  for (let face = 0; face < indices.count; face += 3) {
-    const x = [0, 1, 2].reduce((sum, offset) => sum + vertices.getX(indices.getX(face + offset)), 0) / 3;
-    const z = [0, 1, 2].reduce((sum, offset) => sum + vertices.getZ(indices.getX(face + offset)), 0) / 3;
-    assert.ok(x <= 0 || x >= core.SIZE / 20 || z <= 0 || z >= core.SIZE / 20, 'rolling terrain never covers the flat playable ground');
-  }
-  let hills = 0;
-  for (const batch of scene._staticParts.values()) if (['a4bcb0', 'b0c5bb'].includes(batch.material.color.getHexString())) {
-    for (const part of batch.parts) {
-      const bounds = new T.Box3().setFromBufferAttribute(part.geometry.attributes.position).applyMatrix4(part.matrix);
-      assert.ok(bounds.max.x <= 0 || bounds.min.x >= core.SIZE / 20 || bounds.max.z <= 0 || bounds.min.z >= core.SIZE / 20, 'scenic hill meshes stay entirely beyond the playable boundary');
-      hills++;
-    }
-  }
-  assert.ok(hills >= 3);
-  const water = scene._riverGroup.getObjectByName('River water');
-  assert.ok(water?.isMesh && water.geometry.attributes.position.count > 200);
-  const river = water.geometry.attributes.position;
-  for(let i=0;i<river.count;i++) assert.ok(river.getX(i)<0 || river.getX(i)>core.SIZE/20 || river.getZ(i)<0 || river.getZ(i)>core.SIZE/20, 'water stays beyond the playable city');
-  assert.ok(scene.worldInfo.landscape.treeCount > 30);
+  assert.equal(vertices.count, scene.game.world.terrain.count ** 2);
+  const water = scene._riverGroup.getObjectByName('Coastal water');
+  assert.ok(water?.isMesh);
+  assert.equal(water.position.y, 0);
+  assert.ok(scene.worldInfo.landscape.waterGlints > 100);
+  scene._bridges();
+  assert.equal(scene.worldInfo.bridges.roads, scene.game.roads.filter(road => road.bridge).length);
+  assert.ok(scene._bridgePiers.count > 0);
   scene.reducedMotion=true;scene._landscapeStep(0);
   const calm=Array.from(scene._riverFlow.instanceMatrix.array);scene._landscapeStep(20);
   assert.deepEqual(Array.from(scene._riverFlow.instanceMatrix.array),calm,'calm motion holds water glints still');
@@ -265,7 +254,7 @@ test('confetti renders at the vertical shot impact while ordinary confetti keeps
   scene._confetti.getMatrixAt(0, matrix); position.setFromMatrixPosition(matrix);
   assert.ok(Math.abs(position.y - 5.6) < 0.00001);
   scene._confetti.getMatrixAt(1, matrix); position.setFromMatrixPosition(matrix);
-  assert.ok(Math.abs(position.y - 0.2) < 0.00001);
+  assert.ok(Math.abs(position.y - scene._surfaceY(54, 54) - .2) < .00001);
 });
 
 test('cannon shots render at their simulation arc height and reuse one bounded buffer', () => {

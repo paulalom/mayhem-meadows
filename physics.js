@@ -34,6 +34,27 @@
   const vectorDistance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
   const restDistance = (a, b) => Math.hypot(ANATOMY[a][0] - ANATOMY[b][0], ANATOMY[a][1] - ANATOMY[b][1], ANATOMY[a][2] - ANATOMY[b][2]);
 
+  function surfaceHeight(terrain, x, z, reference) {
+    if (!terrain) return 0;
+    const sample = typeof terrain.surfaceHeight === 'function' ? terrain.surfaceHeight : terrain.heightAt;
+    return typeof sample === 'function' ? finite(sample.call(terrain, x * UNIT, z * UNIT, reference)) : 0;
+  }
+
+  function surfaceContact(point, radius, terrain) {
+    const height = surfaceHeight(terrain, point.x, point.z, point.y);
+    const sampler = terrain && (terrain.surfaceNormalAt || terrain.normalAt);
+    const sampled = typeof sampler === 'function' ? sampler.call(terrain, point.x * UNIT, point.z * UNIT, point.y) : null;
+    let x = finite(sampled && sampled.x), y = finite(sampled && sampled.y, 1), z = finite(sampled && sampled.z);
+    const length = Math.hypot(x, y, z);
+    if (length < 0.000001 || y <= 0.05) { x = 0; y = 1; z = 0; }
+    else { x /= length; y /= length; z /= length; }
+    // The shared sampler supplies the rendered triangle's plane. Sphere
+    // clearance is measured along that plane's normal, not vertically; this
+    // keeps shoulders and bone interiors outside hills and bridge decks.
+    const depth = radius - (point.y - height - FLOOR) * y;
+    return depth > 0 ? { x, y, z, depth, box: { vx: 0, vy: 0, vz: 0 } } : null;
+  }
+
   function upright(x, z, angle, elevation = 0) {
     const c = Math.cos(angle), s = Math.sin(angle), pose = {};
     for (const name of JOINT_NAMES) {
@@ -121,12 +142,12 @@
     return { x: nx * m[0] + ny * m[1] + nz * m[2], y: nx * m[3] + ny * m[4] + nz * m[5], z: nx * m[6] + ny * m[7] + nz * m[8], depth };
   }
 
-  function horizontalBox(point, radius, box, landedHeight = point.y) {
+  function horizontalBox(point, radius, box, landedHeight = point.y, groundHeight = 0) {
     // Grounded recovery only needs clearance from volumes that could reach
     // the standing person. A flying car overhead must not push them sideways.
     // A person who actually landed on an elevated roof must leave its edge
     // before getting up on the ground. People beneath it keep their clearance.
-    if ((box.y - box.extentY >= PERSON_HEIGHT + FLOOR && landedHeight < box.y) || box.y + box.extentY <= FLOOR) return null;
+    if ((box.y - box.extentY >= groundHeight + PERSON_HEIGHT + FLOOR && landedHeight < box.y) || box.y + box.extentY <= groundHeight + FLOOR) return null;
     const m = box.basis, forward = Math.hypot(m[0], m[6]);
     if (box.shape === 'cylinder' && Math.abs(m[4]) > 0.9999) {
       const dx = point.x - box.x, dz = point.z - box.z, length = Math.hypot(dx, dz), depth = radius + Math.max(box.hx, box.hz) - length;
@@ -163,11 +184,12 @@
     limitVelocity(j);
   }
 
-  function projectJoint(j, boxes, size) {
-    const ground = FLOOR + j.radius;
-    if (j.y < ground) {
-      const depth = ground - j.y; j.y += depth; j.py += depth;
-      contactVelocity(j, { x: 0, y: 1, z: 0 }, { vx: 0, vz: 0 }, 0.12, 0.12);
+  function projectJoint(j, boxes, size, terrain) {
+    const ground = surfaceContact(j, j.radius, terrain);
+    if (ground) {
+      j.x += ground.x * ground.depth; j.y += ground.y * ground.depth; j.z += ground.z * ground.depth;
+      j.px += ground.x * ground.depth; j.py += ground.y * ground.depth; j.pz += ground.z * ground.depth;
+      contactVelocity(j, ground, ground.box, 0.12, 0.12);
     }
     for (const [axis, previous] of [['x', 'px'], ['z', 'pz']]) {
       const value = clamp(j[axis], j.radius, size - j.radius), delta = value - j[axis];
@@ -182,7 +204,7 @@
     }
   }
 
-  function projectLimbs(body, boxes, size) {
+  function projectLimbs(body, boxes, size, terrain) {
     // Particle-only collision lets a shin cut through a corner. Two internal
     // samples on every physical bone distribute contacts to both endpoints.
     for (const part of BODYPARTS) {
@@ -190,7 +212,8 @@
       for (const t of [1 / 3, 2 / 3]) {
         const u = 1 - t, sample = { x: a.x * u + b.x * t, y: a.y * u + b.y * t, z: a.z * u + b.z * t };
         let contacts = [];
-        if (sample.y < FLOOR + part.radius) contacts.push({ x: 0, y: 1, z: 0, depth: FLOOR + part.radius - sample.y, box: { vx: 0, vz: 0 } });
+        const ground = surfaceContact(sample, part.radius, terrain);
+        if (ground) contacts.push(ground);
         for (const box of boxes) {
           const hit = sphereBox(sample, part.radius, box);
           if (hit) { hit.box = box; contacts.push(hit); }
@@ -206,7 +229,7 @@
         }
       }
     }
-    for (const j of body._points) projectJoint(j, boxes, size);
+    for (const j of body._points) projectJoint(j, boxes, size, terrain);
   }
 
   class RagdollWorld {
@@ -229,7 +252,9 @@
         return true;
       }
       if (this.bodies.size >= this.maxBodies) return false;
-      const angle = finite(entity.angle), elevation = clamp(finite(entity.elevation) + finite(options.height), 0, 40);
+      const angle = finite(entity.angle), terrain = options.terrain;
+      const ground = surfaceHeight(terrain, entity.x / UNIT, entity.y / UNIT, entity.elevation);
+      const elevation = clamp(Math.max(finite(entity.elevation, ground), ground) + finite(options.height), -100, 200);
       const pose = upright(entity.x / UNIT, entity.y / UNIT, angle, elevation);
       const joints = {};
       for (const name of JOINT_NAMES) {
@@ -270,7 +295,9 @@
         // worlds. Roof trim and flagpoles remain cosmetic details.
         const height = clamp(finite(building.height, [5.3, 7, 4.5, 6.2, 8.2][i % 5]), 0.4, 40);
         if (![building.x, building.y, building.w, building.h].every(Number.isFinite)) return;
-        boxes.push(prepareBox({ x: (building.x + building.w / 2) / UNIT, z: (building.y + building.h / 2) / UNIT, y: height / 2, hx: building.w / UNIT / 2, hy: height / 2, hz: building.h / UNIT / 2, angle: finite(building.angle), dynamic: false }));
+        const elevation = Number.isFinite(building.elevation) ? building.elevation : surfaceHeight(environment.terrain, (building.x + building.w / 2) / UNIT, (building.y + building.h / 2) / UNIT);
+        const bottom = Math.min(elevation, finite(building.foundationBottom, elevation)), top = elevation + height;
+        boxes.push(prepareBox({ x: (building.x + building.w / 2) / UNIT, z: (building.y + building.h / 2) / UNIT, y: (bottom + top) / 2, hx: building.w / UNIT / 2, hy: (top - bottom) / 2, hz: building.h / UNIT / 2, angle: finite(building.angle), dynamic: false }));
       });
       (environment.staticObjects || []).forEach(object => {
         if (!object || object.destroyed || !Number.isFinite(object.x) || !Number.isFinite(object.y)) return;
@@ -281,11 +308,12 @@
           half: [finite(object.width, 10) / UNIT / 2, finite(object.height, 1) / 2, finite(object.depth, 10) / UNIT / 2]
         }];
         const basis = boxBasis(object.orientation, finite(object.angle));
+        const elevation = Number.isFinite(object.elevation) ? object.elevation : surfaceHeight(environment.terrain, object.x / UNIT, object.y / UNIT);
         for (const part of parts) {
           if (!part || !Array.isArray(part.offset) || !Array.isArray(part.half) || part.offset.length !== 3 || part.half.length !== 3 || !part.offset.concat(part.half).every(Number.isFinite) || part.half.some(n => n <= 0)) continue;
           const [ox, oy, oz] = part.offset;
           boxes.push(prepareBox({ x: object.x / UNIT + ox * basis[0] + oy * basis[1] + oz * basis[2],
-            y: finite(object.elevation) + ox * basis[3] + oy * basis[4] + oz * basis[5],
+            y: elevation + ox * basis[3] + oy * basis[4] + oz * basis[5],
             z: object.y / UNIT + ox * basis[6] + oy * basis[7] + oz * basis[8],
             hx: part.half[0], hy: part.half[1], hz: part.half[2], shape: part.shape, angle: finite(object.angle), orientation: object.orientation, dynamic: false }));
         }
@@ -311,7 +339,7 @@
       return boxes.filter(box => Math.abs(p.x - box.x) <= box.extentX + 3 && Math.abs(p.z - box.z) <= box.extentZ + 3 && Math.abs(p.y - box.y) <= box.extentY + 3);
     }
 
-    _recovery(body, boxes, size) {
+    _recovery(body, boxes, size, terrain) {
       const pelvis = body.joints.pelvis;
       // Choose a standing centre near the landed pelvis, with shoulder-width
       // clearance. This also lets a character stand beside a stopped car.
@@ -319,11 +347,14 @@
       const margin = radius + 0.02 * CHARACTER_SCALE;
       const centre = { x: clamp(pelvis.x, margin, size - margin), y: ANATOMY.pelvis[1], z: clamp(pelvis.z, margin, size - margin) };
       for (let pass = 0; pass < 3; pass++) for (const box of boxes) {
-        const hit = horizontalBox(centre, radius, box, pelvis.y);
+        const ground = surfaceHeight(terrain, centre.x, centre.z, pelvis.y);
+        centre.y = ground + ANATOMY.pelvis[1];
+        const hit = horizontalBox(centre, radius, box, pelvis.y, ground);
         if (!hit) continue;
         centre.x += hit.x * hit.depth; centre.z += hit.z * hit.depth;
       }
-      body.standingPose = upright(centre.x, centre.z, body.angle);
+      centre.x = clamp(centre.x, margin, size - margin); centre.z = clamp(centre.z, margin, size - margin);
+      body.standingPose = upright(centre.x, centre.z, body.angle, surfaceHeight(terrain, centre.x, centre.z, pelvis.y));
       const amount = 1 - Math.exp(-STEP * (12 + body.recovery * 34));
       for (const name of JOINT_NAMES) {
         const j = body.joints[name], target = body.standingPose[name];
@@ -356,7 +387,7 @@
       }
     }
 
-    _simulate(boxes, size) {
+    _simulate(boxes, size, terrain) {
       const bodies = Array.from(this.bodies.values());
       for (const body of bodies) {
         body.age += STEP; body.phase = body.age + 1e-8 < 3 ? 'fall' : 'recover';
@@ -364,7 +395,7 @@
         body._near = this._nearby(body, boxes);
         for (const j of body._points) {
           if (![j.x, j.y, j.z, j.px, j.py, j.pz].every(Number.isFinite)) {
-            const p = upright(body._lastSafeX, body._lastSafeZ, body.angle)[JOINT_NAMES[body._points.indexOf(j)]];
+            const p = upright(body._lastSafeX, body._lastSafeZ, body.angle, surfaceHeight(terrain, body._lastSafeX, body._lastSafeZ))[JOINT_NAMES[body._points.indexOf(j)]];
             j.x = j.px = p.x; j.y = j.py = p.y; j.z = j.pz = p.z;
           }
           limitVelocity(j);
@@ -372,15 +403,15 @@
           j.px = j.x; j.py = j.y; j.pz = j.z;
           j.x += vx; j.y += vy - 9.81 * STEP * STEP; j.z += vz;
         }
-        if (body.phase === 'recover') this._recovery(body, body._near, size);
+        if (body.phase === 'recover') this._recovery(body, body._near, size, terrain);
       }
       for (let iteration = 0; iteration < 6; iteration++) {
         for (const body of bodies) {
           for (const c of body._constraints) distanceConstraint(body.joints[c.a], body.joints[c.b], c.min, c.max);
           for (const c of body._bends) distanceConstraint(body.joints[c.a], body.joints[c.b], c.min, c.max, 0.7);
           this._selfContacts(body);
-          if (iteration === 2 || iteration === 5) projectLimbs(body, body._near, size);
-          else for (const j of body._points) projectJoint(j, body._near, size);
+          if (iteration === 2 || iteration === 5) projectLimbs(body, body._near, size, terrain);
+          else for (const j of body._points) projectJoint(j, body._near, size, terrain);
         }
         if (iteration === 2) this._bodyContacts(bodies);
       }
@@ -389,7 +420,7 @@
         const p = body.joints.pelvis;
         body._lastSafeX = p.x; body._lastSafeZ = p.z;
         body.owner.x = p.x * UNIT; body.owner.y = p.z * UNIT;
-        body.owner.elevation = Math.max(0, p.y - ANATOMY.pelvis[1]);
+        body.owner.elevation = Math.max(surfaceHeight(terrain, p.x, p.z, p.y), p.y - ANATOMY.pelvis[1]);
         body.owner.verticalVelocity = (p.y - p.py) / STEP;
         for (const j of body._points) limitVelocity(j);
       }
@@ -400,9 +431,9 @@
       this._accumulator += Math.min(dt, 0.25);
       const boxes = this._colliders(environment), size = clamp(finite(environment.size, 2160) / UNIT, 4, 1000), finished = [];
       while (this._accumulator + 1e-10 >= STEP) {
-        this._simulate(boxes, size); this._accumulator -= STEP;
+        this._simulate(boxes, size, environment.terrain); this._accumulator -= STEP;
         for (const [id, body] of this.bodies) {
-          if (body.age + 1e-8 >= 3.8) { this.bodies.delete(id); body.owner.elevation = 0; body.owner.verticalVelocity = 0; finished.push(body); }
+          if (body.age + 1e-8 >= 3.8) { this.bodies.delete(id); body.owner.elevation = surfaceHeight(environment.terrain, body.owner.x / UNIT, body.owner.y / UNIT, body.owner.elevation); body.owner.verticalVelocity = 0; finished.push(body); }
         }
       }
       return finished;

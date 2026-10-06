@@ -488,6 +488,21 @@
     graphicsError('The 3D graphics connection was interrupted. Reload to get back into town. Your saved progress is safe.');
   });
   const minimap = $('minimap-canvas'), mini = minimap.getContext('2d');
+  const terrainMap = document.createElement('canvas');
+  if (game.world.terrain) {
+    const ground = game.world.terrain, n = ground.count;
+    terrainMap.width = terrainMap.height = n;
+    const context = terrainMap.getContext('2d'), pixels = context.createImageData(n, n);
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+      const index = y * n + x, height = ground.heights[index], water = height < .05;
+      const shade = Math.min(1, Math.max(0, height / 42));
+      const color = water ? [40, 113, 147] : height < .9 ? [198, 191, 143]
+        : [91 + shade * 62, 140 + shade * 26, 94 + shade * 40];
+      for (let channel = 0; channel < 3; channel++) pixels.data[index * 4 + channel] = color[channel];
+      pixels.data[index * 4 + 3] = 255;
+    }
+    context.putImageData(pixels, 0, 0);
+  }
   function resize() {
     const rect = canvas.getBoundingClientRect();
     width = Math.max(1, rect.width); height = Math.max(1, rect.height);
@@ -503,6 +518,8 @@
   function drawMinimap() {
     const r = minimap.getBoundingClientRect(), w = r.width, h = r.height, scale = w / SIZE;
     mini.clearRect(0, 0, w, h); mini.fillStyle = '#608d76'; mini.fillRect(0, 0, w, h);
+    if (terrainMap.width > 0 && game.world.terrain) mini.drawImage(terrainMap, 0, 0, w, h);
+    mini.globalAlpha = game.world.terrain ? .22 : 1;
     for (const area of game.areas || []) {
       mini.fillStyle = DISTRICTS[area.district]?.mapColor || '#7e9f83';
       if (area.points?.length) {
@@ -511,6 +528,7 @@
         mini.closePath(); mini.fill();
       }
     }
+    mini.globalAlpha = 1;
     mini.strokeStyle = '#3b4655'; mini.lineCap = 'round'; mini.lineJoin = 'round';
     for (const road of game.roads) {
       mini.lineWidth = Math.max(1.1, road.width * scale);

@@ -27,8 +27,8 @@
       this.renderer.shadowMap.type = T.PCFSoftShadowMap;
       this.renderer.setClearColor('#c4dce5');
       this.scene = new T.Scene();
-      this.scene.fog = new T.Fog('#c4dce5', 85, 330);
-      this.camera = new T.PerspectiveCamera(57, 1, 0.06, 460);
+      this.scene.fog = new T.Fog('#c4dce5', 95, 650);
+      this.camera = new T.PerspectiveCamera(57, 1, 0.06, 950);
       this.camera.position.set(game.current.x / UNIT, 3.4, game.current.y / UNIT + 5.7);
       this._yaw = -Math.PI / 2;
       this._requestedYaw = this._yaw;
@@ -258,14 +258,152 @@
 
     _town() {
       const size = root.MayhemCore.SIZE / UNIT;
-      this._staticBox('#a7c991', size / 2, -0.15, size / 2, size + 6, 0.3, size + 6, false);
+      this._landscape(size);
       this._roads();
       this._blockGrounds();
       for (let i = 0; i < this.game.buildings.length; i++) this._building(this.game.buildings[i], i);
       this._park();
       this._physicalProps();
       this._services();
-      this._landscape(size);
+    }
+
+    _groundY(x, z) {
+      return this.game.world?.terrain?.heightAt(x * UNIT, z * UNIT) ?? 0;
+    }
+
+    _surfaceY(x, z) {
+      return this.game.world?.terrain?.surfaceHeight(x * UNIT, z * UNIT) ?? this._groundY(x, z);
+    }
+
+    _surfaceQuaternion(x, z, heading, quaternion) {
+      const T = this.T;
+      if (!this._surfaceFrame) this._surfaceFrame = { forward: new T.Vector3(), side: new T.Vector3(), up: new T.Vector3(), matrix: new T.Matrix4() };
+      const frame = this._surfaceFrame, c = Math.cos(heading), s = Math.sin(heading), half = .4;
+      const along = (this._surfaceY(x + c * half, z + s * half) - this._surfaceY(x - c * half, z - s * half)) / (half * 2);
+      const across = (this._surfaceY(x - s * half, z + c * half) - this._surfaceY(x + s * half, z - c * half)) / (half * 2);
+      frame.forward.set(c, along, s).normalize();
+      frame.side.set(-s, across, c).normalize();
+      frame.up.crossVectors(frame.side, frame.forward).normalize();
+      frame.side.crossVectors(frame.forward, frame.up).normalize();
+      frame.matrix.makeBasis(frame.forward, frame.up, frame.side);
+      return quaternion.setFromRotationMatrix(frame.matrix);
+    }
+
+    _surfaceBox(color, x, z, lift, width, height, depth, heading = 0) {
+      if (!this._groundDummy) this._groundDummy = new this.T.Object3D();
+      const object = this._groundDummy, material = this._material(color);
+      object.position.set(x, this._surfaceY(x, z) + lift, z);
+      this._surfaceQuaternion(x, z, heading, object.quaternion);
+      object.scale.set(width, height, depth); object.updateMatrix();
+      const key = material.uuid + ':false';
+      if (!this._staticParts.has(key)) this._staticParts.set(key, { material, shadow: false, parts: [] });
+      this._staticParts.get(key).parts.push({ geometry: this._cube, matrix: object.matrix.clone() });
+    }
+
+    _surfacePatch(batch, polygon, lift) {
+      const field = this.game.world?.terrain;
+      const append = points => {
+        points = points.filter((point, i) => {
+          const previous = points[(i + points.length - 1) % points.length];
+          return Math.hypot(point.x - previous.x, point.z - previous.z) > 1e-8;
+        });
+        if (points.length < 3) return;
+        let area = 0;
+        for (let i = 0; i < points.length; i++) {
+          const a = points[i], b = points[(i + 1) % points.length];
+          area += a.x * b.z - b.x * a.z;
+        }
+        if (Math.abs(area) < .00000001) return;
+        const start = batch.positions.length / 3;
+        for (const point of points) batch.positions.push(point.x, this._surfaceY(point.x, point.z) + lift, point.z);
+        for (let i = 1; i < points.length - 1; i++) {
+          if (area > 0) batch.indices.push(start, start + i + 1, start + i);
+          else batch.indices.push(start, start + i, start + i + 1);
+        }
+      };
+      if (!field) { append(polygon); return; }
+      const step = field.step / UNIT, last = field.count - 2;
+      const minX = Math.max(0, Math.floor(Math.min(...polygon.map(point => point.x)) / step));
+      const maxX = Math.min(last, Math.floor(Math.max(...polygon.map(point => point.x)) / step));
+      const minZ = Math.max(0, Math.floor(Math.min(...polygon.map(point => point.z)) / step));
+      const maxZ = Math.min(last, Math.floor(Math.max(...polygon.map(point => point.z)) / step));
+      const clip = (subject, triangle) => {
+        let points = subject;
+        for (let edge = 0; edge < 3 && points.length; edge++) {
+          const a = triangle[edge], b = triangle[(edge + 1) % 3], output = [];
+          const distance = point => (b.x - a.x) * (point.z - a.z) - (b.z - a.z) * (point.x - a.x);
+          let previous = points[points.length - 1], previousDistance = distance(previous);
+          for (const point of points) {
+            const currentDistance = distance(point), inside = currentDistance >= -1e-8, previousInside = previousDistance >= -1e-8;
+            if (inside !== previousInside) {
+              const fraction = previousDistance / (previousDistance - currentDistance);
+              output.push({ x: mix(previous.x, point.x, fraction), z: mix(previous.z, point.z, fraction) });
+            }
+            if (inside) output.push(point);
+            previous = point; previousDistance = currentDistance;
+          }
+          points = output;
+        }
+        return points;
+      };
+      // Each pavement face stays inside one physical heightmap triangle. Merely
+      // projecting the corners of a wide road quad lets grass or the underlying
+      // sidewalk intersect its middle on a hill.
+      for (let row = minZ; row <= maxZ; row++) {
+        for (let col = minX; col <= maxX; col++) {
+          const a = { x: col * step, z: row * step }, b = { x: (col + 1) * step, z: row * step };
+          const c = { x: col * step, z: (row + 1) * step }, d = { x: (col + 1) * step, z: (row + 1) * step };
+          append(clip(polygon, [a, b, c]));
+          append(clip(polygon, [d, c, b]));
+        }
+      }
+    }
+
+    _bridges() {
+      const T = this.T, underside = [], piers = [], roads = this.game.roads.filter(road => road.bridge);
+      const field = this.game.world?.terrain;
+      if (!field || !roads.length) return;
+      const group = new T.Group();
+      group.name = 'Supported bridge decks';
+      this._bridgeGroup = group;
+      this.scene.add(group);
+      for (const road of roads) {
+        let distance = 0, nextPier = 7;
+        const width = road.width / UNIT + SIDEWALK_WIDTH * 2;
+        for (let i = 1; i < road.points.length; i++) {
+          const a = road.points[i - 1], b = road.points[i], dx = (b.x - a.x) / UNIT, dz = (b.y - a.y) / UNIT;
+          const ay = a.elevation ?? field.surfaceHeight(a.x, a.y), by = b.elevation ?? field.surfaceHeight(b.x, b.y);
+          const length = Math.hypot(dx, dz), x = (a.x + b.x) / UNIT / 2, z = (a.y + b.y) / UNIT / 2;
+          const height = (ay + by) / 2, pitch = Math.atan2(by - ay, length), heading = Math.atan2(dz, dx);
+          this._dummy.position.set(x, height - .16, z);
+          this._dummy.rotation.set(0, -heading, pitch);
+          this._dummy.scale.set(Math.hypot(length, by - ay) + .035, .32, width);
+          this._dummy.updateMatrix(); underside.push(this._dummy.matrix.clone());
+          while (nextPier < distance + length) {
+            const fraction = (nextPier - distance) / length, px = mix(a.x, b.x, fraction) / UNIT, pz = mix(a.y, b.y, fraction) / UNIT;
+            const top = mix(ay, by, fraction) - .32, bottom = this._groundY(px, pz);
+            if (top - bottom > .6) {
+              this._dummy.position.set(px, (top + bottom) / 2, pz);
+              this._dummy.rotation.set(0, -heading, 0);
+              this._dummy.scale.set(.70, top - bottom, Math.max(1, width - .8));
+              this._dummy.updateMatrix(); piers.push(this._dummy.matrix.clone());
+            }
+            nextPier += 8;
+          }
+          distance += length;
+        }
+      }
+      const instances = (name, matrices, color) => {
+        const mesh = new T.InstancedMesh(this._cube, this._material(color), matrices.length);
+        mesh.name = name; mesh.castShadow = true; mesh.receiveShadow = true;
+        matrices.forEach((matrix, i) => mesh.setMatrixAt(i, matrix));
+        mesh.computeBoundingSphere(); group.add(mesh);
+        return mesh;
+      };
+      this._bridgeUndersides = instances('Bridge undersides', underside, '#b0aa96');
+      this._bridgePiers = instances('Bridge piers', piers, '#bcb39e');
+      this._bridgeAimMeshes = [this._bridgeUndersides, this._bridgePiers];
+      if (this._worldInfo) this._worldInfo.bridges = { roads: roads.length, deckSegments: underside.length, piers: piers.length };
     }
 
     _roads() {
@@ -282,7 +420,7 @@
       const asphalt = surface('Curved roads', '#647b87');
       const curbs = surface('Curb edges', '#eee7d3');
       const ribbon = (batch, points, inside, outside, height) => {
-        const start = batch.positions.length / 3;
+        const edges = [];
         for (let i = 0; i < points.length; i++) {
           const previous = points[Math.max(0, i - 1)], next = points[Math.min(points.length - 1, i + 1)];
           const before = points[i].clone().sub(previous).normalize(), after = next.clone().sub(points[i]).normalize();
@@ -290,21 +428,16 @@
           if (i === points.length - 1) after.copy(before);
           const normal = new T.Vector2(-before.y - after.y, before.x + after.x).normalize();
           const divisor = Math.max(0.35, normal.dot(new T.Vector2(-after.y, after.x)));
-          for (const offset of [inside, outside]) {
-            batch.positions.push(points[i].x + normal.x * offset / divisor, height, points[i].y + normal.y * offset / divisor);
-          }
-          if (i < points.length - 1) {
-            const a = start + i * 2;
-            if (inside < outside) batch.indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
-            else batch.indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
-          }
+          edges.push([inside, outside].map(offset => ({ x: points[i].x + normal.x * offset / divisor, z: points[i].y + normal.y * offset / divisor })));
+        }
+        for (let i = 1; i < edges.length; i++) {
+          this._surfacePatch(batch, [edges[i - 1][0], edges[i - 1][1], edges[i][1], edges[i][0]], height);
         }
       };
       const disk = (batch, point, radius, height) => {
-        const start = batch.positions.length / 3, sides = 24;
-        batch.positions.push(point.x, height, point.y);
-        for (let i = 0; i <= sides; i++) batch.positions.push(point.x + Math.cos(i / sides * TAU) * radius, height, point.y + Math.sin(i / sides * TAU) * radius);
-        for (let i = 0; i < sides; i++) batch.indices.push(start, start + i + 2, start + i + 1);
+        const polygon = [], sides = 24;
+        for (let i = 0; i < sides; i++) polygon.push({ x: point.x + Math.cos(i / sides * TAU) * radius, z: point.y + Math.sin(i / sides * TAU) * radius });
+        this._surfacePatch(batch, polygon, height);
       };
       const junctions = new Map();
       const incident = (id, point, half) => {
@@ -328,7 +461,7 @@
           for (let at = 2.4 - travelled % 2.4; at < length; at += 2.4) {
             if (i === 1 && at < half + 0.9 || i === points.length - 1 && at > length - half - 0.9) continue;
             const p = a.clone().lerp(b, at / length);
-            this._static(this._cube, this._material('#f4df9e'), p.x, 0.059, p.y, 0.85, 0.01, 0.07, [0, -heading, 0], false);
+            this._surfaceBox('#f4df9e', p.x, p.y, .059, .85, .01, .07, heading);
           }
           travelled += length;
         }
@@ -346,7 +479,7 @@
             const across = stripe * 0.65;
             const x = a.x / UNIT + Math.cos(heading) * along - Math.sin(heading) * across;
             const z = a.y / UNIT + Math.sin(heading) * along + Math.cos(heading) * across;
-            this._static(this._cube, this._material('#f3efd9'), x, 0.066, z, 0.65, 0.012, 0.36, [0, -heading, 0], false);
+            this._surfaceBox('#f3efd9', x, z, .066, .65, .012, .36, heading);
           }
         }
       }
@@ -361,9 +494,10 @@
         mesh.receiveShadow = true;
         group.add(mesh);
       }
+      this._bridges();
       if (this._worldInfo) Object.assign(this._worldInfo, {
         worldSize: root.MayhemCore.SIZE / UNIT, sidewalkWidth: SIDEWALK_WIDTH, roads: roads.length, nodeCount: junctions.size,
-        roadGraph: roads.map(r => ({ id: r.id, a: r.a, b: r.b, width: r.width / UNIT, district: r.district, points: r.points.map(p => ({ x: p.x / UNIT, z: p.y / UNIT })) })),
+        roadGraph: roads.map(r => ({ id: r.id, a: r.a, b: r.b, width: r.width / UNIT, district: r.district, bridge: Boolean(r.bridge), points: r.points.map(p => ({ x: p.x / UNIT, y: this._surfaceY(p.x / UNIT, p.y / UNIT), z: p.y / UNIT })) })),
         curvedRoads: roads.filter(r => {
           const a = r.points[0], b = r.points[r.points.length - 1], length = Math.hypot(b.x - a.x, b.y - a.y);
           return r.points.some(p => Math.abs((p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x)) / Math.max(1, length) > 5);
@@ -386,7 +520,7 @@
             const cx = (drive.x + drive.w / 2) / UNIT, cz = (drive.y + drive.h / 2) / UNIT;
             for (const side of [-1, 1]) {
               const offset = side * drive.w / UNIT * .27;
-              this._static(this._cube, this._material('#b6b7a3'), cx + cosine * offset, .034, cz + sine * offset, .21, .008, drive.h / UNIT, [0, -yaw, 0], false);
+              this._surfaceBox('#b6b7a3', cx + cosine * offset, cz + sine * offset, .034, .21, .008, drive.h / UNIT, yaw);
             }
           }
         }
@@ -399,15 +533,22 @@
         const cx = (bay.x + bay.w / 2) / UNIT, cz = (bay.y + bay.h / 2) / UNIT;
         for (const side of [-1, 1]) {
           const offset = side * (bay.h / 2 - 2) / UNIT;
-          this._static(this._cube, this._material('#f3efd9'), cx - s * offset, 0.039, cz + c * offset,
-            bay.w / UNIT - 0.12, 0.008, 0.05, [0, -yaw, 0], false);
+          this._surfaceBox('#f3efd9', cx - s * offset, cz + c * offset, .039, bay.w / UNIT - .12, .008, .05, yaw);
         }
       }
       if (this._worldInfo) this._worldInfo.parkingBays = this.game.world?.parkingBays?.length || 0;
     }
 
     _groundRect(rect, color, height) {
-      this._static(this._cube, this._material(color), (rect.x + rect.w / 2) / UNIT, height, (rect.y + rect.h / 2) / UNIT, rect.w / UNIT, 0.012, rect.h / UNIT, [0, -(rect.angle || 0), 0], false);
+      const T = this.T, width = rect.w / UNIT, depth = rect.h / UNIT, yaw = rect.angle || 0;
+      const cx = (rect.x + rect.w / 2) / UNIT, cz = (rect.y + rect.h / 2) / UNIT, c = Math.cos(yaw), s = Math.sin(yaw);
+      const batch = { positions: [], indices: [] };
+      const polygon = [[-.5, -.5], [.5, -.5], [.5, .5], [-.5, .5]].map(([px, pz]) => ({ x: cx + px * width * c - pz * depth * s, z: cz + px * width * s + pz * depth * c }));
+      this._surfacePatch(batch, polygon, height);
+      const geometry = this._geometry(new T.BufferGeometry());
+      geometry.setAttribute('position', new T.Float32BufferAttribute(batch.positions, 3));
+      geometry.setIndex(batch.indices); geometry.computeVertexNormals();
+      this._static(geometry, this._material(color), 0, 0, 0, 1, 1, 1, null, false);
     }
 
     _roofGeometry() {
@@ -427,35 +568,38 @@
       const x = building.x / UNIT, z = building.y / UNIT, w = building.w / UNIT, d = building.h / UNIT;
       const height = building.height || 5.3, style = building.style || 'shop';
       const cx = x + w / 2, cz = z + d / 2, cottage = style === 'cottage';
+      const base = building.elevation ?? this._groundY(cx, cz);
+      const bottom = building.foundationBottom ?? base;
       const wallHeight = cottage ? Math.max(1.8, height - 1.0) : height - 0.18;
       const roofColor = cottage ? ['#8c746c', '#6a8583', '#ad7e72'][index % 3] : '#778b91';
       const rotation = building.angle || 0, cosine = Math.cos(rotation), sine = Math.sin(rotation);
       const point = (px, pz) => ({ x: cx + (px - cx) * cosine - (pz - cz) * sine, z: cz + (px - cx) * sine + (pz - cz) * cosine });
       const box = (color, px, py, pz, sx, sy, sz, shadow = true) => {
         const p = point(px, pz);
-        this._static(this._cube, typeof color === 'string' ? this._material(color) : color, p.x, py, p.z, sx, sy, sz, [0, -rotation, 0], shadow);
+        this._static(this._cube, typeof color === 'string' ? this._material(color) : color, p.x, base + py, p.z, sx, sy, sz, [0, -rotation, 0], shadow);
       };
       const sign = (text, px, py, pz, width, signHeight) => {
         const p = point(px, pz);
-        this._sign(text, p.x, py, p.z, -rotation, '#fff4d6', '#425963', width, signHeight);
+        this._sign(text, p.x, base + py, p.z, -rotation, '#fff4d6', '#425963', width, signHeight);
       };
       const halfX = w / 2 + .12, halfZ = d / 2 + .12;
       const extentX = Math.abs(cosine) * halfX + Math.abs(sine) * halfZ, extentZ = Math.abs(sine) * halfX + Math.abs(cosine) * halfZ;
       this._buildingVolumes.push({
-        id: building.id, cx, cz, halfX, halfZ, physicalHalfX: w / 2, physicalHalfZ: d / 2, height, angle: rotation, cosine, sine,
-        minX: cx - extentX, maxX: cx + extentX, minZ: cz - extentZ, maxZ: cz + extentZ, minY: -.2, maxY: height + .45
+        id: building.id, cx, cz, halfX, halfZ, physicalHalfX: w / 2, physicalHalfZ: d / 2, baseElevation: base, foundationBottom: bottom, height, angle: rotation, cosine, sine,
+        minX: cx - extentX, maxX: cx + extentX, minZ: cz - extentZ, maxZ: cz + extentZ, minY: bottom - .2, maxY: base + height + .45
       });
       if (this._buildingFrames) this._buildingFrames.set(building.id ?? index, {
-        center: { x: cx, y: height / 2, z: cz }, yaw: -rotation, front: point(cx, z + d), width: w, depth: d, height, style
+        center: { x: cx, y: base + height / 2, z: cz }, baseElevation: base, foundationBottom: bottom, yaw: -rotation, front: point(cx, z + d), width: w, depth: d, height, style
       });
+      if (base > bottom + .001) box('#c5bfad', cx, -(base - bottom) / 2, cz, w, base - bottom, d);
       box(building.color, cx, wallHeight / 2, cz, w, wallHeight, d);
       box('#f1ead8', cx, 0.18, cz, w + .08, .36, d + .08);
-      if (cottage) this._static(this._roofGeometry(), this._material(roofColor), cx, wallHeight, cz, w + .22, height - wallHeight, d + .22, [0, -rotation, 0]);
+      if (cottage) this._static(this._roofGeometry(), this._material(roofColor), cx, base + wallHeight, cz, w + .22, height - wallHeight, d + .22, [0, -rotation, 0]);
       else {
         box('#ddd9cc', cx, height - .09, cz, w + .15, .20, d + .15);
         box(roofColor, cx, height + .025, cz, Math.max(.2, w - .18), .045, Math.max(.2, d - .18));
       }
-      const warehouse = style === 'warehouse', floors = cottage ? 1 : Math.max(1, Math.floor((wallHeight - .5) / (warehouse ? 2.2 : 1.8)));
+      const warehouse = style === 'warehouse' || style === 'hangar', floors = cottage ? 1 : Math.max(1, Math.floor((wallHeight - .5) / (warehouse ? 2.2 : 1.8)));
       const alongX = Math.max(1, Math.floor(w / 1.6)), alongZ = Math.max(1, Math.floor(d / 1.6));
       for (let floor = 0; floor < floors; floor++) {
         const y = cottage ? 1.35 : 1.25 + floor * (warehouse ? 2.2 : 1.8);
@@ -490,138 +634,95 @@
         sign('12 : 00', cx, height - 1.15, z + d + .13, Math.min(2.5, w * .8), .8);
         box('#d6b276', cx, height + .18, cz, .12, .35, .12);
       }
+      if (style === 'control-tower') {
+        for (const side of [-1, 1]) {
+          box('#76a6b3', cx, height - 1.35, cz + side * (d / 2 + .03), w * .94, 1.15, .06, false);
+          box('#76a6b3', cx + side * (w / 2 + .03), height - 1.35, cz, .06, 1.15, d * .94, false);
+        }
+        sign('MEADOWS AIR', cx, 2.72, z + d + .11, Math.min(3.5, w * .88), .55);
+      }
     }
 
     _landscape(size) {
-      const T = this.T, landscape = new T.Group(), river = new T.Group();
-      const layout = this.game.world?.landscape || this.game.landscape || {};
-      landscape.name = 'Meadows hinterland';
-      river.name = 'Winding river';
+      const T = this.T, field = this.game.world?.terrain;
+      const landscape = new T.Group(), water = new T.Group();
+      landscape.name = 'Playable terrain';
+      water.name = 'Ocean and river';
       this._landscapeGroup = landscape;
-      this._riverGroup = river;
-      this.scene.add(landscape, river);
-      const riverPath = layout.riverPath || [
-        { x: (size + 18) * UNIT, y: -450 }, { x: (size + 30) * UNIT, y: size * UNIT * .15 },
-        { x: (size + 15) * UNIT, y: size * UNIT * .43 }, { x: (size + 27) * UNIT, y: size * UNIT * .7 },
-        { x: (size + 18) * UNIT, y: (size + 35) * UNIT }
-      ];
-      const riverWidth = (layout.riverWidth || 142) / UNIT;
-      const curve = new T.CatmullRomCurve3(riverPath.map(p => new T.Vector3(p.x / UNIT, -0.34, p.y / UNIT)));
-      const samples = curve.getPoints(120);
-      const riverDistance = (x, z) => Math.sqrt(Math.min(...samples.map(p => (x - p.x) ** 2 + (z - p.z) ** 2)));
-      const terrainHeight = (x, z) => {
-        const edge = Math.hypot(Math.max(0, -x, x - size), Math.max(0, -z, z - size));
-        const rise = Math.min(1, edge / 24);
-        let y = rise * rise * (3.2 + Math.sin(x / 17) * 2.7 + Math.cos(z / 21) * 2.1 + Math.sin((x + z) / 31) * 1.8);
-        const distance = riverDistance(x, z);
-        if (distance < 9) y = mix(-0.64, y, clamp((distance - 3.6) / 5.4, 0, 1));
-        return y;
-      };
-      const positions = [], colors = [], indices = [], start = -96, step = 8, count = Math.ceil((size + 192) / step) + 1;
+      this._riverGroup = water;
+      this.scene.add(landscape, water);
+      if (!field) return;
+      const count = field.count, step = field.step / UNIT, total = count * count;
+      const positions = new Float32Array(total * 3), colors = new Float32Array(total * 3);
+      const indices = new Uint32Array((count - 1) ** 2 * 6);
+      const sand = new T.Color('#dacda3'), grass = new T.Color('#a5c58c'), forest = new T.Color('#78a382'), rock = new T.Color('#a6aba2');
+      let low = Infinity, high = -Infinity, at = 0;
       for (let row = 0; row < count; row++) for (let col = 0; col < count; col++) {
-        const x = start + col * step, z = start + row * step, y = terrainHeight(x, z);
-        positions.push(x, y, z);
-        const color = new T.Color(y > 5 ? '#9fb59c' : '#a8c491');
-        colors.push(color.r, color.g, color.b);
-      }
-      for (let row = 0; row < count - 1; row++) for (let col = 0; col < count - 1; col++) {
-        const x = start + (col + 0.5) * step, z = start + (row + 0.5) * step;
-        // Skip any tile which overlaps the flat playable map, including edge
-        // tiles. Scenic slopes must never show through the drivable ground.
-        if (x + step / 2 > 0 && x - step / 2 < size && z + step / 2 > 0 && z - step / 2 < size) continue;
-        const a = row * count + col;
-        indices.push(a, a + count, a + 1, a + 1, a + count, a + count + 1);
-      }
-      const terrain = this._geometry(new T.BufferGeometry());
-      terrain.setAttribute('position', new T.Float32BufferAttribute(positions, 3));
-      terrain.setAttribute('color', new T.Float32BufferAttribute(colors, 3));
-      terrain.setIndex(indices);
-      terrain.computeVertexNormals();
-      const terrainMaterial = new T.MeshLambertMaterial({ vertexColors: true, flatShading: true });
-      this._materials.set('terrain', terrainMaterial);
-      const terrainMesh = new T.Mesh(terrain, terrainMaterial);
-      terrainMesh.name = 'Rolling terrain';
-      terrainMesh.receiveShadow = true;
-      landscape.add(terrainMesh);
-      const ribbon = (width, y, color, name) => {
-        const points = [], faces = [];
-        for (let i = 0; i < samples.length; i++) {
-          const p = samples[i], tangent = curve.getTangent(i / (samples.length - 1)), nx = -tangent.z, nz = tangent.x;
-          points.push(p.x + nx * width / 2, y, p.z + nz * width / 2, p.x - nx * width / 2, y, p.z - nz * width / 2);
-          if (i < samples.length - 1) { const a = i * 2; faces.push(a, a + 2, a + 1, a + 1, a + 2, a + 3); }
+        const index = row * count + col, height = field.heights[index];
+        positions.set([col * step, height, row * step], index * 3);
+        low = Math.min(low, height); high = Math.max(high, height);
+        const dx = (field.heights[row * count + Math.min(count - 1, col + 1)] - field.heights[row * count + Math.max(0, col - 1)]) / (step * 2);
+        const dz = (field.heights[Math.min(count - 1, row + 1) * count + col] - field.heights[Math.max(0, row - 1) * count + col]) / (step * 2);
+        const color = grass.clone();
+        if (height < 2.2) color.lerp(sand, clamp((2.2 - height) / 2.2, 0, 1));
+        else color.lerp(forest, clamp((height - 6) / 30, 0, .7));
+        color.lerp(rock, clamp((Math.hypot(dx, dz) - .32) * 1.5, 0, .9));
+        colors.set([color.r, color.g, color.b], index * 3);
+        if (row < count - 1 && col < count - 1) {
+          // Cannon's anti-diagonal splits each cell across highX/lowY and
+          // lowX/highY. The visible triangles use exactly those vertices.
+          indices.set([index, index + count, index + 1, index + count + 1, index + 1, index + count], at);
+          at += 6;
         }
-        const geometry = this._geometry(new T.BufferGeometry());
-        geometry.setAttribute('position', new T.Float32BufferAttribute(points, 3));
-        geometry.setIndex(faces);
-        geometry.computeVertexNormals();
-        const mesh = new T.Mesh(geometry, this._material(color));
-        mesh.name = name;
-        mesh.receiveShadow = true;
-        river.add(mesh);
-        return mesh;
-      };
-      ribbon(riverWidth + 2.5, -0.40, '#d9cba6', 'River bank');
-      this._riverSurface = ribbon(riverWidth, -0.31, '#79bac7', 'River water');
-      this._riverCurve = curve;
-      this._riverFlow = new T.InstancedMesh(this._cube, this._material('#b8dde0', { unlit: true }), 18);
+      }
+      const geometry = this._geometry(new T.BufferGeometry());
+      geometry.setAttribute('position', new T.BufferAttribute(positions, 3));
+      geometry.setAttribute('color', new T.BufferAttribute(colors, 3));
+      geometry.setIndex(new T.BufferAttribute(indices, 1));
+      geometry.computeVertexNormals(); geometry.computeBoundingSphere();
+      const material = new T.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+      this._materials.set('terrain', material);
+      this._terrainMesh = new T.Mesh(geometry, material);
+      this._terrainMesh.name = 'Shared heightmap';
+      this._terrainMesh.receiveShadow = true;
+      landscape.add(this._terrainMesh);
+      const waterLevel = field.waterLevel ?? 0;
+      const waterGeometry = this._geometry(new T.PlaneGeometry(size + 240, size + 240));
+      this._riverSurface = new T.Mesh(waterGeometry, this._material('#7eb9c7'));
+      this._riverSurface.name = 'Coastal water';
+      this._riverSurface.rotation.x = -Math.PI / 2;
+      this._riverSurface.position.set(size / 2, waterLevel, size / 2);
+      water.add(this._riverSurface);
+      // Only glints are animated; the large sea and river remain one surface.
+      // Each glint starts on a water cell, including the southern ocean.
+      this._waterGlints = [];
+      for (let row = 2; row < count - 2; row += 7) for (let col = 2; col < count - 2; col += 7) {
+        const x = (col + Math.sin(row * 2) * .8) * step, z = (row + Math.cos(col * 3) * .8) * step;
+        if (field.isWater(x * UNIT, z * UNIT)) this._waterGlints.push({ x, z, phase: col * .67 + row });
+      }
+      this._riverFlow = new T.InstancedMesh(this._cube, this._material('#b8dde0', { unlit: true }), this._waterGlints.length);
       this._riverFlow.name = 'Water glints';
-      river.add(this._riverFlow);
-      const bridgeAt = curve.getPoint(0.65), tangent = curve.getTangent(0.65), across = Math.atan2(tangent.x, -tangent.z);
-      const bridge = this._box(landscape, '#b9a180', bridgeAt.x, 1.1, bridgeAt.z, 10.2, 0.18, 1.3);
-      bridge.rotation.y = -across;
-      for (const side of [-1, 1]) {
-        const rail = this._box(landscape, '#ded2af', bridgeAt.x + Math.sin(across) * side * 0.58, 1.65, bridgeAt.z + Math.cos(across) * side * 0.58, 10.2, 0.08, 0.07);
-        rail.rotation.y = -across;
-      }
-      let treeCount = 0;
-      for (let i = 0; i < 150; i++) {
-        const a = i / 150 * TAU + Math.sin(i * 3.1) * .04;
-        const edgeRadius = size / 2 / Math.max(Math.abs(Math.cos(a)), Math.abs(Math.sin(a)));
-        const radius = edgeRadius + 8 + (i % 7) * 4;
-        const x = size / 2 + Math.cos(a) * radius, z = size / 2 + Math.sin(a) * radius;
-        if (x > -3 && x < size + 3 && z > -3 && z < size + 3 || riverDistance(x, z) < 7) continue;
-        const y = terrainHeight(x, z);
-        treeCount++;
-        this._static(this._cylinder, this._material('#987d62'), x, y + 0.8, z, 0.16, 1.6, 0.16);
-        this._static(this._cone, this._material(i % 2 ? '#719b84' : '#89ad87'), x, y + 2.8, z, 1.4, 4.5, 1.4);
-      }
-      const hills = layout.hills || Array.from({ length: 12 }, (_, i) => {
-        const a = i / 12 * TAU, radius = size * .75 + 85;
-        return { x: (size / 2 + Math.cos(a) * radius) * UNIT, y: (size / 2 + Math.sin(a) * radius) * UNIT, radius: 700, height: 14 + i % 3 * 4 };
-      });
-      for (let i = 0; i < hills.length; i++) {
-        const hill = hills[i], radius = hill.radius / UNIT;
-        let x = hill.x / UNIT, z = hill.y / UNIT;
-        const depth = radius * .8;
-        if (x + radius > 0 && x - radius < size && z + depth > 0 && z - depth < size) {
-          const exits = [
-            { distance: x + radius + 2, x: -radius - 2 }, { distance: size + radius + 2 - x, x: size + radius + 2 },
-            { distance: z + depth + 2, z: -depth - 2 }, { distance: size + depth + 2 - z, z: size + depth + 2 }
-          ];
-          const exit = exits.reduce((best, value) => value.distance < best.distance ? value : best);
-          x = exit.x ?? x; z = exit.z ?? z;
-        }
-        this._static(this._sphere, this._material(i % 2 ? '#a4bcb0' : '#b0c5bb'), x, 1, z, radius, hill.height, depth, null, false);
-      }
-      for (let i = 0; i < 10; i++) {
-        const x = -30 + i * (size + 60) / 10, z = i % 2 ? -32 : size + 30;
-        this._static(this._sphere, this._material('#edf2e9', { unlit: true }), x, 22 + i % 3 * 3, z, 6, 1.3, 2.1, null, false);
-      }
+      water.add(this._riverFlow);
+      const bridges = this.game.roads.filter(road => road.bridge);
       this._worldInfo.landscape = {
-        terrainVertices: positions.length / 3, riverSamples: samples.length, riverWidth, treeCount,
-        riverPath: riverPath.map(p => ({ x: p.x / UNIT, z: p.y / UNIT })), hillCount: hills.length
+        terrainVertices: total, terrainTriangles: indices.length / 3, minElevation: low, maxElevation: high,
+        terrainStep: step, waterLevel, waterGlints: this._waterGlints.length, bridgeCount: bridges.length,
+        mapWidth: (this.game.world.mapWidth || root.MayhemCore.SIZE) / UNIT,
+        mapHeight: (this.game.world.mapHeight || root.MayhemCore.SIZE) / UNIT
       };
       this._landscapeStep(0);
     }
 
     _landscapeStep(time) {
       if (!this._riverFlow) return;
-      const phase = this.reducedMotion ? 0 : time * 0.008;
-      for (let i = 0; i < 18; i++) {
-        const at = (i / 18 + phase) % 1, p = this._riverCurve.getPoint(at), tangent = this._riverCurve.getTangent(at);
-        this._dummy.position.set(p.x, -0.295, p.z);
-        this._dummy.rotation.set(0, -Math.atan2(tangent.z, tangent.x), 0);
-        this._dummy.scale.set(0.8, 0.008, 0.035);
+      const field = this.game.world.terrain, waterLevel = field.waterLevel ?? 0;
+      for (let i = 0; i < this._waterGlints.length; i++) {
+        const point = this._waterGlints[i], phase = this.reducedMotion ? 0 : Math.sin(time * .35 + point.phase) * .45;
+        const x = point.x + phase, z = point.z;
+        const visible = field.isWater(x * UNIT, z * UNIT);
+        this._dummy.position.set(x, waterLevel + .012, z);
+        this._dummy.rotation.set(0, -.2, 0);
+        this._dummy.scale.set(visible ? .6 + (i % 3) * .12 : 0, .008, .035);
         this._dummy.updateMatrix();
         this._riverFlow.setMatrixAt(i, this._dummy.matrix);
       }
@@ -673,11 +774,33 @@
       for (const green of layout.greens || []) {
         const x = (green.x + green.w / 2) / UNIT, z = (green.y + green.h / 2) / UNIT;
         this._groundRect(green, '#95be8b', .019);
-        this._staticBox('#e4d7b2', x, .036, z, 1.1, .014, green.h / UNIT, false);
-        this._staticBox('#e4d7b2', x, .038, z, green.w / UNIT, .014, 1.1, false);
+        this._groundRect({ x: x * UNIT - 11, y: green.y, w: 22, h: green.h }, '#e4d7b2', .036);
+        this._groundRect({ x: green.x, y: z * UNIT - 11, w: green.w, h: 22 }, '#e4d7b2', .038);
         const district = root.MayhemWorld?.DISTRICTS[green.district];
-        this._sign(district?.name || 'VILLAGE GREEN', x, 1.05, z - green.h / UNIT / 2 + .2, 0, '#f3e5ad', '#40785f', 2.4, .48);
-        for (let i = 0; i < 8; i++) this._static(this._sphere, this._material(palette[i % palette.length]), x - 2.1 + i * .6, .12, z + green.h / UNIT / 2 - .7, .12, .12, .12, null, false);
+        const signZ = z - green.h / UNIT / 2 + .2;
+        this._sign(district?.name || 'VILLAGE GREEN', x, this._surfaceY(x, signZ) + 1.05, signZ, 0, '#f3e5ad', '#40785f', 2.4, .48);
+        for (let i = 0; i < 8; i++) {
+          const px = x - 2.1 + i * .6, pz = z + green.h / UNIT / 2 - .7;
+          this._static(this._sphere, this._material(palette[i % palette.length]), px, this._surfaceY(px, pz) + .12, pz, .12, .12, .12, null, false);
+        }
+      }
+      const airport = layout.airport;
+      if (airport) {
+        for (const apron of airport.aprons || []) this._groundRect(apron, '#bec5b6', .019);
+        for (const taxiway of airport.taxiways || []) this._groundRect(taxiway, '#81939b', .023);
+        for (const runway of airport.runways || []) {
+          this._groundRect(runway, '#6c7f88', .025);
+          const width = runway.w / UNIT, length = runway.h / UNIT, yaw = runway.angle || 0;
+          const cx = (runway.x + runway.w / 2) / UNIT, cz = (runway.y + runway.h / 2) / UNIT, c = Math.cos(yaw), s = Math.sin(yaw);
+          for (let along = -length / 2 + 6; along < length / 2 - 5; along += 4) {
+            this._surfaceBox('#f4efd9', cx - s * along, cz + c * along, .044, 1.8, .008, .12, yaw + Math.PI / 2);
+          }
+          for (const end of [-1, 1]) for (let stripe = -2; stripe <= 2; stripe++) {
+            const across = stripe * width / 7, along = end * (length / 2 - 2);
+            this._surfaceBox('#f4efd9', cx + c * across - s * along, cz + s * across + c * along, .044, 2.4, .008, .18, yaw + Math.PI / 2);
+          }
+        }
+        if (this._worldInfo) this._worldInfo.airport = { runways: airport.runways?.length || 0, taxiways: airport.taxiways?.length || 0, aprons: airport.aprons?.length || 0 };
       }
     }
 
@@ -693,7 +816,7 @@
       for (const object of this.game.staticObjects || []) {
         this._activePropObject = object.kind !== 'garage' && object.destructible !== false ? object : null;
         if (this._activePropObject) this._propRenderState(object);
-        const x = object.x / UNIT, z = object.y / UNIT, elevation = object.elevation || 0;
+        const x = object.x / UNIT, z = object.y / UNIT, elevation = object.elevation ?? this._surfaceY(x, z);
         const yaw = -(object.angle || 0), cosine = Math.cos(yaw), sine = Math.sin(yaw);
         const sign = (text, offset, height, facing, background, ink, width, signHeight) => {
           this._sign(text, x + sine * offset, elevation + height, z + cosine * offset, yaw + facing, background, ink, width, signHeight);
@@ -744,8 +867,9 @@
     }
 
     _serviceRing(x, z, color) {
-      const ring = this._mesh(this._ringGeometry, this._material(color, { unlit: true }), this.scene, x, 0.065, z, 0.88, 0.88, 0.88, false);
-      ring.rotation.x = -Math.PI / 2;
+      const ring = this._mesh(this._ringGeometry, this._material(color, { unlit: true }), this.scene, x, this._surfaceY(x, z) + .065, z, .88, .88, .88, false);
+      this._surfaceQuaternion(x, z, 0, ring.quaternion);
+      ring.rotateX(-Math.PI / 2);
     }
 
     _handToys(arm) {
@@ -1162,6 +1286,55 @@
       this._orbitTimer = 0;
     }
 
+    _terrainRayPoint(target) {
+      const field = this.game.world?.terrain;
+      if (!field) return false;
+      const T = this.T, ray = this._ray.ray, origin = ray.origin, direction = ray.direction;
+      if (!this._terrainRayScratch) this._terrainRayScratch = {
+        a: new T.Vector3(), b: new T.Vector3(), c: new T.Vector3(), d: new T.Vector3(), hit: new T.Vector3(), start: new T.Vector3()
+      };
+      const scratch = this._terrainRayScratch, count = field.count, step = field.step / UNIT, size = (count - 1) * step;
+      let near = 0, far = this.camera.far || 950;
+      // Walk only the cells crossed by the projected ray. This avoids testing
+      // all 131,072 terrain triangles whenever the player moves the crosshair.
+      for (const [position, delta] of [[origin.x, direction.x], [origin.z, direction.z]]) {
+        if (Math.abs(delta) < 1e-10) { if (position < 0 || position > size) return false; }
+        else {
+          let a = -position / delta, b = (size - position) / delta;
+          if (a > b) { const swap = a; a = b; b = swap; }
+          near = Math.max(near, a); far = Math.min(far, b);
+          if (far < near) return false;
+        }
+      }
+      ray.at(near + 1e-7, scratch.start);
+      let col = clamp(Math.floor(scratch.start.x / step), 0, count - 2), row = clamp(Math.floor(scratch.start.z / step), 0, count - 2);
+      const stepX = Math.sign(direction.x), stepZ = Math.sign(direction.z);
+      const deltaX = Math.abs(direction.x) > 1e-10 ? step / Math.abs(direction.x) : Infinity;
+      const deltaZ = Math.abs(direction.z) > 1e-10 ? step / Math.abs(direction.z) : Infinity;
+      let nextX = Number.isFinite(deltaX) ? ((col + (stepX > 0 ? 1 : 0)) * step - origin.x) / direction.x : Infinity;
+      let nextZ = Number.isFinite(deltaZ) ? ((row + (stepZ > 0 ? 1 : 0)) * step - origin.z) / direction.z : Infinity;
+      for (let visited = 0; visited < count * 2 + 2 && col >= 0 && col < count - 1 && row >= 0 && row < count - 1; visited++) {
+        const index = row * count + col, end = Math.min(nextX, nextZ, far), x = col * step, z = row * step;
+        scratch.a.set(x, field.heights[index], z);
+        scratch.b.set(x + step, field.heights[index + 1], z);
+        scratch.c.set(x, field.heights[index + count], z + step);
+        scratch.d.set(x + step, field.heights[index + count + 1], z + step);
+        let hitAt = Infinity;
+        for (const triangle of [[scratch.a, scratch.c, scratch.b], [scratch.d, scratch.b, scratch.c]]) {
+          if (!ray.intersectTriangle(triangle[0], triangle[1], triangle[2], false, scratch.hit)) continue;
+          const distance = (scratch.hit.x - origin.x) * direction.x + (scratch.hit.y - origin.y) * direction.y + (scratch.hit.z - origin.z) * direction.z;
+          if (distance >= near - 1e-6 && distance <= end + 1e-6 && distance < hitAt) { hitAt = distance; target.copy(scratch.hit); }
+        }
+        if (Number.isFinite(hitAt)) return true;
+        if (end >= far) break;
+        near = end;
+        const crossX = nextX <= nextZ + 1e-9, crossZ = nextZ <= nextX + 1e-9;
+        if (crossX) { col += stepX; nextX += deltaX; }
+        if (crossZ) { row += stepZ; nextZ += deltaZ; }
+      }
+      return false;
+    }
+
     _aimWorldPoint(pointerX, pointerY, width = this.width, height = this.height) {
       this._pointer.set(pointerX / Math.max(1, width) * 2 - 1, 1 - pointerY / Math.max(1, height) * 2);
       this._ray.setFromCamera(this._pointer, this.camera);
@@ -1183,8 +1356,8 @@
           (origin.x - cx) * cosine + (origin.z - cz) * sine, origin.y, -(origin.x - cx) * sine + (origin.z - cz) * cosine
         );
         this._localAimRay.direction.set(direction.x * cosine + direction.z * sine, direction.y, -direction.x * sine + direction.z * cosine);
-        this._aimBox.min.set(-halfX, box.height ? 0 : box.minY, -halfZ);
-        this._aimBox.max.set(halfX, box.height ?? box.maxY, halfZ);
+        this._aimBox.min.set(-halfX, box.height ? box.foundationBottom ?? box.baseElevation ?? 0 : box.minY, -halfZ);
+        this._aimBox.max.set(halfX, box.height ? (box.baseElevation ?? 0) + box.height : box.maxY, halfZ);
         if (this._localAimRay.intersectBox(this._aimBox, this._aimHit)) {
           const px = this._aimHit.x, pz = this._aimHit.z;
           this._aimHit.set(cx + px * cosine - pz * sine, this._aimHit.y, cz + px * sine + pz * cosine);
@@ -1192,11 +1365,17 @@
         }
       }
       const subjects = (this._propAimMeshes || []).filter(mesh => !mesh.propObject?.destroyed);
+      subjects.push(...(this._bridgeAimMeshes || []));
       for (const model of this._residents?.values() || []) if (model.group.visible) subjects.push(model.group);
       for (const [id, model] of this._vehicles || []) if (model.group.visible && id !== this.game.player.vehicleId) subjects.push(model.group);
       for (const group of subjects) group.updateWorldMatrix(true, true);
       for (const hit of this._ray.intersectObjects(subjects, true)) if (hit.object.isMesh) { saveHit(hit.point); break; }
-      if (this._ray.ray.intersectPlane(this._ground, this._aimHit)) saveHit(this._aimHit);
+      if (this._terrainRayPoint(this._aimHit)) saveHit(this._aimHit);
+      const field = this.game.world?.terrain;
+      if (this._ray.ray.intersectPlane(this._ground, this._aimHit)) {
+        const x = this._aimHit.x * UNIT, y = this._aimHit.z * UNIT;
+        if (!field || x < 0 || y < 0 || x > field.size || y > field.size || field.isWater(x, y)) saveHit(this._aimHit);
+      }
       return Number.isFinite(nearest);
     }
 
@@ -1357,7 +1536,7 @@
 
     // Slab intersection includes a small margin for the camera's near plane.
     _boomFraction(x, y, z, endX, endY, endZ) {
-      let nearest = 1;
+      let nearest = this._terrainBoomFraction(x, y, z, endX, endY, endZ);
       const dx = endX - x, dy = endY - y, dz = endZ - z, margin = 0.22;
       for (const box of this._buildingVolumes) {
         if (box.object?.destroyed) continue;
@@ -1385,6 +1564,23 @@
       return nearest;
     }
 
+    _terrainBoomFraction(x, y, z, endX, endY, endZ) {
+      if (!this.game.world?.terrain) return 1;
+      const dx = endX - x, dy = endY - y, dz = endZ - z;
+      const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy, dz) / .20)), clearance = .22;
+      const blocked = at => mix(y, endY, at) < this._surfaceY(mix(x, endX, at), mix(z, endZ, at)) + clearance;
+      if (blocked(0)) return 0;
+      for (let i = 1; i <= steps; i++) if (blocked(i / steps)) {
+        let low = (i - 1) / steps, high = i / steps;
+        for (let refine = 0; refine < 9; refine++) {
+          const middle = (low + high) / 2;
+          if (blocked(middle)) high = middle; else low = middle;
+        }
+        return low;
+      }
+      return 1;
+    }
+
     _insideBuilding(x, y, z) {
       return this._buildingVolumes.some(box => {
         if (box.object?.destroyed) return false;
@@ -1400,9 +1596,10 @@
       const current = this.game.current, driving = Boolean(this.game.player.vehicleId);
       const fallen = !driving && this._bodyFor(this.game.player);
       let x = current.x / UNIT, z = current.y / UNIT;
-      const elevation = Number.isFinite(current.elevation) ? current.elevation : 0;
+      const elevation = Number.isFinite(current.elevation) ? current.elevation : this._surfaceY(x, z);
       // A roof landing needs the pivot above the roof's near-plane envelope.
       let targetHeight = fallen ? Math.max(0.55, (fallen.joints.pelvis.y + fallen.joints.chest.y) / 2 + 0.15) : elevation + (driving ? 1.15 : FOOT_PIVOT);
+      targetHeight = Math.max(targetHeight, this._surfaceY(x, z) + .48);
       if (fallen) {
         // A physical pelvis is smaller than the camera clearance envelope.
         // Move the look-at pivot out of that envelope before solving the boom,
@@ -1429,6 +1626,9 @@
           targetHeight = exit.y ?? targetHeight;
         }
       }
+      // A shoulder exit can move the pivot uphill. Keep its new position above
+      // that slope before solving a boom from the relocated fallen body.
+      targetHeight = Math.max(targetHeight, this._surfaceY(x, z) + .48);
       const mode = driving ? 'drive' : 'foot';
       if (this._lastVehicleId !== this.game.player.vehicleId) {
         if (driving) this._driveOffset = angle(this._yaw - current.angle);
@@ -1498,7 +1698,7 @@
       if (this.camera.position.distanceToSquared(this._cameraTarget) < minimumBoom * minimumBoom && this._desiredCamera.distanceToSquared(this._cameraTarget) > minimumBoom * minimumBoom) {
         this.camera.position.copy(this._desiredCamera);
       }
-      this.camera.position.y = Math.max(0.45, this.camera.position.y);
+      this.camera.position.y = Math.max(this._surfaceY(this.camera.position.x, this.camera.position.z) + .23, this.camera.position.y);
       // Looking is independent of the physical boom pivot. Locking lookAt to
       // the character makes the centre crosshair point at the player's back.
       // The view instead faces ahead, including when walls shorten the boom.
@@ -1683,7 +1883,7 @@
       for (let i = 0; i < this._confetti.count; i++) {
         const particle = game.particles[i], age = particle.maxLife - particle.life;
         const rise = Math.sin(clamp(age / particle.maxLife, 0, 1) * Math.PI) * 1.75;
-        this._dummy.position.set(particle.x / UNIT, (Number.isFinite(particle.height) ? Math.max(0, particle.height) : 0.20) + rise, particle.y / UNIT);
+        this._dummy.position.set(particle.x / UNIT, (Number.isFinite(particle.height) ? particle.height : this._surfaceY(particle.x / UNIT, particle.y / UNIT) + .20) + rise, particle.y / UNIT);
         this._dummy.rotation.set(age * 5 + i, age * 3, age * 7 + i * 0.7);
         const size = particle.size / UNIT;
         this._dummy.scale.set(size, size * 0.22, size * 0.72);
@@ -1696,8 +1896,8 @@
       this._skids.count = Math.min(250, game.skidMarks.length);
       for (let i = 0; i < this._skids.count; i++) {
         const mark = game.skidMarks[i];
-        this._dummy.position.set(mark.x / UNIT, 0.056, mark.y / UNIT);
-        this._dummy.rotation.set(0, -mark.angle, 0);
+        this._dummy.position.set(mark.x / UNIT, this._surfaceY(mark.x / UNIT, mark.y / UNIT) + .056, mark.y / UNIT);
+        this._surfaceQuaternion(mark.x / UNIT, mark.y / UNIT, mark.angle, this._dummy.quaternion);
         this._dummy.scale.set(0.55, 0.008, 0.85);
         this._dummy.updateMatrix(); this._skids.setMatrixAt(i, this._dummy.matrix);
       }
@@ -1705,7 +1905,9 @@
       const mission = game.mission, target = mission && mission.targets[mission.targetIndex];
       this._target.visible = Boolean(target);
       if (target) {
-        this._target.position.set(target.x / UNIT, 0, target.y / UNIT);
+        this._target.position.set(target.x / UNIT, this._surfaceY(target.x / UNIT, target.y / UNIT), target.y / UNIT);
+        this._surfaceQuaternion(target.x / UNIT, target.y / UNIT, 0, this._targetRing.quaternion);
+        this._targetRing.rotateX(-Math.PI / 2);
         const pulse = this.reducedMotion ? 1 : 1 + Math.sin(game.time * 3) * 0.045;
         this._targetRing.scale.set(pulse, pulse, pulse);
         this._targetDiamond.rotation.y = this.reducedMotion ? 0 : game.time;
@@ -1732,6 +1934,8 @@
       this._debris?.dispose();
       for (const mesh of this._propInstances || []) mesh.dispose();
       this._riverFlow?.dispose();
+      this._bridgeUndersides?.dispose();
+      this._bridgePiers?.dispose();
       for (const model of this._vehicles.values()) { model.effects.flames.dispose(); model.effects.smoke.dispose(); }
       for (const geometry of this._geometries) geometry.dispose();
       for (const material of this._materials.values()) material.dispose();

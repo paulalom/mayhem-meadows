@@ -2,9 +2,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Game, VehicleStats, CAR_MODELS } = require('../core.js');
+const { makeFlatGame } = require('./helpers/flat-game.cjs');
 
 function empty() {
-  const game = new Game({ seed: 42 });
+  const game = makeFlatGame();
   game.cars = []; game.police = []; game.peds = []; game.buildings = []; game.staticObjects = [];
   game.player.x = 1100; game.player.y = 1100; game.graceTimer = 0;
   game.vehiclePhysics.sync();
