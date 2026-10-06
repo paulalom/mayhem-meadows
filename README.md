@@ -28,13 +28,16 @@ The layout adapts to small screens, but touch controls and gamepads are not impl
 | Right mouse drag | Orbit the camera and look up/down |
 | C | Recenter the camera behind you |
 | E | Borrow/exit a nearby car; use the car wash |
-| Space | Handbrake/drift in a car; confetti popper on foot |
+| Space | Handbrake/drift in a car; use your equipped toy on foot |
+| Hold Tab | Open the toy wheel; hover, use arrows, or press 1–3; release Tab to equip |
+| I | Open pockets to use supplies or shop for supplies and toys |
+| G | Browse your garage collection; store, retrieve, or repaint at Sprinkle Garage |
 | Shift | Boost in a car; sprint on foot |
 | H | Horn; start a party at a party mission ring |
 | F | Dramatic ragdoll flop on foot; stand up automatically |
 | R | Recover to a safe road position |
 | P / Esc | Pause/resume |
-| Pointer | Aim the on-foot confetti popper into the 3D world |
+| Pointer | Aim your on-foot toy into the 3D world |
 
 Click the game canvas if keyboard focus has moved away from it. Changing tabs or windows pauses the game; resume with the button. Sound, reduced motion, and full screen controls are in the header. Looking around uses a right-button drag; the game does not capture or lock your pointer.
 
@@ -49,11 +52,15 @@ Click the game canvas if keyboard focus has moved away from it. Changing tabs or
 - **Checkpoint Dash:** drive through a sequence of glowing rings.
 - **Party Route:** visit the marked neighborhoods and honk at each ring.
 - **Fun Police:** three levels of heat, building-blocked sight, and a visible cooldown after escaping.
-- **Garage:** capped boost and armor upgrades, plus repairs. Visit the garage shown on the minimap to buy them.
+- **Toy wheel:** unlimited short-range confetti popper, an inflatable hammer with a stronger close-range shove ($120), and a party cannon with traveling confetti balls ($280, includes six charges). Hold Tab to choose; Escape cancels. Space uses the chosen toy while on foot.
+- **Pockets:** biscuits restore 40 composure, repair tape restores 55 condition to your current ride, and refill packs add six cannon charges. Starter pockets contain two biscuits, one tape, and one refill. Stack limits are five biscuits, three tapes, and three refills; the cannon holds twelve charges. Full meters never waste a supply.
+- **Garage:** save up to three civilian rides, bring them back out, repair them for $45, and choose a $25 paint color. Release a slot when you find a new favorite. Saved rides retain their condition; retrieving a car preserves damage. Boost and armor upgrades apply to all rides. Stop at Sprinkle Garage to manage the collection or buy supplies and toy unlocks.
 - **Car wash:** repairs and clears heat for $75.
-- **Saving:** cash, upgrades, completion count, best score, and preferences stay in local browser storage. File-open and localhost play may have separate saves. Gameplay continues if saving is denied.
+- **Saving:** cash, upgrades, completion count, best score, unlocked/equipped toys, pocket stacks, cannon charges, garage collection, and preferences stay in local browser storage. Existing saves gain the starter inventory without losing progress. File-open and localhost play may have separate saves. Gameplay continues if saving is denied.
 
 Contract timers determine bonuses. Finishing overtime still pays the base reward. You can abandon a gig without losing banked money. Confetti hits on pedestrians never earn cash.
+
+The toy wheel and pocket/collection menus freeze the town and mission timer. Browse your collection anywhere, then visit **GARAGE** on the minimap to make purchases or manage rides. Biscuits cost $15, tape costs $35, and refill packs cost $30. Press I or G again, or Escape, to close the menu. Touch driving remains outside this prototype.
 
 The [gameplay design](DESIGN.md) explains the intended loops, tuning, scope, and next playtest questions. This is a small playable slice with simple traffic and patrol AI. Driving and upright movement use flat streets, while ragdolls have vertical gravity and three-dimensional joint contacts. Decorative trees, lamps, and curbs remain scenery. There are no stairs, jumps, or building interiors.
 
@@ -76,13 +83,13 @@ npm run vendor
 
 | File | Responsibility |
 | --- | --- |
-| core.js | Simulation, map, traffic, police, contracts, rewards, and save validation |
+| core.js | Simulation, map, traffic, police, contracts, inventory, garage, rewards, and save validation |
 | physics.js | Ragdoll joints, gravity, contacts, and automatic get-up |
 | scene3d.js | Three.js world, models, perspective camera, lighting, and visual effects |
 | game.js | Fixed-step game loop, input, audio, persistence, HUD, and minimap |
 | vendor/three.min.js | Bundled Three.js engine for offline and file-open play |
 | index.html / styles.css | Responsive interface and controls |
-| tests/*.test.cjs | Simulation, camera, and ragdoll regression checks |
+| tests/*.test.cjs | Simulation, inventory, garage, camera, and ragdoll regression checks |
 | tools/serve.cjs | Optional static development server |
 
-Next priorities: playtest camera and steering together, tune chases, add touch/gamepad controls, then add route variety and cosmetic rewards.
+Next priorities: playtest toy reach and the garage economy, tune chases, add touch/gamepad controls, then add route variety and cosmetic rewards.

@@ -351,6 +351,32 @@
       ring.rotation.x = -Math.PI / 2;
     }
 
+    _handToys(arm) {
+      const T = this.T, toys = {};
+      for (const id of ['popper', 'hammer', 'cannon']) {
+        const toy = new T.Group();
+        toy.name = 'toy-' + id;
+        arm.add(toy); toys[id] = toy;
+        toy.visible = id === 'popper';
+      }
+      // Their barrels point down the resting arm and forward when it is raised.
+      this._mesh(this._cylinder, this._material('#efd579'), toys.popper, 0, -0.55, 0, 0.085, 0.40, 0.085);
+      this._mesh(this._cylinder, this._material('#ee839d'), toys.popper, 0, -0.70, 0, 0.092, 0.08, 0.092);
+      this._mesh(this._cylinder, this._material('#7c65dd'), toys.popper, 0, -0.40, 0, 0.092, 0.065, 0.092);
+      this._box(toys.hammer, '#ffe2a3', 0, -0.60, 0, 0.10, 0.63, 0.10);
+      this._box(toys.hammer, '#ff98bc', 0, -0.98, 0, 0.42, 0.34, 0.83);
+      this._box(toys.hammer, '#fff0d5', 0, -0.98, -0.36, 0.45, 0.37, 0.11);
+      this._box(toys.hammer, '#fff0d5', 0, -0.98, 0.36, 0.45, 0.37, 0.11);
+      this._box(toys.hammer, '#df719d', 0.217, -0.98, 0, 0.016, 0.14, 0.22, false);
+      this._mesh(this._cylinder, this._material('#a6a0fa'), toys.cannon, 0, -0.56, 0, 0.23, 0.57, 0.23);
+      this._mesh(this._cylinder, this._material('#ffd15b'), toys.cannon, 0, -0.86, 0, 0.26, 0.16, 0.26);
+      this._mesh(this._cylinder, this._material('#425a73'), toys.cannon, 0, -0.948, 0, 0.20, 0.018, 0.20, false);
+      this._box(toys.cannon, '#67d3c8', 0.21, -0.38, 0, 0.22, 0.15, 0.20);
+      this._box(toys.cannon, '#fb8097', -0.23, -0.48, 0, 0.08, 0.25, 0.18);
+      for (const toy of Object.values(toys)) this._mergeColored(toy);
+      return toys;
+    }
+
     _person(color, player) {
       const T = this.T, group = new T.Group();
       const skin = this._material(player ? '#f9c68f' : '#edbd93');
@@ -375,17 +401,17 @@
       this._box(group, player ? '#f1cf5d' : '#6f5b55', 0.18, 1.64, 0, 0.30, 0.055, 0.38);
       this._box(group, '#384657', 0.22, 1.49, -0.08, 0.035, 0.055, 0.045, false);
       this._box(group, '#384657', 0.22, 1.49, 0.08, 0.035, 0.055, 0.045, false);
+      let toys = null;
       if (player) {
         this._box(group, '#e48b83', -0.25, 0.99, 0, 0.22, 0.43, 0.36);
         this._box(group, '#f4d180', -0.375, 0.99, 0, 0.035, 0.25, 0.23);
-        const popper = this._mesh(this._cylinder, this._material('#efd579'), rightArm, 0.10, -0.25, 0, 0.085, 0.40, 0.085);
-        popper.rotation.z = -Math.PI / 2;
+        toys = this._handToys(rightArm);
         this._box(group, '#fff1bd', -0.18, 1.22, -0.22, 0.04, 0.35, 0.04, false);
         this._box(group, '#fff1bd', -0.18, 1.22, 0.22, 0.04, 0.35, 0.04, false);
       }
       for (const limb of [leftLeg, rightLeg, leftArm, rightArm]) this._mergeColored(limb);
       this._mergeColored(group);
-      return { group, leftLeg, rightLeg, leftArm, rightArm, torso, phase: 0, color, player };
+      return { group, leftLeg, rightLeg, leftArm, rightArm, torso, toys, equipped: player ? 'popper' : null, phase: 0, color, player };
     }
 
     _vehicle(entity, police) {
@@ -430,12 +456,12 @@
         blue = this._box(group, this._material('#84d5ff', { unlit: true }), -0.12, 1.39, 0.24, 0.19, 0.13, 0.35, false);
       }
       for (const wheel of wheels) this._mergeColored(wheel);
-      this._mergeColored(group, [shell, red, blue]);
+      const paint = this._mergeColored(group, [shell, red, blue], police ? null : body);
       this.scene.add(group);
-      return { group, wheels, shell, body, red, blue, police, roll: 0 };
+      return { group, wheels, shell, body, paint, color: entity.color, red, blue, police, roll: 0 };
     }
 
-    _mergeColored(group, preserve = []) {
+    _mergeColored(group, preserve = [], paintMaterial = null) {
       const T = this.T;
       const pieces = group.children.filter(child => child.isMesh && !preserve.includes(child) && !child.material.isMeshBasicMaterial);
       if (pieces.length < 2) return;
@@ -445,9 +471,11 @@
       const index = vertices > 65535 ? new Uint32Array(indices) : new Uint16Array(indices);
       const vector = new T.Vector3(), normal = new T.Vector3(), normalMatrix = new T.Matrix3();
       let offset = 0, indexOffset = 0;
+      const ranges = [];
       for (const piece of pieces) {
         piece.updateMatrix(); normalMatrix.getNormalMatrix(piece.matrix);
         const p = piece.geometry.attributes.position, n = piece.geometry.attributes.normal, color = piece.material.color;
+        if (paintMaterial && piece.material === paintMaterial) ranges.push({ start: offset, count: p.count });
         for (let i = 0; i < p.count; i++) {
           vector.fromBufferAttribute(p, i).applyMatrix4(piece.matrix);
           normal.fromBufferAttribute(n, i).applyMatrix3(normalMatrix).normalize();
@@ -471,6 +499,22 @@
       const mesh = new T.Mesh(geometry, this._materials.get('vertex-colors'));
       mesh.castShadow = true; mesh.receiveShadow = true;
       group.add(mesh);
+      return { mesh, ranges };
+    }
+
+    _paintVehicle(model, color) {
+      if (model.police || model.color === color) return;
+      model.color = color;
+      model.body = this._material(color);
+      // Only paintable body vertices change: windows, lights, trim, and tires keep
+      // their colors. The merged geometry and its buffers survive every repaint.
+      const paint = model.paint;
+      if (!paint?.ranges.length) return;
+      const colors = paint.mesh.geometry.attributes.color, value = model.body.color;
+      for (const range of paint.ranges) {
+        for (let i = range.start; i < range.start + range.count; i++) colors.setXYZ(i, value.r, value.g, value.b);
+      }
+      colors.needsUpdate = true;
     }
 
     _bubble() {
@@ -819,8 +863,21 @@
       const stride = !this.reducedMotion && movement > 0.002 ? Math.sin(this._walkPhase) * 0.65 : 0;
       model.leftLeg.rotation.z = stride; model.rightLeg.rotation.z = -stride;
       model.leftArm.rotation.z = -stride * 0.65; model.rightArm.rotation.z = stride * 0.65;
-      if (game._actionCooldown > 0.35) { model.rightArm.rotation.z = -Math.PI / 2; model.rightArm.rotation.y = -0.1; }
-      else model.rightArm.rotation.y = 0;
+      const equipped = model.toys[game.inventory?.equipped] ? game.inventory.equipped : 'popper';
+      if (model.equipped !== equipped) {
+        for (const [id, toy] of Object.entries(model.toys)) toy.visible = id === equipped;
+        model.equipped = equipped;
+      }
+      const cooldown = Math.max(0, game._actionCooldown || 0);
+      model.rightArm.rotation.y = 0;
+      if (equipped === 'hammer' && cooldown > 0) {
+        const elapsed = 0.9 - cooldown;
+        model.rightArm.rotation.z = this.reducedMotion ? Math.PI / 2
+          : elapsed < 0.55 ? mix(2.7, 1.1, clamp(elapsed / 0.55, 0, 1)) : mix(1.1, 0, clamp((elapsed - 0.55) / 0.35, 0, 1));
+      } else if (cooldown > (equipped === 'cannon' ? 0.86 : 0.35)) {
+        model.rightArm.rotation.z = Math.PI / 2;
+        model.rightArm.rotation.y = -0.1;
+      }
       for (const ped of game.peds) {
         const resident = this._residents.get(ped.id);
         if (!resident) continue;
@@ -862,6 +919,7 @@
           model.red.scale.y = redOn ? 0.13 : 0.075;
           model.blue.scale.y = redOn ? 0.075 : 0.13;
         } else {
+          this._paintVehicle(model, entity.color);
           const broken = entity.health <= 0;
           model.group.rotation.z = broken ? 0.055 : 0;
           model.shell.material = broken ? this._material('#8f9aa1') : model.body;
@@ -870,8 +928,37 @@
       for (const [id, model] of this._vehicles) if (!active.has(id)) model.group.visible = false;
     }
 
+    _projectileEffects() {
+      if (!this._toyShots) {
+        this._toyShots = new this.T.InstancedMesh(this._sphere, this._material('#ffffff', { unlit: true }), 32);
+        this._toyShots.instanceMatrix.setUsage(this.T.DynamicDrawUsage);
+        this._toyShots.frustumCulled = false;
+        this.scene.add(this._toyShots);
+      }
+      const shots = this.game.projectiles || [];
+      let count = 0;
+      for (const shot of shots) {
+        if (count === 32) break;
+        if (shot.life <= 0 || !Number.isFinite(shot.x + shot.y + shot.height + shot.angle)) continue;
+        this._dummy.position.set(shot.x / UNIT, shot.height, shot.y / UNIT);
+        this._dummy.rotation.set(this.game.time * 8, -shot.angle, this.game.time * 5);
+        this._dummy.scale.set(0.19, 0.19, 0.19);
+        this._dummy.updateMatrix();
+        this._toyShots.setMatrixAt(count, this._dummy.matrix);
+        let hue = 0;
+        for (const letter of String(shot.id)) hue = (hue + letter.charCodeAt(0)) % palette.length;
+        this._color.set(palette[hue]); this._toyShots.setColorAt(count, this._color);
+        count++;
+      }
+      this._toyShots.count = count;
+      this._toyShots.visible = count > 0;
+      this._toyShots.instanceMatrix.needsUpdate = true;
+      if (this._toyShots.instanceColor) this._toyShots.instanceColor.needsUpdate = true;
+    }
+
     _effects() {
       const game = this.game;
+      this._projectileEffects();
       this._confetti.count = Math.min(360, game.particles.length);
       for (let i = 0; i < this._confetti.count; i++) {
         const particle = game.particles[i], age = particle.maxLife - particle.life;
@@ -919,6 +1006,7 @@
     dispose() {
       this._ragdollCubes?.dispose();
       this._ragdollHeads?.dispose();
+      this._toyShots?.dispose();
       for (const geometry of this._geometries) geometry.dispose();
       for (const material of this._materials.values()) material.dispose();
       for (const texture of this._textures) texture.dispose();

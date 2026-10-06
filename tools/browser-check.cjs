@@ -135,6 +135,47 @@ function assertFiniteBody(body) {
   assert.ok(body.renderedHeads > 0 && body.renderedSegments >= 18, 'Renderer must draw physical head and limb segments.');
 }
 
+async function inventoryState(page) {
+  return page.evaluate(() => {
+    const game = globalThis.__browserCheckGame, scene = globalThis.__browserCheckScene;
+    return {
+      time: game.time, money: game.money, composure: game.player.composure,
+      player: { x: game.player.x, y: game.player.y, vehicleId: game.player.vehicleId },
+      inventory: JSON.parse(JSON.stringify(game.inventory)),
+      garage: JSON.parse(JSON.stringify(game.garage)),
+      equippedModel: scene._player.equipped,
+      visibleToys: Object.entries(scene._player.toys || {}).filter(([, group]) => group.visible).map(([id]) => id),
+      projectiles: game.projectiles.length, renderedShots: scene._toyShots?.count || 0,
+      missionTime: game.missionStats.elapsed,
+      bodies: [...game.physics.bodies.values()].map(body => ({ id: body.id, age: body.age })),
+    };
+  });
+}
+
+async function openInventory(page, collection = false) {
+  if (await page.locator('#inventory-screen').isVisible()) {
+    await page.locator(collection ? '#collection-tab' : '#pockets-tab').click();
+  } else {
+    await page.keyboard.press(collection ? 'g' : 'i');
+    await page.locator('#inventory-screen').waitFor({ state: 'visible' });
+  }
+}
+
+async function closeInventory(page) {
+  await page.locator('#close-inventory').click();
+  await page.locator('#inventory-screen').waitFor({ state: 'hidden' });
+  assert.equal(await page.locator('#game-canvas').evaluate(element => element === document.activeElement), true);
+}
+
+async function equipWithWheel(page, digit) {
+  await page.keyboard.down('Tab');
+  await page.locator('#toy-wheel').waitFor({ state: 'visible' });
+  await page.keyboard.press(String(digit));
+  await page.keyboard.up('Tab');
+  await page.locator('#toy-wheel').waitFor({ state: 'hidden' });
+  await waitForFreshFrames(page);
+}
+
 async function check(name, action) {
   try {
     await action();
@@ -234,7 +275,7 @@ async function main() {
     });
     await check('E borrows the nearby yellow car', async () => {
       await page.keyboard.press('e');
-      await page.waitForFunction(() => document.getElementById('ride-name').textContent === 'Lemon Buggy', null, { timeout: 2000 });
+      await page.waitForFunction(() => document.getElementById('ride-name').textContent === 'Pocket Rocket', null, { timeout: 2000 });
       const state = await waitForScene(page, 'drive');
       assert.ok(state.cameraDistance > 3, 'Driving camera should pull back to show the whole ride.');
     });
@@ -242,11 +283,11 @@ async function main() {
       await page.waitForTimeout(350);
       await page.keyboard.press('e');
       await waitForScene(page, 'foot');
-      assert.notEqual(await page.locator('#ride-name').textContent(), 'Lemon Buggy');
+      assert.notEqual(await page.locator('#ride-name').textContent(), 'Pocket Rocket');
       await page.waitForTimeout(350);
       await page.keyboard.press('e');
       await waitForScene(page, 'drive');
-      assert.equal(await page.locator('#ride-name').textContent(), 'Lemon Buggy');
+      assert.equal(await page.locator('#ride-name').textContent(), 'Pocket Rocket');
     });
     await check('delivery contract changes the objective', async () => {
       const before = await page.locator('#objective-title').textContent();
@@ -261,7 +302,7 @@ async function main() {
       await page.keyboard.up('w');
       await page.waitForTimeout(160);
       assert.notEqual(await page.locator('#mission-progress').textContent(), before);
-      assert.equal(await page.locator('#ride-name').textContent(), 'Lemon Buggy');
+      assert.equal(await page.locator('#ride-name').textContent(), 'Pocket Rocket');
     });
     await check('driving minimap renders the town and updates after resize', async () => {
       await waitForMinimap(page);
@@ -413,7 +454,7 @@ async function main() {
         await waitForScene(blockedPage, 'foot');
         assert.match(await blockedPage.locator('#toast').textContent(), /Saving is unavailable/);
         await blockedPage.keyboard.press('e');
-        await blockedPage.waitForFunction(() => document.getElementById('ride-name').textContent === 'Lemon Buggy', null, { timeout: 2000 });
+        await blockedPage.waitForFunction(() => document.getElementById('ride-name').textContent === 'Pocket Rocket', null, { timeout: 2000 });
         await blockedPage.locator('#sound-toggle').click();
         await blockedPage.locator('#motion-toggle').click();
         assert.equal(await blockedPage.locator('#game-canvas').evaluate(element => element === document.activeElement), true);
@@ -588,14 +629,17 @@ async function main() {
         // Arrange a clear, close target only in this isolated test page. Fire
         // through the real keyboard handler, fixed step and WebGL renderer.
         const id = await physicsPage.evaluate(() => {
-          const game = globalThis.__browserCheckGame, ped = game.peds[0];
+          const game = globalThis.__browserCheckGame, ped = game.peds[0], car = game.cars[0];
+          game.physics.clearAll(); game.peds = [ped]; game.cars = [car]; game.police = [];
+          game.heat = 0; game._actionCooldown = 0;
+          Object.assign(car, { x: 1260, y: 180, speed: 0, vx: 0, vy: 0, traffic: false });
           game.player.x = 884; game.player.y = 1080; game.player.angle = -Math.PI / 2;
-          ped.x = 884; ped.y = 1044; ped.homeX = ped.x; ped.homeY = ped.y; ped.stunned = 0; ped.ragdollGrace = 0;
+          ped.x = 884; ped.y = 1044; ped.homeX = ped.x; ped.homeY = ped.y; ped.stunned = 0; ped.ragdollGrace = 0; ped.pace = 0;
           return ped.id;
         });
         await physicsPage.mouse.move(8, 8);
         await physicsPage.keyboard.press('c');
-        await physicsPage.waitForTimeout(250);
+        await physicsPage.waitForFunction(() => Math.abs(globalThis.__browserCheckScene.viewYaw + Math.PI / 2) < 0.05, null, { timeout: 2500 });
         await physicsPage.keyboard.press('Space');
         await physicsPage.waitForFunction(pedId => {
           const body = globalThis.__browserCheckGame.physics.get(pedId);
@@ -669,6 +713,405 @@ async function main() {
         diagnostics.parkedCarContact = contact;
       });
     } finally { await physicsContext.close(); }
+    const inventoryContext = await browser.newContext({ viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
+    try {
+      await inventoryContext.route('**/*', route => {
+        if (/^(file|data|blob):/.test(route.request().url())) return route.continue();
+        externalRequests.push(route.request().url());
+        return route.abort();
+      });
+      await installEngineInspection(inventoryContext);
+      const inventoryPage = await inventoryContext.newPage();
+      inventoryPage.on('pageerror', error => errors.push(error.message));
+      inventoryPage.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+      await inventoryPage.goto(url);
+      await inventoryPage.locator('#play-button').click();
+      await waitForScene(inventoryPage, 'foot');
+
+      await check('I opens pockets anywhere, freezes play, and keeps keyboard focus inside the dialog', async () => {
+        await openInventory(inventoryPage);
+        assert.equal(await inventoryPage.locator('#pockets-panel').isVisible(), true);
+        assert.equal(await inventoryPage.locator('[data-buy-gadget="hammer"]').isDisabled(), true, 'Shopping should require the garage.');
+        assert.equal(await inventoryPage.locator('[data-buy-pocket="biscuits"]').isDisabled(), true);
+        await inventoryPage.waitForTimeout(100);
+        const before = await inventoryState(inventoryPage);
+        await inventoryPage.keyboard.press('w');
+        for (let i = 0; i < 18; i++) {
+          await inventoryPage.keyboard.press('Tab');
+          assert.equal(await inventoryPage.locator('#inventory-screen').evaluate(dialog => dialog.contains(document.activeElement)), true, 'Tab must stay in the open inventory.');
+        }
+        await inventoryPage.waitForTimeout(250);
+        const after = await inventoryState(inventoryPage);
+        assert.equal(after.time, before.time, 'Browsing pockets must freeze the simulation.');
+        assert.deepEqual(after.player, before.player, 'Menu input must not move or enter a car.');
+        await closeInventory(inventoryPage);
+        await waitForFreshFrames(inventoryPage);
+      });
+
+      await check('biscuits restore composure, while full composure and an absent car cannot waste supplies', async () => {
+        await openInventory(inventoryPage);
+        const original = await inventoryState(inventoryPage);
+        assert.equal(original.composure, 100);
+        assert.equal(await inventoryPage.locator('[data-use-pocket="biscuits"]').isDisabled(), true);
+        assert.equal(await inventoryPage.locator('[data-use-pocket="repairTape"]').isDisabled(), true);
+        assert.equal(await inventoryPage.locator('[data-use-pocket="refill"]').isDisabled(), true, 'A locked cannon cannot consume its refill.');
+        await inventoryPage.evaluate(() => { globalThis.__browserCheckGame.player.composure = 55; });
+        await inventoryPage.waitForFunction(() => !document.querySelector('[data-use-pocket="biscuits"]').disabled);
+        await inventoryPage.locator('[data-use-pocket="biscuits"]').click();
+        const used = await inventoryState(inventoryPage);
+        assert.equal(used.composure, 95);
+        assert.equal(used.inventory.pockets.biscuits, original.inventory.pockets.biscuits - 1);
+        assert.equal(used.inventory.pockets.repairTape, original.inventory.pockets.repairTape);
+        await inventoryPage.evaluate(() => { globalThis.__browserCheckGame.player.composure = 100; });
+        await inventoryPage.waitForFunction(() => document.querySelector('[data-use-pocket="biscuits"]').disabled);
+        assert.equal((await inventoryState(inventoryPage)).inventory.pockets.biscuits, used.inventory.pockets.biscuits);
+        await closeInventory(inventoryPage);
+      });
+
+      await check('garage shopping unlocks two toys, charges their prices, and caps pocket stacks', async () => {
+        // Arrange a quiet service visit without bypassing any purchase, menu,
+        // save, renderer, or player input behavior.
+        await inventoryPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame, car = game.cars[0];
+          globalThis.__inventoryCheckPed = game.peds[0];
+          game.cars = [car]; game.peds = []; game.police = []; game.physics.clearAll();
+          Object.assign(car, { x: 900, y: 950, angle: -Math.PI / 2, speed: 0, vx: 0, vy: 0, traffic: false });
+          Object.assign(game.player, { x: 900, y: 900, angle: -Math.PI / 2, vehicleId: null });
+          game.money = 1500; game.heat = 0;
+        });
+        await openInventory(inventoryPage);
+        await inventoryPage.waitForFunction(() => !document.querySelector('[data-buy-gadget="hammer"]').disabled);
+        const before = await inventoryState(inventoryPage);
+        await inventoryPage.locator('[data-buy-gadget="hammer"]').click();
+        const hammer = await inventoryState(inventoryPage);
+        assert.equal(hammer.money, before.money - 120);
+        assert.ok(hammer.inventory.unlocked.includes('hammer'));
+        await inventoryPage.locator('[data-buy-gadget="cannon"]').click();
+        const cannon = await inventoryState(inventoryPage);
+        assert.equal(cannon.money, hammer.money - 280);
+        assert.deepEqual(cannon.inventory.unlocked, ['popper', 'hammer', 'cannon']);
+        assert.equal(cannon.inventory.ammo.cannon, 6);
+        assert.equal(await inventoryPage.locator('[data-buy-gadget="hammer"]').isDisabled(), true, 'Owned toys cannot be purchased twice.');
+        for (const [item, cap, price] of [['biscuits', 5, 15], ['repairTape', 3, 35], ['refill', 3, 30]]) {
+          const start = await inventoryState(inventoryPage);
+          const bought = cap - start.inventory.pockets[item];
+          for (let n = 0; n < bought; n++) await inventoryPage.locator(`[data-buy-pocket="${item}"]`).click();
+          const end = await inventoryState(inventoryPage);
+          assert.equal(end.inventory.pockets[item], cap);
+          assert.equal(end.money, start.money - bought * price);
+          assert.equal(await inventoryPage.locator(`[data-buy-pocket="${item}"]`).isDisabled(), true, `${item} should stop at its stack cap.`);
+        }
+        await inventoryPage.locator('[data-use-pocket="refill"]').click();
+        const filled = await inventoryState(inventoryPage);
+        assert.equal(filled.inventory.ammo.cannon, 12);
+        assert.equal(filled.inventory.pockets.refill, 2);
+        assert.equal(await inventoryPage.locator('[data-use-pocket="refill"]').isDisabled(), true, 'A full cannon must not waste a refill.');
+        await inventoryPage.locator('.inventory-scroll').evaluate(element => { element.scrollTop = 0; });
+        await inventoryPage.waitForFunction(() => !document.getElementById('toast').classList.contains('visible'), null, { timeout: 5000 });
+        await inventoryPage.screenshot({ path: path.join(evidence, 'desktop-inventory-pockets.png'), fullPage: true });
+        await closeInventory(inventoryPage);
+      });
+
+      await check('hold Tab freezes contracts and physical bodies; release equips the selected toy without movement leaking', async () => {
+        await equipWithWheel(inventoryPage, 1);
+        await inventoryPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame;
+          game.acceptMission('delivery');
+          const ped = globalThis.__inventoryCheckPed;
+          Object.assign(ped, { x: 900, y: 840, angle: 0, homeX: 900, homeY: 840, pace: 0, stunned: 0, ragdollGrace: 0, bubble: '', bubbleTimer: 0 });
+          game.peds = [ped];
+          game._knockDown(ped, { x: 2, y: 2.5, z: 0 });
+        });
+        await inventoryPage.keyboard.down('Tab');
+        await inventoryPage.locator('#toy-wheel').waitFor({ state: 'visible' });
+        await inventoryPage.keyboard.press('ArrowRight');
+        await inventoryPage.waitForTimeout(80);
+        const before = await inventoryState(inventoryPage);
+        assert.equal(before.inventory.equipped, 'popper', 'The wheel must wait for release to equip.');
+        await inventoryPage.keyboard.down('w');
+        await inventoryPage.keyboard.press('Space');
+        await inventoryPage.waitForTimeout(400);
+        const frozen = await inventoryState(inventoryPage);
+        assert.equal(frozen.time, before.time);
+        assert.equal(frozen.missionTime, before.missionTime);
+        assert.deepEqual(frozen.bodies, before.bodies, 'The wheel must also freeze ragdoll recovery.');
+        assert.deepEqual(frozen.player, before.player);
+        assert.equal(frozen.projectiles, 0);
+        await inventoryPage.waitForFunction(() => !document.getElementById('toast').classList.contains('visible'), null, { timeout: 5000 });
+        await inventoryPage.screenshot({ path: path.join(evidence, 'desktop-toy-wheel.png'), fullPage: true });
+        // Releasing the wheel must clear movement keys that were held in it.
+        await inventoryPage.keyboard.up('Tab');
+        await inventoryPage.locator('#toy-wheel').waitFor({ state: 'hidden' });
+        await inventoryPage.waitForTimeout(170);
+        const equipped = await inventoryState(inventoryPage);
+        await inventoryPage.keyboard.up('w');
+        assert.equal(equipped.inventory.equipped, 'hammer');
+        assert.equal(equipped.equippedModel, 'hammer');
+        assert.deepEqual(equipped.visibleToys, ['hammer'], 'The avatar must visibly hold the selected toy.');
+        assert.deepEqual(equipped.player, before.player, 'A movement key pressed in the wheel must stay cleared after release.');
+      });
+
+      await check('Escape and window blur cancel toy selection; blur pauses without equipping', async () => {
+        await inventoryPage.keyboard.down('Tab');
+        await inventoryPage.locator('#toy-wheel').waitFor({ state: 'visible' });
+        await inventoryPage.keyboard.press('3');
+        await inventoryPage.keyboard.press('Escape');
+        await inventoryPage.keyboard.up('Tab');
+        assert.equal(await inventoryPage.locator('#toy-wheel').isVisible(), false);
+        assert.equal(await inventoryPage.locator('#pause-screen').isVisible(), false);
+        assert.equal((await inventoryState(inventoryPage)).inventory.equipped, 'hammer');
+        await inventoryPage.keyboard.down('Tab');
+        await inventoryPage.locator('#toy-wheel').waitFor({ state: 'visible' });
+        await inventoryPage.keyboard.press('3');
+        await inventoryPage.evaluate(() => window.dispatchEvent(new Event('blur')));
+        await inventoryPage.keyboard.up('Tab');
+        await inventoryPage.locator('#pause-screen').waitFor({ state: 'visible' });
+        assert.equal(await inventoryPage.locator('#toy-wheel').isVisible(), false);
+        assert.equal((await inventoryState(inventoryPage)).inventory.equipped, 'hammer');
+        await inventoryPage.locator('#resume-button').click();
+        await inventoryPage.locator('#pause-screen').waitFor({ state: 'hidden' });
+      });
+
+      await check('an equipped inflatable hammer bonks a resident into physical ragdoll motion without spending cannon ammo', async () => {
+        const id = await inventoryPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame, ped = game.peds[0];
+          game.physics.clearAll(); game.abandonMission(); game.heat = 0;
+          Object.assign(game.player, { x: 900, y: 1080, angle: -Math.PI / 2, vehicleId: null, ragdollGrace: 0 });
+          Object.assign(game.cars[0], { x: 1260, y: 180 });
+          Object.assign(ped, { x: 900, y: 1044, homeX: 900, homeY: 1044, stunned: 0, ragdollGrace: 0 });
+          game._actionCooldown = 0;
+          return ped.id;
+        });
+        await inventoryPage.mouse.move(8, 8);
+        await inventoryPage.keyboard.press('c');
+        await inventoryPage.waitForFunction(() => Math.abs(globalThis.__browserCheckScene.viewYaw + Math.PI / 2) < 0.05, null, { timeout: 2500 });
+        const before = await inventoryState(inventoryPage);
+        await inventoryPage.keyboard.press('Space');
+        await inventoryPage.waitForFunction(pedId => globalThis.__browserCheckGame.physics.get(pedId)?.phase === 'fall', id, { timeout: 2000 });
+        await waitForFreshFrames(inventoryPage);
+        assertFiniteBody(await bodyState(inventoryPage, id));
+        assert.equal((await inventoryState(inventoryPage)).inventory.ammo.cannon, before.inventory.ammo.cannon);
+      });
+
+      await check('a selected Party Cannon spends one shot, renders its moving projectile, and bursts into resident ragdolls', async () => {
+        const id = await inventoryPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame, ped = game.peds[0];
+          game.physics.clearAll(); game.heat = 0; game._actionCooldown = 0;
+          Object.assign(game.player, { x: 900, y: 1080, angle: -Math.PI / 2 });
+          Object.assign(ped, { x: 900, y: 880, homeX: 900, homeY: 880, stunned: 0, ragdollGrace: 0 });
+          return ped.id;
+        });
+        await equipWithWheel(inventoryPage, 3);
+        const before = await inventoryState(inventoryPage);
+        assert.equal(before.inventory.equipped, 'cannon');
+        assert.deepEqual(before.visibleToys, ['cannon']);
+        await inventoryPage.mouse.move(8, 8);
+        await inventoryPage.keyboard.press('c');
+        await inventoryPage.waitForFunction(() => Math.abs(globalThis.__browserCheckScene.viewYaw + Math.PI / 2) < 0.05, null, { timeout: 2500 });
+        await inventoryPage.keyboard.press('Space');
+        await inventoryPage.waitForFunction(() => globalThis.__browserCheckGame.projectiles.length > 0 && globalThis.__browserCheckScene._toyShots.count > 0, null, { timeout: 2000 });
+        const launched = await inventoryState(inventoryPage);
+        assert.equal(launched.inventory.ammo.cannon, before.inventory.ammo.cannon - 1);
+        await inventoryPage.waitForFunction(pedId => globalThis.__browserCheckGame.physics.get(pedId)?.phase === 'fall', id, { timeout: 2000 });
+        await waitForFreshFrames(inventoryPage);
+        assertFiniteBody(await bodyState(inventoryPage, id));
+        assert.equal((await inventoryState(inventoryPage)).projectiles, 0);
+        assert.ok(await inventoryPage.evaluate(() => globalThis.__browserCheckGame.particles.length > 20), 'Party impact should shower confetti.');
+        diagnostics.cannon = await inventoryState(inventoryPage);
+      });
+
+      await check('repair tape restores the driven car and stops being usable at full condition', async () => {
+        await inventoryPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame, car = game.cars[0];
+          game.peds = []; game.police = []; game.physics.clearAll(); game.heat = 0;
+          Object.assign(car, { x: 900, y: 950, angle: -Math.PI / 2, speed: 0, vx: 0, vy: 0, traffic: false, health: 30 });
+          Object.assign(game.player, { x: 900, y: 918, angle: -Math.PI / 2, vehicleId: null });
+        });
+        await inventoryPage.keyboard.press('e');
+        await waitForScene(inventoryPage, 'drive');
+        await openInventory(inventoryPage);
+        const before = await inventoryState(inventoryPage);
+        await inventoryPage.locator('[data-use-pocket="repairTape"]').click();
+        assert.equal(await inventoryPage.evaluate(() => globalThis.__browserCheckGame.current.health), 85);
+        assert.equal((await inventoryState(inventoryPage)).inventory.pockets.repairTape, before.inventory.pockets.repairTape - 1);
+        await inventoryPage.locator('[data-use-pocket="repairTape"]').click();
+        assert.equal(await inventoryPage.evaluate(() => globalThis.__browserCheckGame.current.health), 100);
+        assert.equal(await inventoryPage.locator('[data-use-pocket="repairTape"]').isDisabled(), true);
+        await closeInventory(inventoryPage);
+      });
+
+      await check('G opens the garage collection; storing and painting update the saved record and visible car', async () => {
+        await openInventory(inventoryPage, true);
+        assert.equal(await inventoryPage.locator('#collection-panel').isVisible(), true);
+        assert.equal(await inventoryPage.locator('#store-car').isEnabled(), true);
+        await inventoryPage.locator('#store-car').click();
+        await inventoryPage.waitForFunction(() => globalThis.__browserCheckGame.garage.cars.length === 1);
+        const record = (await inventoryState(inventoryPage)).garage.cars[0];
+        assert.equal(record.kind, 'compact');
+        assert.equal(await inventoryPage.locator(`[data-garage-id="${record.id}"]`).count(), 1);
+        const paint = inventoryPage.locator(`[data-paint-car="${record.id}"][data-color="#67d3c8"]`);
+        await paint.click();
+        await inventoryPage.waitForFunction(id => {
+          const game = globalThis.__browserCheckGame, scene = globalThis.__browserCheckScene;
+          const car = game.cars.find(vehicle => vehicle.garageId === id), model = car && scene._vehicles.get(car.id);
+          return game.garage.cars[0].color === '#67d3c8' && car?.color === '#67d3c8' && model?.body.color.getHexString() === '67d3c8';
+        }, record.id, { timeout: 3000 });
+        diagnostics.garage = await inventoryState(inventoryPage);
+        await inventoryPage.screenshot({ path: path.join(evidence, 'desktop-garage-collection.png'), fullPage: true });
+        await closeInventory(inventoryPage);
+        await inventoryPage.keyboard.press('e');
+        await waitForScene(inventoryPage, 'foot');
+      });
+
+      await check('a wrecked collected car can be repaired from the garage card before retrieval', async () => {
+        await inventoryPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame, id = game.garage.cars[0].id;
+          game.cars.find(car => car.garageId === id).health = 0;
+        });
+        await openInventory(inventoryPage, true);
+        const before = await inventoryState(inventoryPage), id = before.garage.cars[0].id;
+        assert.equal(await inventoryPage.locator(`[data-retrieve-car="${id}"]`).isDisabled(), true, 'A wreck should require a repair first.');
+        await inventoryPage.locator(`[data-repair-car="${id}"]`).click();
+        const repaired = await inventoryState(inventoryPage);
+        assert.equal(repaired.money, before.money - 45);
+        assert.equal(repaired.garage.cars[0].health, 100);
+        assert.equal(await inventoryPage.evaluate(recordId => globalThis.__browserCheckGame.cars.find(car => car.garageId === recordId).health, id), 100);
+        assert.equal(await inventoryPage.locator(`[data-repair-car="${id}"]`).isDisabled(), true, 'A full repair cannot be charged twice.');
+        assert.equal(await inventoryPage.locator(`[data-retrieve-car="${id}"]`).isEnabled(), true);
+      });
+
+      await check('retrieving a saved ride returns one matching car with clear collisions and usable driving controls', async () => {
+        await openInventory(inventoryPage, true);
+        const id = (await inventoryState(inventoryPage)).garage.cars[0].id;
+        await inventoryPage.locator(`[data-retrieve-car="${id}"]`).click();
+        await inventoryPage.waitForFunction(recordId => {
+          const game = globalThis.__browserCheckGame;
+          return game.current.garageId === recordId && game.player.vehicleId !== null;
+        }, id, { timeout: 3000 });
+        assert.equal(await inventoryPage.evaluate(recordId => globalThis.__browserCheckGame.cars.filter(car => car.garageId === recordId).length, id), 1, 'Retrieving should never duplicate an owned ride.');
+        assert.equal(await inventoryPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame;
+          return game._vehicleFree(game.current) && game.cars.every(car => car === game.current || !game._vehicleContact(game.current, car));
+        }), true, 'Retrieved car must have a clear solid footprint.');
+        if (await inventoryPage.locator('#inventory-screen').isVisible()) await closeInventory(inventoryPage);
+        await waitForScene(inventoryPage, 'drive');
+        const before = await sceneState(inventoryPage);
+        await inventoryPage.keyboard.down('w');
+        await inventoryPage.waitForTimeout(200);
+        await inventoryPage.keyboard.up('w');
+        const after = await sceneState(inventoryPage);
+        assert.ok(Math.hypot(after.worldX - before.worldX, after.worldY - before.worldY) > 1, 'Retrieved car should respond to throttle.');
+      });
+
+      await check('releasing a collected ride frees its slot without deleting the world car or charging cash', async () => {
+        const fixture = await inventoryPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame;
+          Object.assign(game.current, { x: 900, y: 900, speed: 0, vx: 0, vy: 0 });
+          const car = game._addCar(990, 900, 0, 'sports', '#fb8097', false);
+          car.garageId = 'ride-2';
+          game.garage.cars.push({ id: 'ride-2', kind: car.kind, color: car.color, health: car.health });
+          return { worldId: car.id, original: game.garage.cars[0].id, money: game.money };
+        });
+        await openInventory(inventoryPage, true);
+        assert.equal(await inventoryPage.locator('[data-garage-id]').count(), 2);
+        await inventoryPage.locator('[data-release-car="ride-2"]').click();
+        const released = await inventoryState(inventoryPage);
+        assert.equal(released.money, fixture.money, 'Freeing a garage slot should cost nothing.');
+        assert.equal(released.garage.cars.length, 1);
+        assert.equal(released.garage.cars[0].id, fixture.original, 'Other collected rides must remain owned.');
+        assert.equal(await inventoryPage.locator('[data-garage-id="ride-2"]').count(), 0);
+        const world = await inventoryPage.evaluate(id => {
+          const car = globalThis.__browserCheckGame.cars.find(vehicle => vehicle.id === id);
+          return { exists: Boolean(car), owned: Boolean(car?.garageId), health: car?.health };
+        }, fixture.worldId);
+        assert.equal(world.exists, true, 'Release must retain the deployed car in town.');
+        assert.equal(world.owned, false);
+        assert.ok(world.health > 0);
+        await closeInventory(inventoryPage);
+      });
+
+      await check('inventory and garage progress survive reload in the existing local save key', async () => {
+        await openInventory(inventoryPage);
+        const before = await inventoryState(inventoryPage);
+        // Settings clicks call the documented save path immediately.
+        await inventoryPage.locator('#sound-toggle').click();
+        const saved = await inventoryPage.evaluate(key => JSON.parse(localStorage.getItem(key)), saveKey);
+        assert.equal(saved.version, 1, 'The existing controller save envelope should remain compatible.');
+        assert.equal(saved.progress.version, 2);
+        assert.deepEqual(saved.progress.inventory, before.inventory);
+        assert.deepEqual(saved.progress.garage, before.garage);
+        await inventoryPage.reload();
+        await inventoryPage.locator('#play-button').click();
+        await waitForScene(inventoryPage, 'foot');
+        const reloaded = await inventoryState(inventoryPage);
+        assert.deepEqual(reloaded.inventory, before.inventory);
+        assert.deepEqual(reloaded.garage, before.garage);
+        assert.equal(reloaded.money, before.money);
+        assert.equal(reloaded.equippedModel, 'cannon');
+        await openInventory(inventoryPage, true);
+        assert.equal(await inventoryPage.locator('[data-garage-id]').count(), 1);
+        assert.equal(await inventoryPage.locator('[data-retrieve-car]').isDisabled(), true, 'A saved collection is browsable away from the garage, but retrieval requires a visit.');
+        assert.equal(await inventoryPage.locator('[data-release-car]').isDisabled(), true, 'Ownership changes should also require a garage visit.');
+        await closeInventory(inventoryPage);
+      });
+
+      await check('inventory remains usable at narrow mobile and short desktop sizes', async () => {
+        for (const viewport of [{ width: 390, height: 844 }, { width: 1365, height: 450 }]) {
+          await inventoryPage.setViewportSize(viewport);
+          await openInventory(inventoryPage);
+          assert.equal(await inventoryPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+          await inventoryPage.locator('#collection-tab').click();
+          await inventoryPage.locator('[data-garage-id]').waitFor({ state: 'visible' });
+          await inventoryPage.locator('#pockets-tab').click();
+          await inventoryPage.locator('[data-pocket="refill"]').scrollIntoViewIfNeeded();
+          assert.equal(await inventoryPage.locator('[data-pocket="refill"]').isVisible(), true);
+          await inventoryPage.screenshot({ path: path.join(evidence, `inventory-${viewport.width}x${viewport.height}.png`), fullPage: true });
+          await closeInventory(inventoryPage);
+          await inventoryPage.locator('#game-canvas').scrollIntoViewIfNeeded();
+          await inventoryPage.keyboard.down('Tab');
+          await inventoryPage.locator('#toy-wheel').waitFor({ state: 'visible' });
+          const box = await inventoryPage.locator('#wheel-options').boundingBox();
+          assert.ok(box && box.width <= viewport.width, 'Toy choices must fit the narrow viewport.');
+          await inventoryPage.keyboard.press('1');
+          await inventoryPage.keyboard.up('Tab');
+          await inventoryPage.locator('#toy-wheel').waitFor({ state: 'hidden' });
+          assert.equal((await inventoryState(inventoryPage)).inventory.equipped, 'popper');
+        }
+        await inventoryPage.setViewportSize({ width: 1365, height: 900 });
+      });
+    } finally { await inventoryContext.close(); }
+
+    await check('old version-one saves migrate with existing progress and settings intact', async () => {
+      const legacyContext = await browser.newContext({ viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
+      try {
+        await installEngineInspection(legacyContext);
+        await legacyContext.route('**/*', route => {
+          if (/^(file|data|blob):/.test(route.request().url())) return route.continue();
+          externalRequests.push(route.request().url());
+          return route.abort();
+        });
+        await legacyContext.addInitScript(key => localStorage.setItem(key, JSON.stringify({
+          version: 1, progress: { version: 1, money: 4321, score: 66, bestScore: 100, completed: 7, upgrades: { boost: 2, armor: 1 } },
+          settings: { muted: true, reducedMotion: true },
+        })), saveKey);
+        const legacyPage = await legacyContext.newPage();
+        legacyPage.on('pageerror', error => errors.push(error.message));
+        legacyPage.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+        await legacyPage.goto(url);
+        await legacyPage.locator('#play-button').click();
+        await waitForScene(legacyPage, 'foot');
+        const migrated = await legacyPage.evaluate(() => globalThis.__browserCheckGame.exportSave());
+        assert.equal(migrated.version, 2);
+        assert.equal(migrated.money, 4321); assert.equal(migrated.score, 66);
+        assert.equal(migrated.bestScore, 100); assert.equal(migrated.completed, 7);
+        assert.deepEqual(migrated.upgrades, { boost: 2, armor: 1 });
+        assert.deepEqual(migrated.inventory, { equipped: 'popper', unlocked: ['popper'], pockets: { biscuits: 2, repairTape: 1, refill: 1 }, ammo: { cannon: 0 } });
+        assert.deepEqual(migrated.garage, { cars: [] });
+        assert.equal(await legacyPage.locator('#sound-toggle').getAttribute('aria-pressed'), 'false');
+        assert.equal(await legacyPage.locator('#motion-toggle').getAttribute('aria-pressed'), 'true');
+      } finally { await legacyContext.close(); }
+    });
+
     await check('no external network requests', async () => assert.deepEqual(externalRequests, []));
     await check('no page or console errors', async () => assert.deepEqual(errors, []));
     fs.writeFileSync(path.join(evidence, 'browser-check.json'), JSON.stringify({ url, checks, diagnostics, errors, externalRequests }, null, 2) + '\n');

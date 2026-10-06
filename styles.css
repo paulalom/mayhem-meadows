@@ -53,7 +53,7 @@ button:active:not(:disabled){transform:translateY(1px)}
 .interaction-hint{position:absolute;bottom:76px;left:50%;transform:translateX(-50%);padding:9px 14px;width:max-content;white-space:normal;text-align:center;line-height:1.5;font-size:12px;font-weight:700;color:var(--ink);background:var(--lime);border-radius:3px;box-shadow:3px 3px 0 #141d2780;z-index:2;max-width:min(420px,calc(100% - 24px))}
 .interaction-hint kbd{background:var(--ink);color:var(--cream);border:0;font-size:10px;margin:0 4px}
 .toast{position:absolute;top:20px;left:50%;transform:translateX(-50%);max-width:calc(100% - 34px);width:max-content;background:var(--cream);color:var(--ink);padding:12px 18px;font-size:13px;font-weight:750;box-shadow:4px 4px 0 #141d2760;border-radius:4px;z-index:4;line-height:1.4;text-align:center;opacity:0;visibility:hidden;transition:opacity .18s,visibility .18s}
-.toast.visible{opacity:1;visibility:visible;z-index:9}
+.toast.visible{opacity:1;visibility:visible;z-index:9;pointer-events:none}
 .ride-strip{position:absolute;left:17px;bottom:15px;display:flex;align-items:center;gap:12px;background:rgba(20,29,39,.92);padding:10px 13px;border-radius:4px;max-width:calc(100% - 34px);min-width:265px;z-index:1;pointer-events:none}
 .ride-icon{font-size:23px;font-weight:800;color:var(--aqua);border-right:1px solid var(--line);padding-right:12px;line-height:1.2}
 .ride-copy{display:flex;flex-direction:column;gap:4px;min-width:80px}
@@ -181,3 +181,111 @@ kbd{font:700 10px "Courier New",monospace;padding:4px 5px;background:var(--panel
 @media(max-width:400px){.wordmark{font-size:18px}.brand .eyebrow{font-size:5px}.brand-mark{width:36px;height:39px;font-size:27px}.brand-mark span{font-size:24px}.header-actions{max-width:135px}.utility-button{font-size:8px;padding:6px 5px}.help-button{width:22px}.dispatch-column{grid-template-columns:1fr}.town-note{grid-column:auto}.contract-copy>span:last-child{display:block;font-size:8px}.contract-button{padding:11px}.contract-copy strong{font-size:12px}.contract-category{font-size:7px}.contract-icon{width:28px;height:30px;font-size:21px}.contract-arrow{font-size:18px}.panel-heading h2,.garage-panel .panel-heading h2{font-size:18px}.purchase-button strong{font-size:11px}.purchase-button small{font-size:8px}.price{font-size:10px;min-width:45px}.start-card{padding:19px}.start-copy h2{font-size:34px}.play-footer .text-button{font-size:7px}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
 .reduced-motion *,.reduced-motion *:before,.reduced-motion *:after{scroll-behavior:auto!important;transition:none!important;animation:none!important}
+.header-actions{flex-wrap:wrap;justify-content:flex-end}
+.inventory-trigger{display:flex;align-items:center;gap:7px;color:var(--lime);border-color:#586445;background:#253028}
+.inventory-trigger kbd{font-size:8px;padding:1px 4px;background:#141d27;border-color:#586445}
+.equipped-panel{position:absolute;left:17px;bottom:136px;z-index:1;display:flex;flex-direction:column;gap:5px;max-width:255px;padding:8px 11px;background:rgba(20,29,39,.88);border-radius:3px;pointer-events:none}
+.equipped-panel .stat-label{font-size:7px;color:var(--muted);display:flex;align-items:center;gap:7px;letter-spacing:.7px}
+.equipped-panel kbd{font-size:6px;padding:1px 3px;background:transparent;border-color:#596552}
+#equipped-toy{font-size:10px;line-height:1.35;color:var(--lime)}
+.toy-wheel{background:rgba(14,21,29,.83)}
+.wheel-card{width:100%;max-width:560px;max-height:100%;overflow:auto;padding:20px 24px;text-align:center;border:1px solid #637060;background:#141d27f0;border-radius:8px;box-shadow:8px 8px 0 #0003}
+.wheel-card>.eyebrow{color:var(--aqua);font-size:8px;letter-spacing:1.1px}
+.wheel-card h2{font-size:28px;line-height:1.1;letter-spacing:-.8px;margin:6px 0 0}
+.wheel-options{position:relative;width:100%;max-width:470px;height:300px;margin:14px auto 12px}
+.wheel-options:before{content:"";position:absolute;left:50%;top:18px;transform:translateX(-50%);width:258px;height:258px;border:1px dashed #526454;border-radius:50%;background:radial-gradient(circle,#24362e66 0,#24362e11 63%,transparent 64%)}
+.wheel-center{position:absolute;left:50%;top:162px;transform:translateX(-50%);display:flex;flex-direction:column;gap:1px;font-size:50px;line-height:1;color:var(--lime)}
+.wheel-center small{font:700 7px "Courier New",monospace;letter-spacing:2px;color:var(--muted)}
+.wheel-option{position:absolute;display:flex;flex-direction:column;align-items:center;gap:5px;width:160px;min-height:128px;padding:13px 10px 10px;border:1px solid #506052;border-radius:6px;background:#20302b;color:var(--cream);transition:border-color .12s,background .12s,box-shadow .12s;text-align:center;box-shadow:3px 3px 0 #0003}
+.wheel-option[data-gadget="popper"]{top:0;left:50%;transform:translateX(-50%)}
+.wheel-option[data-gadget="hammer"]{bottom:0;left:0}
+.wheel-option[data-gadget="cannon"]{bottom:0;right:0}
+.wheel-option:hover:not(:disabled),.wheel-option.selected,.wheel-option.is-selected,.wheel-option[aria-pressed="true"],.wheel-option[aria-selected="true"]{border-color:var(--lime);background:#354332;box-shadow:0 0 0 2px #deef6722,3px 3px 0 #0003}
+.wheel-option:active:not(:disabled){transform:none}
+.wheel-option[data-gadget="popper"]:active:not(:disabled){transform:translateX(-50%)}
+.wheel-option:disabled:not(.contract-button){opacity:.7;background:#1e2730;border-color:#45515a}
+.wheel-slot{position:absolute;top:8px;left:9px;min-width:17px;padding:2px;border:1px solid #5b6b54;border-radius:3px;color:var(--muted);font:700 8px "Courier New",monospace}
+.toy-icon{font-size:26px;line-height:1;width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:var(--ink)}
+.popper-icon,.biscuit-icon{color:var(--lime)}
+.hammer-icon,.tape-icon{color:var(--aqua)}
+.cannon-icon,.refill-icon{color:var(--coral)}
+.toy-name{font-size:11px;line-height:1.3}
+.toy-detail{font-size:8px;line-height:1.4;color:#b2c0c6;max-width:130px}
+.toy-ammo{font:700 8px "Courier New",monospace;line-height:1.4;color:var(--lime);letter-spacing:.35px}
+.wheel-option:disabled .toy-ammo{color:var(--coral)}
+.wheel-selected{padding:9px 8px;margin:0;background:var(--ink-deep);border:1px solid var(--line);border-radius:4px;color:var(--lime);font-size:11px;font-weight:700;line-height:1.4}
+.wheel-instructions{margin:10px 0 0;font-size:9px;color:var(--muted);line-height:1.9}
+.wheel-instructions strong{font-weight:700;color:var(--cream)}
+.wheel-instructions kbd{font-size:7px;padding:2px 4px;margin:0 1px}
+.inventory-screen{padding:20px;background:rgba(14,21,29,.84)}
+.inventory-card{display:flex;flex-direction:column;width:100%;max-width:780px;max-height:100%;min-height:0;overflow:hidden;border:1px solid #65705d;background:var(--ink);border-radius:8px;box-shadow:8px 8px 0 #0003}
+.inventory-heading{position:relative;flex-shrink:0;padding:20px 24px 14px;border-bottom:1px solid var(--line)}
+.inventory-heading .eyebrow{display:block;color:var(--lime);font-size:8px;letter-spacing:1.1px;margin-right:24px}
+.inventory-heading h2{font-size:28px;line-height:1.15;letter-spacing:-.8px;margin:5px 24px 0 0}
+.inventory-heading .dialog-close{right:17px;top:14px}
+.inventory-tabs{display:flex;flex-shrink:0;padding:0 24px;background:var(--ink-deep);border-bottom:1px solid var(--line)}
+.inventory-tab{position:relative;flex:1;padding:12px 10px;border:0;background:transparent;color:var(--muted);font-size:11px;font-weight:700;line-height:1.4;display:flex;align-items:center;justify-content:center;gap:10px}
+.inventory-tab span{font:700 8px "Courier New",monospace;min-width:17px;padding:1px 3px;border:1px solid #506050;border-radius:3px}
+.inventory-tab[aria-selected="true"]{color:var(--lime)}
+.inventory-tab[aria-selected="true"]:after{content:"";height:3px;position:absolute;bottom:-1px;left:0;right:0;background:var(--lime)}
+.inventory-tab:hover{background:#24332b}
+.inventory-location{flex-shrink:0;font:700 9px "Courier New",monospace;line-height:1.6;margin:0;padding:10px 24px;color:#bcc9c4;background:#26342f;border-bottom:1px solid #3a4e41}
+.inventory-location.available,.inventory-location.at-garage{color:var(--lime)}
+.inventory-scroll{min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-color:#526052 var(--ink-deep);padding:20px 24px;touch-action:pan-y}
+.inventory-section-heading{display:flex;align-items:center;justify-content:space-between;gap:15px;margin-bottom:13px}
+.inventory-section-heading .eyebrow{font-size:7px;letter-spacing:1px}
+.inventory-section-heading h3{font-size:17px;line-height:1.25;letter-spacing:-.4px;margin:3px 0 0}
+.inventory-section-note{font:700 7px "Courier New",monospace;line-height:1.6;max-width:150px;text-align:right;color:var(--muted)}
+.pocket-items{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.pocket-card{padding:13px;background:var(--panel);border:1px solid var(--line);border-radius:5px;display:flex;flex-direction:column;min-width:0}
+.pocket-card-heading{display:flex;align-items:center;gap:9px}
+.pocket-icon{display:flex;align-items:center;justify-content:center;width:30px;height:34px;background:var(--ink-deep);font-size:25px;border-radius:3px;flex-shrink:0}
+.pocket-card h4{font-size:11px;line-height:1.35;margin:0 0 4px;font-weight:750}
+.pocket-count{font:700 9px "Courier New",monospace;color:var(--lime)}
+.pocket-description{font-size:9px;line-height:1.65;color:#b0bec5;margin:10px 0 13px;flex:1}
+.inventory-card-actions{display:flex;gap:6px;align-items:stretch;flex-wrap:wrap}
+.inventory-action{display:flex;justify-content:center;align-items:center;gap:8px;min-height:32px;padding:8px 9px;background:var(--panel-light);border:1px solid #53614f;border-radius:3px;font-size:9px;font-weight:750;line-height:1.35;text-align:center;white-space:normal}
+.inventory-action:hover:not(:disabled){border-color:var(--lime);background:#394a37;color:var(--lime)}
+.use-action{background:#354333;border-color:#6d7b53;color:var(--lime)}
+.inventory-card-actions .use-action{flex:1 1 100%}
+.inventory-card-actions .buy-action{flex:1}
+.buy-action>span{font:700 9px "Courier New",monospace;color:var(--lime);white-space:nowrap}
+.inventory-action:disabled:not(.contract-button){opacity:.55}
+.toy-shop-heading{margin-top:24px}
+.toy-shop{display:flex;flex-direction:column;gap:9px}
+.gadget-card{display:grid;grid-template-columns:36px minmax(0,1fr) auto;gap:12px;align-items:center;padding:13px;background:#233036;border:1px solid #44564f;border-radius:5px}
+.gadget-icon{display:flex;align-items:center;justify-content:center;font-size:27px;line-height:1;width:36px;height:40px;border-radius:4px;background:var(--ink-deep)}
+.gadget-copy h4{font-size:12px;margin:0 0 4px;line-height:1.3}
+.gadget-copy p{font-size:9px;line-height:1.6;color:#b0bec5;margin:0 0 5px}
+.gadget-status{font:700 8px "Courier New",monospace;line-height:1.4;color:var(--aqua)}
+.gadget-card .inventory-action{min-width:93px}
+.inventory-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-shrink:0;padding:10px 24px;border-top:1px solid var(--line);background:var(--ink-deep);font:700 8px "Courier New",monospace;line-height:1.5;color:var(--muted)}
+.inventory-footer kbd{font-size:7px;padding:1px 3px;margin-right:4px}
+.garage-count{font:700 9px "Courier New",monospace;color:var(--aqua);white-space:nowrap;padding:5px 7px;background:var(--ink-deep);border:1px solid #44564f;border-radius:3px}
+.garage-store-bar{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:12px 14px;background:#27372c;border:1px solid #506048;border-radius:5px;margin-bottom:14px}
+.garage-store-bar p{font-size:10px;line-height:1.65;color:#c3d0c6;margin:0;max-width:420px}
+.garage-store-bar .inventory-action{flex-shrink:0;min-width:125px}
+.garage-empty{padding:25px 20px;text-align:center;border:1px dashed #455748;border-radius:5px;margin:0 0 14px;font-size:12px;font-weight:700;line-height:1.6;color:#c3d0c6}
+.garage-empty>span{display:block;color:var(--aqua);font-size:32px;line-height:1;margin-bottom:10px}
+.garage-empty small{display:block;color:var(--muted);font-size:9px;font-weight:400;margin-top:5px}
+.garage-cars{display:flex;flex-direction:column;gap:10px}
+.saved-car{padding:14px;background:var(--panel);border:1px solid #44564f;border-radius:5px;min-width:0}
+.saved-car-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
+.saved-car-name{display:block;font-size:13px;line-height:1.4;font-weight:750;margin:0}
+.saved-car-kind,.saved-car-condition{font:700 8px "Courier New",monospace;color:var(--muted);line-height:1.5}
+.saved-car-badge{font:700 7px "Courier New",monospace;line-height:1.4;color:var(--aqua);padding:4px 6px;border:1px solid #445b55;border-radius:3px;background:#19282b;white-space:nowrap}
+.saved-car-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:12px}
+.saved-car-actions .inventory-action{min-width:108px}
+.garage-swatches{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.paint-swatch{display:block;width:24px;height:24px;min-width:24px;padding:0;border:2px solid #15202a;outline:1px solid #637063;outline-offset:0;background:var(--paint,var(--yellow));border-radius:50%;box-shadow:inset 0 0 0 1px #fff3}
+.paint-swatch:hover:not(:disabled){outline-color:var(--lime);outline-width:2px}
+.paint-swatch.selected,.paint-swatch[aria-pressed="true"]{outline-color:var(--cream);outline-width:2px;box-shadow:inset 0 0 0 3px #141d2733}
+.paint-swatch:disabled:not(.contract-button){opacity:.55}
+.garage-paint-note{display:flex;align-items:center;gap:12px;padding:13px 0 0;margin-top:16px;border-top:1px solid var(--line)}
+.garage-paint-note>span{font-size:28px;line-height:1;color:var(--coral);flex-shrink:0}
+.garage-paint-note p{font-size:11px;font-weight:700;line-height:1.5;margin:0}
+.garage-paint-note small{font-size:9px;line-height:1.65;color:var(--muted);font-weight:400;display:block;margin-top:3px}
+@media(max-width:1150px){.header-actions{max-width:485px}.inventory-trigger kbd{display:none}.wheel-card{padding:17px}.wheel-options{height:285px}.wheel-option{width:145px;min-height:122px}.wheel-center{top:153px}.inventory-screen{padding:16px}.inventory-heading{padding:17px 20px 12px}.inventory-tabs{padding:0 20px}.inventory-location,.inventory-footer{padding-left:20px;padding-right:20px}.inventory-scroll{padding:16px 20px}.pocket-card{padding:11px}.pocket-card h4{font-size:10px}.gadget-card{gap:10px}}
+@media(max-width:680px){.header-actions{max-width:190px}.inventory-trigger{font-size:9px;padding:6px 7px}.equipped-panel{left:12px;bottom:89px;width:calc(100% - 126px);max-width:245px;padding:7px 9px}#equipped-toy{font-size:9px}.equipped-panel .stat-label{font-size:6px}.wheel-card{padding:16px 12px;max-width:390px}.wheel-card>.eyebrow{font-size:6px;letter-spacing:.6px}.wheel-card h2{font-size:25px}.wheel-options{height:273px;margin:13px auto 10px}.wheel-options:before{width:225px;height:225px;top:22px}.wheel-option{width:125px;min-height:122px;padding:12px 8px 9px;gap:4px}.wheel-center{top:153px;font-size:39px}.wheel-center small{font-size:6px;letter-spacing:1.2px}.toy-icon{font-size:23px;width:30px;height:30px}.toy-name{font-size:10px}.toy-detail{font-size:7px}.toy-ammo{font-size:7px}.wheel-selected{font-size:10px}.wheel-instructions{font-size:8px}.inventory-screen{padding:14px}.inventory-heading{padding:15px 16px 11px}.inventory-heading h2{font-size:24px;margin-right:18px}.inventory-heading .eyebrow{font-size:6px;letter-spacing:.5px;line-height:1.6}.inventory-heading .dialog-close{right:10px;top:10px}.inventory-tabs{padding:0 16px}.inventory-tab{font-size:10px;padding:10px 6px}.inventory-location{padding:8px 16px;font-size:8px}.inventory-scroll{padding:15px 16px}.inventory-section-heading{gap:10px}.inventory-section-heading h3{font-size:16px}.inventory-section-note{font-size:6px;max-width:106px}.pocket-items{grid-template-columns:1fr;gap:9px}.pocket-card{padding:12px}.pocket-card-heading{gap:9px}.pocket-card h4{font-size:11px}.pocket-description{margin:7px 0 10px;font-size:9px}.inventory-card-actions{flex-wrap:nowrap}.inventory-card-actions .use-action{flex:1 1 auto}.inventory-card-actions .buy-action{flex:0 0 82px}.toy-shop-heading{margin-top:20px}.gadget-card{grid-template-columns:31px minmax(0,1fr);gap:8px 10px;padding:12px}.gadget-icon{width:31px;height:35px;font-size:24px;align-self:start}.gadget-card .inventory-action{grid-column:2;justify-self:start;min-width:110px;padding:7px 10px}.gadget-copy h4{font-size:11px}.gadget-copy p{font-size:8px}.gadget-status{font-size:7px}.inventory-footer{padding:9px 16px;font-size:7px;gap:6px}.inventory-footer>span:last-child{max-width:125px;text-align:right}.garage-count{font-size:7px;padding:4px 5px}.garage-store-bar{flex-direction:column;align-items:stretch;gap:10px;padding:11px}.garage-store-bar p{font-size:9px}.garage-store-bar .inventory-action{min-width:0}.garage-empty{padding:19px 12px;font-size:11px}.garage-empty small{font-size:8px}.saved-car{padding:12px}.saved-car-name{font-size:12px}.saved-car-actions{gap:9px}.garage-swatches{gap:6px}.paint-swatch{width:22px;height:22px;min-width:22px}.garage-paint-note small{font-size:8px}}
+@media(max-width:400px){.header-actions{max-width:148px}.inventory-trigger{font-size:8px;padding:6px 5px}.wheel-option{width:118px}.toy-name{font-size:9px}.wheel-card{padding:15px 10px}.wheel-instructions{font-size:7px}.inventory-screen{padding:11px}.inventory-heading h2{font-size:22px}.inventory-heading{padding:14px 13px 10px}.inventory-tabs{padding:0 13px}.inventory-location,.inventory-footer{padding-left:13px;padding-right:13px}.inventory-scroll{padding:13px}.inventory-section-heading .eyebrow{font-size:6px}.garage-swatches{gap:5px}}
+@media(max-height:600px) and (min-width:681px){.inventory-screen,.toy-wheel{padding:16px}.inventory-heading{padding-top:13px;padding-bottom:10px}.inventory-heading h2{font-size:24px}.inventory-tab{padding-top:9px;padding-bottom:9px}.inventory-location{padding-top:7px;padding-bottom:7px}.inventory-scroll{padding-top:14px;padding-bottom:14px}.wheel-card{padding:13px 18px}.wheel-card h2{font-size:24px}.wheel-options{height:268px;margin-top:10px;margin-bottom:8px}.wheel-option{min-height:119px}.wheel-center{top:144px;font-size:42px}.wheel-options:before{width:240px;height:240px;top:13px}.wheel-instructions{margin-top:7px}}

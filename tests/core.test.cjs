@@ -238,7 +238,7 @@ test('voluntary flop creates a jointed body and blocks walking, popping, and ent
 test('recovery and capture clear a fallen player, preserve progress, and leave ragdolls out of saves', () => {
   const game = makeGame(); game.player.x = 1080; game.acceptMission('delivery'); game.money = 250; game.heat = 2; game.score = 50;
   assert.equal(game.flop(), true); const saved = game.exportSave();
-  assert.deepEqual(Object.keys(saved).sort(), ['bestScore', 'completed', 'money', 'score', 'upgrades', 'version']);
+  assert.deepEqual(Object.keys(saved).sort(), ['bestScore', 'completed', 'garage', 'inventory', 'money', 'score', 'upgrades', 'version']);
   const copy = makeGame(); copy.loadSave(saved); assert.equal(copy.physics.bodies.size, 0);
   game.recover(); assert.equal(game.physics.get('player'), undefined); assert.equal(game.money, 250); assert.equal(game.heat, 2); assert.ok(game.mission);
   assert.equal(game.score, 30); assert.ok(game._personFree(game.player.x, game.player.y));

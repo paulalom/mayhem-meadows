@@ -33,6 +33,26 @@ The player can ignore contracts and play freely. There is no mandatory story seq
 
 Prototype controls: WASD/arrow keys to move or drive; right mouse drag to orbit the camera; C to recenter; E to enter/exit or use a nearby service; Space for handbrake while driving or a confetti burst on foot; Shift for boost/sprint; H for horn; F for an on-foot flop; Esc/P to pause; R for recovery. Contract buttons live in the HUD so accepting a gig never depends on finding a tiny interaction point.
 
+## Toys, pockets, and a place to park
+
+Inventory should create new funny choices within seconds. The three toys occupy fixed wheel slots: hold Tab, choose with the pointer, arrows, or 1–3, then release to equip. Escape cancels. The wheel pauses the town and timers; opening it clears movement keys so choosing a toy never accidentally drives into a wall.
+
+| Toy | Character | Cost and constraint |
+| --- | --- | --- |
+| Confetti popper | Quick, short-range burst; the reliable starter toy | Free, unlimited uses, brief cooldown |
+| Inflatable hammer | A close-range padded swing with a firm ragdoll shove | $120 permanent unlock; unlimited uses, slower swing |
+| Party cannon | A visible traveling ball that bursts into a wider confetti party | $280 unlock includes six charges; twelve-charge capacity |
+
+Space uses the equipped toy on foot and remains the handbrake in a car. Hits produce confetti, fake curses, physics tumbles, and heat. They do not pay cash. Each toy has a different reach and rhythm, so choosing one changes the situation rather than only increasing a number.
+
+Press **I** for pockets. Carry at most five biscuits (+40 composure, $15 each), three repair tapes (+55 current-car condition, $35 each), and three refill packs (+6 cannon charges, $30 each). Starter supplies are two biscuits, one tape, and one refill. Supplies work anywhere they are useful; a full meter, missing car, or locked cannon consumes nothing. A partial top-up uses one item and stops at the cap. Buying supplies requires stopping at Sprinkle Garage.
+
+Press **G** for a three-slot car collection. At Sprinkle Garage, save the civilian ride you are driving, bring a saved ride back out at a collision-safe spot, repair it for $45, or repaint it for $25. Stored rides retain condition and paint, including after a reload. A wreck must be repaired before retrieval. Bringing out a deployed ride moves that car instead of creating a duplicate. Existing boost and armor upgrades apply to every ride. Browsing is available anywhere; car management requires a garage visit.
+
+The added outing loop is **finish a gig → restock or unlock a toy → save a favorite ride → return to free roam with a new way to cause trouble**. No weight limits, sorting chores, random loot tiers, or compulsory shopping interrupt the driving loop. Pocket and collection menus freeze simulation time and return keyboard focus to the game when closed. Persistent inventory is validated and old saves migrate with their cash and upgrades intact.
+
+A full garage can release a slot for a new favorite. Releasing ownership leaves a deployed car in town, preserves its condition, and pays no cash; it is a collection choice rather than a way to farm money.
+
 ## Third-person presentation
 
 The camera makes the town feel like a place you can run through. Keep the player, the next corner, and the nearest traffic readable; a pleasing view should also explain where to go.
@@ -121,7 +141,7 @@ Technical shape: plain HTML/CSS/JavaScript, local geometry and audio, a checked-
 
 ## Deliberate cuts
 
-No multiplayer, huge procedural city, interiors, stairs, jumping, elevated driving, character customization editor, inventory management, realistic damage, complex combat, story campaign, licensed music, or online economy in this slice. Touch controls and gamepad support can follow once keyboard driving and the camera are good.
+No multiplayer, huge procedural city, interiors, stairs, jumping, elevated driving, character customization editor, loot grids or weight management, realistic damage, complex combat, story campaign, licensed music, or online economy in this slice. Touch controls and gamepad support can follow once keyboard driving and the camera are good.
 
 ## Playtest questions and acceptance checks
 
@@ -138,5 +158,8 @@ No multiplayer, huge procedural city, interiors, stairs, jumping, elevated drivi
 - Do file-open play, full screen, camera recentering, and the WebGL failure overlay behave predictably?
 - Do falling bodies retain connected limbs and stay outside walls, vehicles, and the ground? Can both residents and the player get up in a safe position?
 - Do pause and recovery work during a tumble, and can a crowd of fallen residents stay playable without unbounded physics work?
+- Can players switch toys, use a biscuit, and return to driving without stuck keys or timer loss? Does canceling the wheel preserve the equipped toy?
+- Do cannon charges and pocket stack limits create light restocking choices? Does retrieval preserve a saved car's condition and prevent duplicates?
+- Do old saves keep progress, and do toy unlocks, supplies, paint, and collection survive a reload with no external service?
 
 Tune driving and heat first. More content cannot rescue an unpleasant steering model.
