@@ -19,7 +19,7 @@ function makeScene() {
     T, game, scene: new T.Scene(), _geometries: [], _materials: new Map(),
     _color: new T.Color(), _dummy: new T.Object3D(), _residents: new Map(), _vehicles: new Map(),
     _lastPlayerX: game.player.x, _lastPlayerY: game.player.y, _walkPhase: 0,
-    reducedMotion: false
+    reducedMotion: false, _cameraInfo: { aiming: false }
   });
   scene._cube = scene._geometry(new T.BoxGeometry(1, 1, 1));
   scene._sphere = scene._geometry(new T.IcosahedronGeometry(1, 1));
@@ -55,6 +55,39 @@ test('equipping each toy changes the held model without allocating geometry or m
   assert.ok(scene._player.rightArm.rotation.z > 2, 'hammer starts a raised swing');
   scene.game._actionCooldown = 0.4; scene._people(0);
   assert.ok(scene._player.rightArm.rotation.z < 1.3, 'hammer sweeps forward through the strike');
+});
+
+test('held toy visibly follows upward and downward aim and lowers when aiming stops', () => {
+  const scene = makeScene();
+  scene._cameraInfo.aiming = true;
+  const barrel = () => {
+    scene._people(0); scene._player.rightArm.updateWorldMatrix(true, false);
+    return new T.Vector3(0, -1, 0).transformDirection(scene._player.rightArm.matrixWorld);
+  };
+  scene.game.player.aimPitch = 0.6;
+  assert.ok(barrel().y > 0.5, 'barrel points upward while looking up');
+  scene.game.player.aimPitch = -0.6;
+  assert.ok(barrel().y < -0.5, 'barrel points downward while looking down');
+  scene._cameraInfo.aiming = false;
+  assert.ok(barrel().y < -0.95, 'idle character lowers the held toy');
+});
+
+test('confetti renders at the vertical shot impact while ordinary confetti keeps its ground lift', () => {
+  const scene = makeScene(), material = new T.MeshBasicMaterial();
+  scene._confetti = new T.InstancedMesh(scene._cube, material, 360);
+  scene._skids = new T.InstancedMesh(scene._cube, material, 250);
+  scene._target = new T.Group();
+  scene.game.mission = null;
+  scene.game.particles = [
+    { x: 1080, y: 1080, size: 4, color: '#ffd15b', life: 1, maxLife: 1, height: 5.6 },
+    { x: 1080, y: 1080, size: 4, color: '#ffd15b', life: 1, maxLife: 1 }
+  ];
+  scene._effects();
+  const matrix = new T.Matrix4(), position = new T.Vector3();
+  scene._confetti.getMatrixAt(0, matrix); position.setFromMatrixPosition(matrix);
+  assert.ok(Math.abs(position.y - 5.6) < 0.00001);
+  scene._confetti.getMatrixAt(1, matrix); position.setFromMatrixPosition(matrix);
+  assert.ok(Math.abs(position.y - 0.2) < 0.00001);
 });
 
 test('cannon shots render at their simulation arc height and reuse one bounded buffer', () => {

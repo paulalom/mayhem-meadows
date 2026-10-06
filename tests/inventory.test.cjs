@@ -109,6 +109,69 @@ test('Party Cannon movement is frame-rate independent and rotated cars stop a sh
   assert.equal(a.projectiles.length, 0);
 });
 
+test('aiming close-range toys into the sky misses residents and officers without raising heat', () => {
+  for (const toy of ['popper', 'hammer']) {
+    const game = makeGame(); shop(game);
+    if (toy === 'hammer') game.purchaseGadget(toy);
+    game.buildings = []; game.cars = []; game.player.x = game.player.y = 1080;
+    game.peds = game.peds.slice(0, 1); game.police = game.police.slice(0, 1);
+    Object.assign(game.peds[0], { x: 1120, y: 1080, pace: 0 });
+    Object.assign(game.police[0], { x: 1120, y: 1080 });
+    game.drainEvents();
+    assert.equal(game.action(0, { pitch: 1.2 }), true);
+    assert.equal(game.physics.bodies.size, 0); assert.equal(game.police[0].distracted, undefined);
+    assert.equal(game.heat, 0); assert.ok(game.particles.some(particle => particle.height > 2));
+    assert.ok(game.drainEvents().some(event => event.type === 'sound'));
+  }
+});
+
+test('close-range toys hit along a slightly downward aim and block obstructed shots', () => {
+  for (const toy of ['popper', 'hammer']) {
+    const game = makeGame(); shop(game);
+    if (toy === 'hammer') game.purchaseGadget(toy);
+    game.buildings = []; game.cars = []; game.police = []; game.player.x = game.player.y = 1080;
+    game.peds = game.peds.slice(0, 2);
+    Object.assign(game.peds[0], { x: 1120, y: 1080, pace: 0 });
+    Object.assign(game.peds[1], { x: 1120, y: 1090, pace: 0 });
+    game.buildings = [{ x: 1100, y: 1083, w: 12, h: 30, height: 4 }];
+    assert.equal(game.action(0, { pitch: -0.2 }), true);
+    assert.ok(game.physics.get(game.peds[0].id));
+    assert.equal(game.physics.get(game.peds[1].id), undefined); assert.equal(game.heat, 1);
+  }
+});
+
+test('aimed Party Cannon follows vertical pitch, hits at body height, and leaves sky bursts harmless', () => {
+  const makeShot = pitch => {
+    const game = makeGame(); shop(game); game.purchaseGadget('cannon');
+    game.buildings = []; game.cars = []; game.police = []; game.player.x = game.player.y = 1080;
+    game.peds = game.peds.slice(0, 1); Object.assign(game.peds[0], { x: 1230, y: 1080, pace: 0 });
+    assert.equal(game.action(0, { pitch }), true); return game;
+  };
+  const sky = makeShot(1.1), level = makeShot(0);
+  advance(sky, 0.1); advance(level, 0.1);
+  assert.ok(sky.projectiles[0].height > 4); assert.ok(sky.projectiles[0].x < level.projectiles[0].x);
+  assert.equal(sky.projectiles[0].verticalSpeed > 0, true); assert.equal(level.projectiles[0].verticalSpeed, 0);
+  advance(sky, 0.7); advance(level, 0.35);
+  assert.equal(sky.projectiles.length, 0); assert.equal(sky.physics.bodies.size, 0); assert.equal(sky.heat, 0);
+  assert.ok(sky.particles.some(particle => particle.height > 10));
+  assert.equal(level.projectiles.length, 0); assert.ok(level.physics.get(level.peds[0].id)); assert.equal(level.heat, 1);
+  const ground = makeShot(-0.4); advance(ground, 0.1);
+  assert.equal(ground.projectiles.length, 0); assert.ok(ground.particles.some(particle => particle.height === 0.12));
+});
+
+test('aimed cannon passes above short obstacles and bounds extreme or invalid pitch', () => {
+  const game = makeGame(); shop(game); game.purchaseGadget('cannon');
+  game.cars = []; game.police = []; game.peds = []; game.player.x = game.player.y = 1080;
+  game.buildings = [{ x: 1160, y: 1060, w: 20, h: 40, height: 2 }];
+  game.action(0, { pitch: 0.7 }); advance(game, 0.2);
+  assert.equal(game.projectiles.length, 1); assert.ok(game.projectiles[0].x > 1180);
+  assert.ok(game.projectiles[0].height > 5);
+  game._actionCooldown = 0; game.action(0, { pitch: 100 });
+  assert.equal(game.player.aimPitch, 1.35); assert.ok(Number.isFinite(game.projectiles[1].verticalSpeed));
+  game._actionCooldown = 0; game.action(0, { pitch: NaN });
+  assert.equal(game.projectiles[2].aimed, undefined); assert.equal(game.projectiles[2].height, 1.15);
+});
+
 test('garage ownership persists condition and paint without duplicating or healing deployed cars', () => {
   const game = makeGame(), car = driveToGarage(game); game.money = 500;
   car.health = 72; assert.equal(game.garageStore(), true); const id = car.garageId;

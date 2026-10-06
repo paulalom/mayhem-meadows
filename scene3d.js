@@ -1,7 +1,7 @@
 /* Mayhem Meadows: a self-contained, low-poly third-person toy town. */
 (function (root) {
   'use strict';
-  const UNIT = 20, TAU = Math.PI * 2;
+  const UNIT = 20, TAU = Math.PI * 2, DEFAULT_PITCH = -0.24;
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   const angle = v => Math.atan2(Math.sin(v), Math.cos(v));
   const mix = (a, b, f) => a + (b - a) * f;
@@ -28,7 +28,10 @@
       this._yaw = -Math.PI / 2;
       this._requestedYaw = this._yaw;
       this._driveOffset = 0;
-      this._pitch = 0;
+      this._pitch = DEFAULT_PITCH;
+      this._viewPitch = DEFAULT_PITCH;
+      this._aiming = false;
+      this._aimBlend = 0;
       this._orbitTimer = 0;
       this._cameraMode = 'foot';
       this._lastVehicleId = null;
@@ -38,10 +41,14 @@
       this._walkPhase = 0;
       this._cameraTarget = new T.Vector3();
       this._desiredCamera = new T.Vector3();
+      this._lookTarget = new T.Vector3();
+      this._viewDirection = new T.Vector3();
       this._ray = new T.Raycaster();
       this._pointer = new T.Vector2();
       this._ground = new T.Plane(new T.Vector3(0, 1, 0), 0);
       this._aimPoint = new T.Vector3();
+      this._aimBox = new T.Box3();
+      this._aimHit = new T.Vector3();
       this._dummy = new T.Object3D();
       this._color = new T.Color();
       this._staticParts = new Map();
@@ -52,7 +59,7 @@
       this._vehicles = new Map();
       this._residents = new Map();
       this._ragdollRenderedCount = 0;
-      this._cameraInfo = { x: 0, y: 0, z: 0, targetX: 0, targetY: 0, targetZ: 0, mode: 'foot', distance: 0, obstructed: false, viewYaw: this._yaw };
+      this._cameraInfo = { x: 0, y: 0, z: 0, targetX: 0, targetY: 0, targetZ: 0, mode: 'foot', distance: 0, obstructed: false, viewYaw: this._yaw, viewPitch: this._viewPitch, aiming: false, fov: this.camera.fov };
       this._cube = this._geometry(new T.BoxGeometry(1, 1, 1));
       this._cylinder = this._geometry(new T.CylinderGeometry(1, 1, 1, 10));
       this._sphere = this._geometry(new T.IcosahedronGeometry(1, 1));
@@ -566,33 +573,73 @@
       this.camera.updateProjectionMatrix();
     }
 
-    orbit(dx, dy) {
+    orbit(dx, dy, options = {}) {
       if (!Number.isFinite(dx) || !Number.isFinite(dy)) return;
-      const delta = -dx * 0.006;
+      const sensitivity = Number.isFinite(options.sensitivity) ? clamp(options.sensitivity, 0.1, 3) : 1;
+      const delta = dx * 0.004 * sensitivity;
       if (this.game.player.vehicleId) this._driveOffset = angle(this._driveOffset + delta);
       else this._requestedYaw = angle(this._requestedYaw + delta);
-      this._pitch = clamp(this._pitch + dy * 0.007, -0.65, 1.05);
-      this._orbitTimer = 2.5;
+      this._pitch = clamp(this._pitch - dy * 0.0035 * sensitivity * (options.invertY ? -1 : 1), -1.05, 0.85);
+      if (dx || dy) this._orbitTimer = 1.25;
     }
+
+    setAiming(aiming) { this._aiming = Boolean(aiming); }
 
     recenter() {
       this._requestedYaw = this.game.current.angle;
       this._driveOffset = 0;
-      this._pitch = 0;
+      this._pitch = DEFAULT_PITCH;
       this._orbitTimer = 0;
     }
 
-    aimAngle(pointerX, pointerY, width = this.width, height = this.height) {
+    _aimWorldPoint(pointerX, pointerY, width = this.width, height = this.height) {
       this._pointer.set(pointerX / Math.max(1, width) * 2 - 1, 1 - pointerY / Math.max(1, height) * 2);
       this._ray.setFromCamera(this._pointer, this.camera);
-      if (this._ray.ray.intersectPlane(this._ground, this._aimPoint)) {
+      let nearest = Infinity;
+      const saveHit = point => {
+        const distance = point.distanceToSquared(this._ray.ray.origin);
+        if (distance < nearest) { nearest = distance; this._aimPoint.copy(point); }
+      };
+      // Buildings use the same collision envelope as the camera. People and
+      // vehicles use their rendered meshes, so shoulder offset can converge on
+      // the crosshair's subject rather than merely firing parallel to the view.
+      for (const box of this._buildingVolumes) {
+        this._aimBox.min.set(box.minX, box.minY, box.minZ);
+        this._aimBox.max.set(box.maxX, box.maxY, box.maxZ);
+        if (this._ray.ray.intersectBox(this._aimBox, this._aimHit)) saveHit(this._aimHit);
+      }
+      const subjects = [];
+      for (const model of this._residents?.values() || []) if (model.group.visible) subjects.push(model.group);
+      for (const [id, model] of this._vehicles || []) if (model.group.visible && id !== this.game.player.vehicleId) subjects.push(model.group);
+      for (const group of subjects) group.updateWorldMatrix(true, true);
+      for (const hit of this._ray.intersectObjects(subjects, true)) if (hit.object.isMesh) { saveHit(hit.point); break; }
+      if (this._ray.ray.intersectPlane(this._ground, this._aimHit)) saveHit(this._aimHit);
+      return Number.isFinite(nearest);
+    }
+
+    aimAngle(pointerX, pointerY, width = this.width, height = this.height) {
+      const hit = this._aimWorldPoint(pointerX, pointerY, width, height);
+      if (hit) {
         const dx = this._aimPoint.x * UNIT - this.game.player.x, dy = this._aimPoint.z * UNIT - this.game.player.y;
-        if (Math.hypot(dx, dy) > 20) return Math.atan2(dy, dx);
+        // A steep downward view can intersect the ground behind the character.
+        // Keep the forward heading rather than making the toy turn backwards.
+        if (Math.hypot(dx, dy) > 20 && dx * Math.cos(this.viewYaw) + dy * Math.sin(this.viewYaw) > 0) return Math.atan2(dy, dx);
       }
       return this.viewYaw;
     }
 
+    aimDirection() {
+      const hit = this._aimWorldPoint(this.width / 2, this.height / 2);
+      if (!hit) this._ray.ray.at(40, this._aimPoint);
+      const dx = this._aimPoint.x - this.game.player.x / UNIT;
+      const dz = this._aimPoint.z - this.game.player.y / UNIT;
+      const forward = dx * Math.cos(this.viewYaw) + dz * Math.sin(this.viewYaw);
+      if (Math.hypot(dx, dz) < 0.25 || forward <= 0) return { angle: this.viewYaw, pitch: this.viewPitch };
+      return { angle: Math.atan2(dz, dx), pitch: Math.atan2(this._aimPoint.y - 1.15, Math.hypot(dx, dz)) };
+    }
+
     get viewYaw() { return this._cameraInfo.viewYaw; }
+    get viewPitch() { return this._cameraInfo.viewPitch; }
     get cameraInfo() { return { ...this._cameraInfo }; }
     get ragdollCount() { return this._ragdollRenderedCount; }
 
@@ -783,18 +830,29 @@
       this._orbitTimer = Math.max(0, this._orbitTimer - dt);
       if (driving && this._orbitTimer === 0) {
         this._driveOffset = angle(this._driveOffset * Math.exp(-dt * 1.9));
-        this._pitch *= Math.exp(-dt * 1.1);
+        this._pitch = DEFAULT_PITCH + (this._pitch - DEFAULT_PITCH) * Math.exp(-dt * 1.1);
       }
       const desiredYaw = driving ? angle(current.angle + this._driveOffset) : this._requestedYaw;
       const follow = this._hasCamera ? 1 - Math.exp(-dt * (driving ? 6.0 : 13.0)) : 1;
       this._yaw = angle(this._yaw + angle(desiredYaw - this._yaw) * follow);
+      this._viewPitch = mix(this._viewPitch, this._pitch, follow);
+      const aiming = this._aiming && !driving && !fallen;
+      this._aimBlend = mix(this._aimBlend, aiming ? 1 : 0, this._hasCamera ? 1 - Math.exp(-dt * 12) : 1);
       const speed = driving ? Math.abs(current.speed || 0) / UNIT : 0;
-      const distance = driving ? 7.4 + Math.min(1.8, speed * 0.06) : 5.5;
-      const lift = (driving ? 3.5 : 2.5) + this._pitch;
+      const distance = driving ? 7.4 + Math.min(1.8, speed * 0.06) : mix(5.5, 2.9, this._aimBlend);
+      const horizontal = Math.cos(this._viewPitch) * distance;
+      const shoulder = driving ? 0 : 0.70 * this._aimBlend;
+      const clearance = driving ? 1.5 : mix(1.05, 0.50, this._aimBlend);
+      const lift = -Math.sin(this._viewPitch) * distance + clearance;
       const targetY = targetHeight;
       this._cameraTarget.set(x, targetY, z);
       let cameraYaw = this._yaw;
-      let endX = x - Math.cos(cameraYaw) * distance, endY = targetY + lift, endZ = z - Math.sin(cameraYaw) * distance;
+      const endAt = yaw => ({
+        x: x - Math.cos(yaw) * horizontal - Math.sin(yaw) * shoulder,
+        z: z - Math.sin(yaw) * horizontal + Math.cos(yaw) * shoulder
+      });
+      let end = endAt(cameraYaw);
+      let endX = end.x, endY = Math.max(0.45, targetY + lift), endZ = end.z;
       let fraction = this._boomFraction(x, targetY, z, endX, endY, endZ);
       // When backed against a wall, slide to a nearby safe shoulder instead of
       // putting the player's head directly against the camera lens.
@@ -803,12 +861,13 @@
         const shoulders = fallen ? [0.48, -0.48, 0.96, -0.96, 1.40, -1.40, 2.2, -2.2, Math.PI] : [0.48, -0.48, 0.96, -0.96, 1.40, -1.40];
         for (const offset of shoulders) {
           const testYaw = angle(this._yaw + offset);
-          const testFraction = this._boomFraction(x, targetY, z, x - Math.cos(testYaw) * distance, endY, z - Math.sin(testYaw) * distance);
+          end = endAt(testYaw);
+          const testFraction = this._boomFraction(x, targetY, z, end.x, endY, end.z);
           if (testFraction > bestFraction) { bestFraction = testFraction; bestYaw = testYaw; }
           if (testFraction > 0.80) break;
         }
         cameraYaw = bestYaw; fraction = bestFraction;
-        endX = x - Math.cos(cameraYaw) * distance; endZ = z - Math.sin(cameraYaw) * distance;
+        end = endAt(cameraYaw); endX = end.x; endZ = end.z;
       }
       const obstructed = fraction < 0.995;
       const safeFraction = obstructed ? Math.max(0, fraction - 0.045) : 1;
@@ -831,10 +890,19 @@
         this.camera.position.copy(this._desiredCamera);
       }
       this.camera.position.y = Math.max(0.45, this.camera.position.y);
-      this.camera.lookAt(this._cameraTarget);
+      // Looking is independent of the physical boom pivot. Locking lookAt to
+      // the character makes the centre crosshair point at the player's back.
+      // The view instead faces ahead, including when walls shorten the boom.
+      this._viewDirection.set(Math.cos(this._yaw) * Math.cos(this._viewPitch), Math.sin(this._viewPitch), Math.sin(this._yaw) * Math.cos(this._viewPitch));
+      this._lookTarget.copy(this.camera.position).add(this._viewDirection);
+      this.camera.lookAt(this._lookTarget);
+      const fov = mix(57, 48, this._aimBlend);
+      if (Math.abs(this.camera.fov - fov) > 0.0001) { this.camera.fov = fov; this.camera.updateProjectionMatrix(); }
+      this.camera.updateMatrixWorld(true);
       this._hasCamera = true;
       this._cameraMode = mode;
-      const actualYaw = Math.atan2(z - this.camera.position.z, x - this.camera.position.x);
+      this.camera.getWorldDirection(this._viewDirection);
+      const actualYaw = Math.atan2(this._viewDirection.z, this._viewDirection.x);
       this._cameraInfo.x = this.camera.position.x;
       this._cameraInfo.y = this.camera.position.y;
       this._cameraInfo.z = this.camera.position.z;
@@ -845,6 +913,9 @@
       this._cameraInfo.distance = this.camera.position.distanceTo(this._cameraTarget);
       this._cameraInfo.obstructed = obstructed || actualFraction < 0.995;
       this._cameraInfo.viewYaw = actualYaw;
+      this._cameraInfo.viewPitch = Math.atan2(this._viewDirection.y, Math.hypot(this._viewDirection.x, this._viewDirection.z));
+      this._cameraInfo.aiming = Boolean(aiming);
+      this._cameraInfo.fov = this.camera.fov;
       // Sun follows a snapped grid so shadows stay stable as the town scrolls.
       const shadowX = Math.round(x / 5) * 5, shadowZ = Math.round(z / 5) * 5;
       this._sun.position.set(shadowX - 22, 48, shadowZ - 30);
@@ -874,8 +945,9 @@
         const elapsed = 0.9 - cooldown;
         model.rightArm.rotation.z = this.reducedMotion ? Math.PI / 2
           : elapsed < 0.55 ? mix(2.7, 1.1, clamp(elapsed / 0.55, 0, 1)) : mix(1.1, 0, clamp((elapsed - 0.55) / 0.35, 0, 1));
-      } else if (cooldown > (equipped === 'cannon' ? 0.86 : 0.35)) {
-        model.rightArm.rotation.z = Math.PI / 2;
+      } else if (this._cameraInfo.aiming || cooldown > (equipped === 'cannon' ? 0.86 : 0.35)) {
+        const pitch = Number.isFinite(player.aimPitch) ? clamp(player.aimPitch, -1.35, 1.35) : 0;
+        model.rightArm.rotation.z = Math.PI / 2 + pitch;
         model.rightArm.rotation.y = -0.1;
       }
       for (const ped of game.peds) {
@@ -963,7 +1035,7 @@
       for (let i = 0; i < this._confetti.count; i++) {
         const particle = game.particles[i], age = particle.maxLife - particle.life;
         const rise = Math.sin(clamp(age / particle.maxLife, 0, 1) * Math.PI) * 1.75;
-        this._dummy.position.set(particle.x / UNIT, 0.20 + rise, particle.y / UNIT);
+        this._dummy.position.set(particle.x / UNIT, (Number.isFinite(particle.height) ? Math.max(0, particle.height) : 0.20) + rise, particle.y / UNIT);
         this._dummy.rotation.set(age * 5 + i, age * 3, age * 7 + i * 0.7);
         const size = particle.size / UNIT;
         this._dummy.scale.set(size, size * 0.22, size * 0.72);

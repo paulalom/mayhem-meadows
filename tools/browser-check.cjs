@@ -31,7 +31,7 @@ const diagnostics = {};
 
 async function sceneState(page) {
   return page.locator('#game-canvas').evaluate(canvas => {
-    const numeric = ['cameraYaw', 'cameraDistance', 'worldX', 'worldY', 'frames', 'renderCalls', 'cameraX', 'cameraY', 'cameraZ', 'cameraTargetX', 'cameraTargetY', 'cameraTargetZ', 'ragdollCount', 'playerRagdollAge', 'renderedRagdolls'];
+    const numeric = ['cameraYaw', 'cameraPitch', 'cameraFov', 'cameraDistance', 'worldX', 'worldY', 'frames', 'renderCalls', 'cameraX', 'cameraY', 'cameraZ', 'cameraTargetX', 'cameraTargetY', 'cameraTargetZ', 'ragdollCount', 'playerRagdollAge', 'renderedRagdolls'];
     const state = { ...canvas.dataset };
     for (const key of numeric) state[key] = Number(state[key]);
     state.targetX = state.cameraTargetX; state.targetY = state.cameraTargetY; state.targetZ = state.cameraTargetZ;
@@ -47,15 +47,62 @@ async function waitForScene(page, mode) {
   return sceneState(page);
 }
 
-async function dragCamera(page, dx, dy = 0) {
+const mousePositions = new WeakMap();
+
+async function captureMouse(page) {
+  if (await page.evaluate(() => document.pointerLockElement === document.getElementById('game-canvas'))) return;
+  await page.locator('#game-canvas').scrollIntoViewIfNeeded();
   const box = await page.locator('#game-canvas').boundingBox();
   assert.ok(box, 'Game canvas has no visible bounds.');
   const x = box.x + box.width * 0.53, y = box.y + box.height * 0.56;
-  await page.mouse.move(x, y);
+  await page.mouse.click(x, y);
+  mousePositions.set(page, { x, y });
+  await page.waitForFunction(() => document.pointerLockElement === document.getElementById('game-canvas') && document.getElementById('game-canvas').dataset.mouseLocked === 'true', null, { timeout: 3000 });
+  await waitForFreshFrames(page);
+}
+
+async function lookCamera(page, dx, dy = 0) {
+  await captureMouse(page);
+  const previous = mousePositions.get(page);
+  assert.ok(previous, 'Captured mouse coordinates must be tracked.');
+  const next = { x: previous.x + dx, y: previous.y + dy };
+  await page.mouse.move(next.x, next.y, { steps: 8 });
+  mousePositions.set(page, next);
+  await page.waitForTimeout(400);
+}
+
+async function fireToy(page) {
+  await captureMouse(page);
+  await page.mouse.down({ button: 'left' });
+  await page.mouse.up({ button: 'left' });
+}
+
+async function aimAtResident(page, id) {
+  await captureMouse(page);
   await page.mouse.down({ button: 'right' });
-  await page.mouse.move(x + dx, y + dy, { steps: 8 });
-  await page.mouse.up({ button: 'right' });
-  await page.waitForTimeout(200);
+  await page.waitForFunction(() => document.getElementById('game-canvas').dataset.aiming === 'true');
+  await page.waitForTimeout(350);
+  // Derive the angle from the live rendered view, then use actual Chrome mouse
+  // movement to put the resident's torso beneath the central crosshair.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const target = await page.evaluate(pedId => {
+      const ped = globalThis.__browserCheckGame.peds.find(resident => resident.id === pedId);
+      const camera = globalThis.__browserCheckScene.camera;
+      const dx = ped.x / 20 - camera.position.x, dz = ped.y / 20 - camera.position.z;
+      return { yaw: Math.atan2(dz, dx), pitch: Math.atan2(1.05 - camera.position.y, Math.hypot(dx, dz)) };
+    }, id);
+    const before = await sceneState(page);
+    await lookCamera(page, angleDifference(target.yaw, before.cameraYaw) / (0.004 * 0.55), -(target.pitch - before.cameraPitch) / (0.0035 * 0.55));
+  }
+}
+
+async function unlockToUI(page) {
+  if (!await page.evaluate(() => Boolean(document.pointerLockElement))) return;
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.pointerLockElement, null, { timeout: 3000 });
+  await page.locator('#pause-screen').waitFor({ state: 'visible' });
+  await page.locator('#resume-button').click();
+  await page.locator('#pause-screen').waitFor({ state: 'hidden' });
 }
 
 function angleDifference(a, b) {
@@ -199,6 +246,7 @@ async function main() {
   const browser = await chromium.launch(launch);
   try {
     const context = await browser.newContext({ viewport: { width: 1365, height: 900 }, deviceScaleFactor: 1, serviceWorkers: 'block' });
+    await installEngineInspection(context);
     const page = await context.newPage();
     const externalRequests = [];
     page.on('pageerror', error => errors.push(error.message));
@@ -242,13 +290,24 @@ async function main() {
     });
     await waitForMinimap(page);
     await page.screenshot({ path: path.join(evidence, 'desktop-third-person-foot.png'), fullPage: true });
-    await check('right mouse drag orbits the foot camera and C resets it', async () => {
+    await check('click captures the real Chrome mouse without firing or aiming', async () => {
+      const before = await page.evaluate(() => ({ actionCooldown: globalThis.__browserCheckGame._actionCooldown, projectiles: globalThis.__browserCheckGame.projectiles.length }));
+      await captureMouse(page);
+      const after = await page.evaluate(() => ({ actionCooldown: globalThis.__browserCheckGame._actionCooldown, projectiles: globalThis.__browserCheckGame.projectiles.length }));
+      assert.deepEqual(after, before, 'The capture click must never spend a shot or activate a toy.');
+      assert.equal((await sceneState(page)).aiming, 'false');
+      assert.equal(await page.locator('#aim-reticle').evaluate(element => element.classList.contains('aiming')), false);
+      assert.equal(await page.locator('#mouse-hint').isVisible(), false);
+    });
+    await check('captured mouse looks right and up without holding a button; C recenters', async () => {
       const before = await sceneState(page);
-      await dragCamera(page, -70, -20);
+      await lookCamera(page, 70, -20);
       const after = await sceneState(page);
-      assert.ok(Math.abs(angleDifference(after.cameraYaw, before.cameraYaw)) > 0.1, 'Right drag did not orbit the camera.');
+      assert.ok(angleDifference(after.cameraYaw, before.cameraYaw) > 0.1, 'Moving the mouse right must look right.');
+      assert.ok(after.cameraPitch > before.cameraPitch + 0.03, 'Moving the mouse up must look above the previous view.');
       assert.equal(after.cameraMode, 'foot');
       assert.ok(after.cameraDistance > 0.4, 'Camera boom must stay outside the avatar.');
+      assert.equal(after.aiming, 'false', 'Free look must not require the aiming button.');
       await page.keyboard.press('c');
       await page.waitForFunction(expectedYaw => {
         const yaw = Number(document.getElementById('game-canvas').dataset.cameraYaw);
@@ -256,9 +315,108 @@ async function main() {
       }, defaultFootYaw, { timeout: 2500 });
       const reset = await sceneState(page);
       assert.ok(Math.abs(angleDifference(reset.cameraYaw, defaultFootYaw)) < 0.08, 'C should restore the view behind the initial player heading.');
+      assert.ok(Math.abs(reset.cameraPitch - before.cameraPitch) < 0.08, 'C should also restore the normal exploration pitch.');
+    });
+    await check('right mouse aims over the shoulder with a central reticle, narrower FOV and slower look', async () => {
+      await page.waitForTimeout(450);
+      const normal = await sceneState(page);
+      await lookCamera(page, 70);
+      const freelyLooked = await sceneState(page);
+      const freeDelta = angleDifference(freelyLooked.cameraYaw, normal.cameraYaw);
+      await page.keyboard.press('c');
+      await page.waitForTimeout(500);
+      const before = await sceneState(page);
+      await page.mouse.down({ button: 'right' });
+      await page.waitForFunction(() => document.getElementById('game-canvas').dataset.aiming === 'true');
+      await page.waitForTimeout(350);
+      const shoulder = await sceneState(page);
+      assert.equal(await page.locator('#aim-reticle').isVisible(), true);
+      const centered = await page.locator('#aim-reticle').evaluate(reticle => {
+        const mark = reticle.getBoundingClientRect(), canvas = document.getElementById('game-canvas').getBoundingClientRect();
+        return Math.abs(mark.x + mark.width / 2 - canvas.x - canvas.width / 2) < 3 && Math.abs(mark.y + mark.height / 2 - canvas.y - canvas.height / 2) < 3;
+      });
+      assert.equal(centered, true, 'Aim reticle must sit at the centre of the camera view.');
+      assert.ok(shoulder.cameraFov < before.cameraFov - 5, 'Aiming must bring the view closer through a narrower field of view.');
+      await lookCamera(page, 70);
+      const aimed = await sceneState(page);
+      const aimDelta = angleDifference(aimed.cameraYaw, shoulder.cameraYaw);
+      assert.ok(aimDelta > 0.02 && aimDelta < freeDelta * 0.8, `Aiming sensitivity should be lower; free ${freeDelta.toFixed(3)}, aimed ${aimDelta.toFixed(3)}.`);
+      diagnostics.aim = aimed;
+      await page.screenshot({ path: path.join(evidence, 'desktop-shoulder-aim.png'), fullPage: true });
+      await page.mouse.up({ button: 'right' });
+      await page.waitForFunction(() => document.getElementById('game-canvas').dataset.aiming === 'false');
+      await page.waitForTimeout(350);
+      assert.equal(await page.locator('#aim-reticle').evaluate(element => element.classList.contains('aiming')), false);
+      assert.ok((await sceneState(page)).cameraFov > shoulder.cameraFov + 5, 'Releasing aim must restore the exploration view.');
+      await page.keyboard.press('c');
+    });
+    await check('Space no longer fires a toy on foot', async () => {
+      const before = await page.evaluate(() => ({ actionCooldown: globalThis.__browserCheckGame._actionCooldown, projectiles: globalThis.__browserCheckGame.projectiles.length }));
+      await page.keyboard.press('Space');
+      await waitForFreshFrames(page);
+      assert.deepEqual(await page.evaluate(() => ({ actionCooldown: globalThis.__browserCheckGame._actionCooldown, projectiles: globalThis.__browserCheckGame.projectiles.length })), before);
+    });
+    await check('Escape releases the mouse, clears aiming and pauses; resuming requires a fresh capture click', async () => {
+      await page.mouse.down({ button: 'right' });
+      await page.waitForFunction(() => document.getElementById('game-canvas').dataset.aiming === 'true');
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => !document.pointerLockElement);
+      await page.locator('#pause-screen').waitFor({ state: 'visible' });
+      await page.waitForFunction(() => document.getElementById('game-canvas').dataset.aiming === 'false');
+      assert.equal((await sceneState(page)).aiming, 'false');
+      assert.equal(await page.locator('#aim-reticle').isVisible(), false);
+      await page.mouse.up({ button: 'right' });
+      await page.locator('#resume-button').click();
+      await page.locator('#pause-screen').waitFor({ state: 'hidden' });
+      assert.equal(await page.evaluate(() => document.pointerLockElement), null);
+      await page.locator('#mouse-hint').waitFor({ state: 'visible' });
+      await captureMouse(page);
+      assert.equal((await sceneState(page)).aiming, 'false', 'A held aiming button must not survive a menu.');
+    });
+    await check('help sensitivity and invert-Y settings change free look and survive reload', async () => {
+      await unlockToUI(page);
+      await page.locator('#help-toggle').click();
+      await page.locator('#help-screen').waitFor({ state: 'visible' });
+      await page.locator('#camera-sensitivity').fill('0.5');
+      await page.locator('#camera-invert-y').check();
+      assert.match(await page.locator('#camera-sensitivity-value').textContent(), /0\.50/);
+      await page.locator('#close-help').click();
+      await captureMouse(page);
+      await page.keyboard.press('c');
+      await page.waitForTimeout(250);
+      const lowBefore = await sceneState(page);
+      await lookCamera(page, 60, -20);
+      const lowAfter = await sceneState(page);
+      const lowDelta = angleDifference(lowAfter.cameraYaw, lowBefore.cameraYaw);
+      assert.ok(lowAfter.cameraPitch < lowBefore.cameraPitch - 0.01, 'Invert-Y should make upward mouse movement look down.');
+      await unlockToUI(page);
+      await page.locator('#help-toggle').click();
+      await page.locator('#help-screen').waitFor({ state: 'visible' });
+      await page.locator('#camera-sensitivity').fill('1.5');
+      await page.locator('#camera-invert-y').uncheck();
+      await page.locator('#close-help').click();
+      await captureMouse(page);
+      await page.keyboard.press('c');
+      await page.waitForTimeout(250);
+      const highBefore = await sceneState(page);
+      await lookCamera(page, 60, -20);
+      const highAfter = await sceneState(page);
+      const highDelta = angleDifference(highAfter.cameraYaw, highBefore.cameraYaw);
+      assert.ok(highDelta > lowDelta * 2.1, `Sensitivity should alter the camera response; low ${lowDelta.toFixed(3)}, high ${highDelta.toFixed(3)}.`);
+      assert.ok(highAfter.cameraPitch > highBefore.cameraPitch + 0.01);
+      await page.reload();
+      assert.equal(await page.locator('#camera-sensitivity').inputValue(), '1.5');
+      assert.equal(await page.locator('#camera-invert-y').isChecked(), false);
+      await page.locator('#play-button').click();
+      await waitForScene(page, 'foot');
+      // Restore defaults so later geometry checks use the standard view.
+      await page.locator('#help-toggle').click();
+      await page.locator('#help-screen').waitFor({ state: 'visible' });
+      await page.locator('#camera-sensitivity').fill('1');
+      await page.locator('#close-help').click();
     });
     await check('W walks in the direction of an orbited camera', async () => {
-      await dragCamera(page, -60);
+      await lookCamera(page, 60);
       const before = await sceneState(page);
       const forward = { x: before.targetX - before.cameraX, y: before.targetZ - before.cameraZ };
       assert.ok(Math.hypot(forward.x, forward.y) > 0.1, 'Camera needs a horizontal view direction.');
@@ -272,6 +430,7 @@ async function main() {
       const alignment = (move.x * forward.x + move.y * forward.y) / (Math.hypot(move.x, move.y) * Math.hypot(forward.x, forward.y));
       assert.ok(alignment > 0.9, `Movement should follow the view direction; alignment was ${alignment.toFixed(3)}.`);
       await page.keyboard.press('c');
+      await unlockToUI(page);
     });
     await check('E borrows the nearby yellow car', async () => {
       await page.keyboard.press('e');
@@ -289,6 +448,27 @@ async function main() {
       await waitForScene(page, 'drive');
       assert.equal(await page.locator('#ride-name').textContent(), 'Pocket Rocket');
     });
+    await check('driving supports free look while aim and fire remain on-foot controls', async () => {
+      await captureMouse(page);
+      const before = await sceneState(page);
+      const ammo = await page.evaluate(() => globalThis.__browserCheckGame.inventory.ammo.cannon);
+      await page.mouse.down({ button: 'right' });
+      await lookCamera(page, 80);
+      const looked = await sceneState(page);
+      assert.ok(angleDifference(looked.cameraYaw, before.cameraYaw) > 0.15, 'The driving camera must respond to captured mouse movement.');
+      assert.equal(looked.aiming, 'false', 'Holding aim in a vehicle must not enter the shoulder view.');
+      assert.equal(await page.locator('#aim-reticle').isVisible(), false);
+      await fireToy(page);
+      assert.equal(await page.evaluate(() => globalThis.__browserCheckGame.inventory.ammo.cannon), ammo);
+      await page.waitForTimeout(350);
+      assert.ok(Math.abs(angleDifference((await sceneState(page)).cameraYaw, before.cameraYaw)) > 0.1, 'Automatic follow must give the player time to look around.');
+      await page.mouse.up({ button: 'right' });
+      await page.keyboard.press('c');
+      await page.waitForTimeout(350);
+      const carHeading = await page.evaluate(() => globalThis.__browserCheckGame.current.angle);
+      assert.ok(Math.abs(angleDifference((await sceneState(page)).cameraYaw, carHeading)) < 0.1, 'C must recenter behind the car.');
+      await unlockToUI(page);
+    });
     await check('delivery contract changes the objective', async () => {
       const before = await page.locator('#objective-title').textContent();
       await page.locator('[data-mission="delivery"]').click();
@@ -303,6 +483,18 @@ async function main() {
       await page.waitForTimeout(160);
       assert.notEqual(await page.locator('#mission-progress').textContent(), before);
       assert.equal(await page.locator('#ride-name').textContent(), 'Pocket Rocket');
+    });
+    await check('Space still applies the driving handbrake', async () => {
+      await page.evaluate(() => {
+        const car = globalThis.__browserCheckGame.current;
+        Object.assign(car, { x: 900, y: 1080, angle: -Math.PI / 2, speed: 100, vx: 0, vy: -100 });
+      });
+      const before = await page.evaluate(() => Math.abs(globalThis.__browserCheckGame.current.speed));
+      await page.keyboard.down('Space');
+      await page.waitForTimeout(250);
+      await page.keyboard.up('Space');
+      const after = await page.evaluate(() => Math.abs(globalThis.__browserCheckGame.current.speed));
+      assert.ok(after < before * 0.5, `The handbrake should slow the car quickly; ${before.toFixed(1)} to ${after.toFixed(1)}.`);
     });
     await check('driving minimap renders the town and updates after resize', async () => {
       await waitForMinimap(page);
@@ -423,6 +615,20 @@ async function main() {
       assert.equal(await page.locator('#game-canvas').isVisible(), true);
     });
     await page.screenshot({ path: path.join(evidence, 'mobile-play.png'), fullPage: true });
+    await check('camera settings remain reachable in the narrow help dialog', async () => {
+      await page.locator('#help-toggle').click();
+      await page.locator('#help-screen').waitFor({ state: 'visible' });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+      await page.locator('#camera-sensitivity').scrollIntoViewIfNeeded();
+      await page.locator('#camera-sensitivity').fill('0.75');
+      await page.locator('#camera-invert-y').scrollIntoViewIfNeeded();
+      await page.locator('#camera-invert-y').check();
+      assert.equal(await page.locator('#camera-sensitivity').inputValue(), '0.75');
+      assert.equal(await page.locator('#camera-invert-y').isChecked(), true);
+      await page.screenshot({ path: path.join(evidence, 'mobile-camera-settings.png'), fullPage: true });
+      await page.locator('#close-help').click();
+      await page.locator('#help-screen').waitFor({ state: 'hidden' });
+    });
     await check('blocked local storage still permits Play and car entry', async () => {
       const blockedContext = await browser.newContext({ viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
       try {
@@ -513,7 +719,7 @@ async function main() {
         const nearWall = await sceneState(wallPage);
         assert.ok(nearWall.worldX >= 849 && nearWall.worldX < 875, 'The avatar should approach the west wall without entering it.');
         for (let step = 0; step < 13; step++) {
-          await dragCamera(wallPage, -85);
+          await lookCamera(wallPage, 85);
           const state = await sceneState(wallPage);
           assert.ok(state.cameraDistance > 0.4 && state.cameraDistance < 12, 'Camera boom length must remain usable.');
           assert.ok([state.cameraX, state.cameraY, state.cameraZ].every(Number.isFinite), 'Camera coordinates must stay finite.');
@@ -576,7 +782,7 @@ async function main() {
         const before = await bodyState(physicsPage);
         assertFiniteBody(before);
         await physicsPage.keyboard.press('e');
-        await physicsPage.keyboard.press('Space');
+        await fireToy(physicsPage);
         await physicsPage.keyboard.press('f');
         await physicsPage.keyboard.down('d');
         await physicsPage.waitForTimeout(200);
@@ -584,7 +790,7 @@ async function main() {
         const after = await bodyState(physicsPage);
         assertFiniteBody(after);
         assert.equal(after.vehicleId, null, 'E must not enter a car while fallen.');
-        assert.equal(after.actionCooldown, 0, 'Space must not fire the popper while fallen.');
+        assert.equal(after.actionCooldown, 0, 'Left-click must not fire the popper while fallen.');
         assert.equal(after.playerAngle, before.playerAngle, 'Walking input must not steer the fallen avatar.');
         assert.ok(after.age > before.age + 0.1, 'F must not reset an existing ragdoll recovery clock.');
       });
@@ -625,9 +831,9 @@ async function main() {
         assert.ok(Math.hypot(after.worldX - before.worldX, after.worldY - before.worldY) > 3, 'R must restore movement immediately.');
       });
 
-      await check('a real Space pop gives a nearby resident a physical confetti tumble', async () => {
+      await check('a real left mouse pop gives a nearby resident a physical confetti tumble', async () => {
         // Arrange a clear, close target only in this isolated test page. Fire
-        // through the real keyboard handler, fixed step and WebGL renderer.
+        // through the real captured mouse, fixed step and WebGL renderer.
         const id = await physicsPage.evaluate(() => {
           const game = globalThis.__browserCheckGame, ped = game.peds[0], car = game.cars[0];
           game.physics.clearAll(); game.peds = [ped]; game.cars = [car]; game.police = [];
@@ -637,10 +843,10 @@ async function main() {
           ped.x = 884; ped.y = 1044; ped.homeX = ped.x; ped.homeY = ped.y; ped.stunned = 0; ped.ragdollGrace = 0; ped.pace = 0;
           return ped.id;
         });
-        await physicsPage.mouse.move(8, 8);
+        await captureMouse(physicsPage);
         await physicsPage.keyboard.press('c');
         await physicsPage.waitForFunction(() => Math.abs(globalThis.__browserCheckScene.viewYaw + Math.PI / 2) < 0.05, null, { timeout: 2500 });
-        await physicsPage.keyboard.press('Space');
+        await fireToy(physicsPage);
         await physicsPage.waitForFunction(pedId => {
           const body = globalThis.__browserCheckGame.physics.get(pedId);
           return body?.phase === 'fall' && Number(document.getElementById('game-canvas').dataset.renderedRagdolls) > 0;
@@ -748,6 +954,27 @@ async function main() {
         await waitForFreshFrames(inventoryPage);
       });
 
+      await check('pockets release real mouse capture and clear held aim and movement', async () => {
+        await captureMouse(inventoryPage);
+        await inventoryPage.mouse.down({ button: 'right' });
+        await inventoryPage.waitForFunction(() => document.getElementById('game-canvas').dataset.aiming === 'true');
+        await inventoryPage.keyboard.down('w');
+        await openInventory(inventoryPage);
+        assert.equal(await inventoryPage.evaluate(() => document.pointerLockElement), null);
+        await inventoryPage.waitForFunction(() => document.getElementById('game-canvas').dataset.aiming === 'false');
+        assert.equal((await sceneState(inventoryPage)).aiming, 'false');
+        const paused = await inventoryState(inventoryPage);
+        await closeInventory(inventoryPage);
+        await inventoryPage.waitForTimeout(200);
+        const resumed = await inventoryState(inventoryPage);
+        assert.deepEqual(resumed.player, paused.player, 'Closing a menu must not restore keys held before it opened.');
+        assert.equal(await inventoryPage.evaluate(() => document.pointerLockElement), null);
+        assert.equal(await inventoryPage.locator('#mouse-hint').isVisible(), true);
+        assert.equal((await sceneState(inventoryPage)).aiming, 'false');
+        await inventoryPage.keyboard.up('w');
+        await inventoryPage.mouse.up({ button: 'right' });
+      });
+
       await check('biscuits restore composure, while full composure and an absent car cannot waste supplies', async () => {
         await openInventory(inventoryPage);
         const original = await inventoryState(inventoryPage);
@@ -822,8 +1049,15 @@ async function main() {
           game.peds = [ped];
           game._knockDown(ped, { x: 2, y: 2.5, z: 0 });
         });
+        await captureMouse(inventoryPage);
+        await inventoryPage.mouse.down({ button: 'right' });
+        await inventoryPage.waitForFunction(() => document.getElementById('game-canvas').dataset.aiming === 'true');
         await inventoryPage.keyboard.down('Tab');
         await inventoryPage.locator('#toy-wheel').waitFor({ state: 'visible' });
+        assert.equal(await inventoryPage.evaluate(() => document.pointerLockElement), null, 'The wheel must release real mouse capture.');
+        await inventoryPage.waitForFunction(() => document.getElementById('game-canvas').dataset.aiming === 'false');
+        assert.equal((await sceneState(inventoryPage)).aiming, 'false');
+        await inventoryPage.mouse.up({ button: 'right' });
         await inventoryPage.keyboard.press('ArrowRight');
         await inventoryPage.waitForTimeout(80);
         const before = await inventoryState(inventoryPage);
@@ -882,11 +1116,11 @@ async function main() {
           game._actionCooldown = 0;
           return ped.id;
         });
-        await inventoryPage.mouse.move(8, 8);
+        await captureMouse(inventoryPage);
         await inventoryPage.keyboard.press('c');
         await inventoryPage.waitForFunction(() => Math.abs(globalThis.__browserCheckScene.viewYaw + Math.PI / 2) < 0.05, null, { timeout: 2500 });
         const before = await inventoryState(inventoryPage);
-        await inventoryPage.keyboard.press('Space');
+        await fireToy(inventoryPage);
         await inventoryPage.waitForFunction(pedId => globalThis.__browserCheckGame.physics.get(pedId)?.phase === 'fall', id, { timeout: 2000 });
         await waitForFreshFrames(inventoryPage);
         assertFiniteBody(await bodyState(inventoryPage, id));
@@ -905,13 +1139,18 @@ async function main() {
         const before = await inventoryState(inventoryPage);
         assert.equal(before.inventory.equipped, 'cannon');
         assert.deepEqual(before.visibleToys, ['cannon']);
-        await inventoryPage.mouse.move(8, 8);
+        await captureMouse(inventoryPage);
         await inventoryPage.keyboard.press('c');
         await inventoryPage.waitForFunction(() => Math.abs(globalThis.__browserCheckScene.viewYaw + Math.PI / 2) < 0.05, null, { timeout: 2500 });
-        await inventoryPage.keyboard.press('Space');
+        await aimAtResident(inventoryPage, id);
+        await inventoryPage.mouse.down({ button: 'left' });
         await inventoryPage.waitForFunction(() => globalThis.__browserCheckGame.projectiles.length > 0 && globalThis.__browserCheckScene._toyShots.count > 0, null, { timeout: 2000 });
         const launched = await inventoryState(inventoryPage);
         assert.equal(launched.inventory.ammo.cannon, before.inventory.ammo.cannon - 1);
+        await inventoryPage.mouse.up({ button: 'right' });
+        await inventoryPage.waitForFunction(() => document.getElementById('game-canvas').dataset.aiming === 'false');
+        await inventoryPage.mouse.up({ button: 'left' });
+        assert.equal((await inventoryState(inventoryPage)).inventory.ammo.cannon, before.inventory.ammo.cannon - 1, 'Releasing either button must not fire an extra shot.');
         await inventoryPage.waitForFunction(pedId => globalThis.__browserCheckGame.physics.get(pedId)?.phase === 'fall', id, { timeout: 2000 });
         await waitForFreshFrames(inventoryPage);
         assertFiniteBody(await bodyState(inventoryPage, id));

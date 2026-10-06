@@ -6,6 +6,7 @@ button,a{-webkit-tap-highlight-color:transparent}
 button{font:inherit;color:inherit;cursor:pointer}
 button:disabled{cursor:not-allowed}
 button:focus-visible,a:focus-visible,canvas:focus-visible{outline:3px solid var(--lime);outline-offset:4px}
+input:focus-visible{outline:3px solid var(--lime);outline-offset:4px}
 button:disabled:not(.contract-button){opacity:.38}
 button:active:not(:disabled){transform:translateY(1px)}
 [hidden]{display:none!important}
@@ -102,6 +103,14 @@ kbd{font:700 10px "Courier New",monospace;padding:4px 5px;background:var(--panel
 .dialog-close:hover{color:var(--cream)}
 .help-card .control-list{margin-bottom:20px}
 .help-card .control-list>div{grid-template-columns:150px 1fr;padding:10px 0}
+.camera-settings{margin:0 0 21px;padding:15px 0 0;border:0;border-top:1px solid var(--line);min-width:0}
+.camera-settings legend{padding:0 8px 0 0;color:var(--lime);font-size:12px;font-weight:750}
+.camera-setting-range{display:grid;grid-template-columns:1fr auto;align-items:center;gap:9px 12px;margin-bottom:14px;font-size:11px}
+#camera-sensitivity-value{font-family:"Courier New",monospace;font-size:10px;font-weight:700;color:var(--aqua);font-variant-numeric:tabular-nums}
+#camera-sensitivity{grid-column:1/-1;width:100%;margin:0;accent-color:var(--lime);cursor:pointer}
+.camera-setting-check{display:flex;align-items:center;gap:9px;cursor:pointer;font-size:11px}
+#camera-invert-y{width:16px;height:16px;margin:0;accent-color:var(--lime);cursor:pointer;flex-shrink:0}
+.help-card #camera-settings-note{font-size:10px;line-height:1.6;color:var(--muted);margin:10px 0 0}
 .help-card .help-fine-print{font-family:"Courier New",monospace;font-size:9px;color:var(--muted);margin-bottom:0}
 .play-footer{border:1px solid var(--line);border-top:0;border-radius:0 0 7px 7px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:9px;color:var(--muted);background:var(--ink-deep);line-height:1.8}
 .play-footer kbd{padding:2px 4px;font-size:8px;border-color:#3e4953;background:var(--panel)}
@@ -167,6 +176,10 @@ kbd{font:700 10px "Courier New",monospace;padding:4px 5px;background:var(--panel
 .aim-reticle:before,.aim-reticle:after{content:"";position:absolute;left:50%;top:50%;background:var(--cream);transform:translate(-50%,-50%)}
 .aim-reticle:before{width:23px;height:1px}
 .aim-reticle:after{width:1px;height:23px}
+.aim-reticle.aiming,.game-shell.aiming .aim-reticle,.game-shell[data-aiming="true"] .aim-reticle{width:19px;height:19px;border-color:var(--lime);filter:drop-shadow(0 1px 3px #141d27)}
+.aim-reticle.aiming:before,.aim-reticle.aiming:after,.game-shell.aiming .aim-reticle:before,.game-shell.aiming .aim-reticle:after,.game-shell[data-aiming="true"] .aim-reticle:before,.game-shell[data-aiming="true"] .aim-reticle:after{background:var(--lime)}
+.mouse-hint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);max-width:calc(100% - 36px);width:max-content;padding:11px 15px;background:rgba(20,29,39,.94);border:1px solid var(--lime);border-radius:4px;color:var(--cream);font-size:12px;font-weight:700;line-height:1.6;text-align:center;box-shadow:3px 3px 0 #141d2750;pointer-events:none;z-index:3}
+.mouse-hint span{color:var(--muted);font-size:10px;white-space:nowrap}
 .renderer-error{z-index:15;background:rgba(14,21,29,.94)}
 .renderer-error .dialog-card{max-width:420px}
 .game-shell:fullscreen{height:100vh;width:100vw;min-height:0;max-height:none;border:0}

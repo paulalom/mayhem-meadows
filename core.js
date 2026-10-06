@@ -379,10 +379,12 @@
       return [{ x: next.x - Math.sin(heading) * 20, y: next.y + Math.cos(heading) * 20 }];
     }
 
-    _confetti(x, y, count = 22) {
+    _confetti(x, y, count = 22, height) {
       for (let i = 0; i < count && this.particles.length < 360; i++) {
         const angle = this._random() * Math.PI * 2, speed = 30 + this._random() * 150, life = 0.5 + this._random() * 0.8;
-        this.particles.push({ x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, life, maxLife: life, color: this._pick(COLORS), size: 3 + this._random() * 4 });
+        const particle = { x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, life, maxLife: life, color: this._pick(COLORS), size: 3 + this._random() * 4 };
+        if (Number.isFinite(height)) particle.height = Math.max(0.12, height);
+        this.particles.push(particle);
       }
     }
 
@@ -449,26 +451,44 @@
       return true;
     }
 
-    action(angle = this.player.angle) {
+    action(angle = this.player.angle, options) {
       if (this.player.vehicleId || this._actionCooldown > 0 || this.ragdolls.get(this.player.id)) return false;
       angle = finite(angle, this.player.angle); this.player.angle = angle;
+      // Pitch is optional for older arcade callers. Heights are world metres;
+      // planar positions are simulation units (20 units per metre).
+      const aimed = Boolean(options && Number.isFinite(options.pitch));
+      const pitch = aimed ? clamp(options.pitch, -1.35, 1.35) : 0;
+      const cosPitch = Math.cos(pitch), sinPitch = Math.sin(pitch);
+      this.player.aimPitch = pitch;
+      const aimHeight = range => 1.15 + Math.tan(pitch) * range / 20;
+      const inAimHeight = person => {
+        if (!aimed) return true;
+        const dx = person.x - this.player.x, dy = person.y - this.player.y;
+        const forward = dx * Math.cos(angle) + dy * Math.sin(angle);
+        const height = aimHeight(Math.hypot(dx, dy));
+        return forward >= 0 && height >= 0.1 && height <= 2.05 &&
+          !this.buildings.some(building => segmentHitsRect(this.player, person, building));
+      };
       const equipped = this.inventory.equipped;
       if (equipped === 'cannon' && this.inventory.ammo.cannon <= 0) { this._toast('Party Cannon is empty. Use a Party Refill from your pockets.'); return false; }
       this._actionCooldown = GADGETS[equipped].cooldown;
       if (equipped === 'cannon') {
         this.inventory.ammo.cannon--;
         const life = 360 / 560;
-        this.projectiles.push({ id: 'party-' + this._nextId++, x: this.player.x + Math.cos(angle) * 25, y: this.player.y + Math.sin(angle) * 25, angle, height: 1.15, life, maxLife: life });
+        const projectile = { id: 'party-' + this._nextId++, x: this.player.x + Math.cos(angle) * 25 * cosPitch, y: this.player.y + Math.sin(angle) * 25 * cosPitch, angle, height: 1.15, life, maxLife: life };
+        if (aimed) Object.assign(projectile, { aimed: true, startHeight: Math.max(0.15, 1.15 + sinPitch * 1.25), horizontalSpeed: 560 * cosPitch, verticalSpeed: 28 * sinPitch });
+        if (aimed) projectile.height = projectile.startHeight;
+        this.projectiles.push(projectile);
         this._confetti(this.player.x, this.player.y, 8); this._sound('pop');
         return true;
       }
       if (equipped === 'hammer') {
         const reach = 62, forwardX = Math.cos(angle), forwardY = Math.sin(angle);
-        this._confetti(this.player.x + forwardX * 35, this.player.y + forwardY * 35, 18); this._sound('hammer');
+        this._confetti(this.player.x + forwardX * 35 * cosPitch, this.player.y + forwardY * 35 * cosPitch, 18, aimed ? 1.15 + sinPitch * 1.75 : undefined); this._sound('hammer');
         let hit = false;
         const inReach = person => {
           const dx = person.x - this.player.x, dy = person.y - this.player.y, range = Math.hypot(dx, dy);
-          return range < reach && (range < 1 || (dx * forwardX + dy * forwardY) / range > 0.5) &&
+          return range < reach && inAimHeight(person) && (range < 1 || (dx * forwardX + dy * forwardY) / range > 0.5) &&
             !this.buildings.some(building => segmentHitsRect(this.player, person, building));
         };
         for (const ped of this.peds) if (ped.stunned <= 0 && inReach(ped)) {
@@ -478,17 +498,18 @@
         if (hit) this._raiseHeat(1, 'Inflatable nuisance! The Fun Police heard that bonk.');
         return true;
       }
-      const pop = { x: this.player.x + Math.cos(angle) * 44, y: this.player.y + Math.sin(angle) * 44 };
-      this._confetti(pop.x, pop.y, 25); this._sound('pop');
+      const pop = { x: this.player.x + Math.cos(angle) * 44 * cosPitch, y: this.player.y + Math.sin(angle) * 44 * cosPitch };
+      this._confetti(pop.x, pop.y, 25, aimed ? 1.15 + sinPitch * 2.2 : undefined); this._sound('pop');
       let hit = false;
-      for (const ped of this.peds) if (ped.stunned <= 0 && !this.ragdolls.get(ped.id) && distance(ped, pop) < 60) { this._startle(ped, angle); hit = true; }
-      for (const cop of this.police) if (distance(cop, pop) < 65) { cop.distracted = 1.8; hit = true; this._confetti(cop.x, cop.y, 20); }
+      for (const ped of this.peds) if (ped.stunned <= 0 && !this.ragdolls.get(ped.id) && inAimHeight(ped) && distance(ped, pop) < 60) { this._startle(ped, angle); hit = true; }
+      for (const cop of this.police) if (inAimHeight(cop) && distance(cop, pop) < 65) { cop.distracted = 1.8; hit = true; this._confetti(cop.x, cop.y, 20); }
       if (hit) this._raiseHeat(1, 'Confetti disturbance! Find a corner to hide.');
       return true;
     }
 
     _burstParty(projectile) {
-      this._confetti(projectile.x, projectile.y, 85); this._sound('party');
+      this._confetti(projectile.x, projectile.y, 85, projectile.aimed ? projectile.height : undefined); this._sound('party');
+      if (projectile.aimed && projectile.height > 2.6) return;
       let hit = false;
       for (const ped of this.peds) if (ped.stunned <= 0 && distance(ped, projectile) < 85 &&
         !this.buildings.some(building => segmentHitsRect(projectile, ped, building))) {
@@ -506,19 +527,25 @@
         const step = Math.min(dt, projectile.life) / stepCount;
         let burst = false;
         for (let i = 0; i < stepCount && !burst; i++) {
-          const before = { x: projectile.x, y: projectile.y };
-          projectile.x += Math.cos(projectile.angle) * 560 * step;
-          projectile.y += Math.sin(projectile.angle) * 560 * step;
+          const before = { x: projectile.x, y: projectile.y, height: projectile.height };
+          const horizontalSpeed = projectile.aimed ? projectile.horizontalSpeed : 560;
+          projectile.x += Math.cos(projectile.angle) * horizontalSpeed * step;
+          projectile.y += Math.sin(projectile.angle) * horizontalSpeed * step;
           projectile.life = Math.max(0, projectile.life - step);
-          projectile.height = 1.15 + Math.sin(Math.PI * (1 - projectile.life / projectile.maxLife)) * 1.1;
-          const walls = this.buildings.some(b => segmentHitsRect(before, projectile, { x: b.x - 3, y: b.y - 3, w: b.w + 6, h: b.h + 6 }));
+          const elapsed = projectile.maxLife - projectile.life;
+          projectile.height = projectile.aimed ? projectile.startHeight + projectile.verticalSpeed * elapsed - 2 * elapsed * elapsed : 1.15 + Math.sin(Math.PI * (1 - projectile.life / projectile.maxLife)) * 1.1;
+          const atHeight = height => !projectile.aimed || Math.min(before.height, projectile.height) <= height && Math.max(before.height, projectile.height) >= 0.1;
+          const walls = this.buildings.some(b => atHeight(finite(b.height, 8)) && segmentHitsRect(before, projectile, { x: b.x - 3, y: b.y - 3, w: b.w + 6, h: b.h + 6 }));
           const vehicles = this._vehicles().some(vehicle => {
+            if (!atHeight(vehicle.kind === 'van' ? 2.6 : 1.8)) return false;
             const box = this._vehicleBox(vehicle);
             const local = point => ({ x: (point.x - vehicle.x) * box.axes[0].x + (point.y - vehicle.y) * box.axes[0].y, y: (point.x - vehicle.x) * box.axes[1].x + (point.y - vehicle.y) * box.axes[1].y });
             return segmentHitsRect(local(before), local(projectile), { x: -box.half[0] - 3, y: -box.half[1] - 3, w: box.half[0] * 2 + 6, h: box.half[1] * 2 + 6 });
           });
-          const people = this.peds.some(ped => ped.stunned <= 0 && distance(ped, projectile) < 16);
-          burst = walls || vehicles || people || projectile.life <= 0.000001 || projectile.x < 0 || projectile.y < 0 || projectile.x > SIZE || projectile.y > SIZE;
+          const people = atHeight(2.05) && this.peds.some(ped => ped.stunned <= 0 && distance(ped, projectile) < 16);
+          const ground = projectile.aimed && projectile.height <= 0.12;
+          if (ground) projectile.height = 0.12;
+          burst = walls || vehicles || people || ground || projectile.life <= 0.000001 || projectile.x < 0 || projectile.y < 0 || projectile.x > SIZE || projectile.y > SIZE;
         }
         if (burst) this._burstParty(projectile); else remaining.push(projectile);
       }

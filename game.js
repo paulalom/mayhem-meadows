@@ -10,14 +10,16 @@
   let muted = false, reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
   let audioContext, saveBlocked = false, toastUntil = 0, hudElapsed = 0, saveElapsed = 0;
   let width = 960, height = 650, scene = null, renderedFrames = 0, graphicsFailed = false;
-  const aim = { x: 0, y: 0, active: false };
-  let dragging = false, dragX = 0, dragY = 0, dragPointerId = null;
+  let cameraSensitivity = 1, cameraInvertY = false, aiming = false;
+  let mouseLockPending = false, intentionalUnlock = false;
   let wheelOpen = false, wheelIndex = 0, inventoryView = null, garageSignature = '';
   const toyIds = ['popper', 'hammer', 'cannon'];
   const money = n => '$' + Math.round(n).toLocaleString();
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   const inventoryBusy = () => wheelOpen || inventoryView !== null;
+  const mouseLocked = () => document.pointerLockElement === canvas;
+  const playActive = () => started && !paused && !inventoryBusy() && !graphicsFailed && $('help-screen').hidden && !document.hidden;
 
   function toast(text, kind = '') {
     $('toast').hidden = false;
@@ -32,11 +34,14 @@
       game.loadSave(saved.progress);
       muted = saved.settings?.muted === true;
       reducedMotion = saved.settings?.reducedMotion ?? reducedMotion;
+      const savedSensitivity = saved.settings?.cameraSensitivity;
+      if (typeof savedSensitivity === 'number' && Number.isFinite(savedSensitivity)) cameraSensitivity = clamp(savedSensitivity, 0.25, 2);
+      cameraInvertY = saved.settings?.cameraInvertY === true;
     }
   } catch (_) { saveBlocked = true; }
   function save() {
     try {
-      localStorage.setItem(SAVE_KEY, JSON.stringify({ version: 1, progress: game.exportSave(), settings: { muted, reducedMotion } }));
+      localStorage.setItem(SAVE_KEY, JSON.stringify({ version: 1, progress: game.exportSave(), settings: { muted, reducedMotion, cameraSensitivity, cameraInvertY } }));
     } catch (_) {
       if (!saveBlocked) toast('Local saving is unavailable. You can still play this session.');
       saveBlocked = true;
@@ -75,7 +80,60 @@
     $('motion-toggle').textContent = reducedMotion ? 'Motion: calm' : 'Motion: full';
     $('motion-toggle').setAttribute('aria-pressed', String(reducedMotion));
     document.body.classList.toggle('reduced-motion', reducedMotion);
+    $('camera-sensitivity').value = cameraSensitivity;
+    $('camera-sensitivity-value').textContent = cameraSensitivity.toFixed(2) + '×';
+    $('camera-invert-y').checked = cameraInvertY;
   }
+  function setAim(value) {
+    aiming = Boolean(value && playActive() && mouseLocked() && !game.player.vehicleId && !game.physics?.get('player'));
+    scene?.setAiming(aiming);
+  }
+  function releaseMouse() {
+    setAim(false); keys.clear();
+    if (mouseLocked()) { intentionalUnlock = true; document.exitPointerLock(); }
+  }
+  function lockMouse() {
+    if (!playActive() || mouseLocked() || mouseLockPending) return;
+    if (!canvas.requestPointerLock) { toast('Mouse look is unavailable here. Open the game directly in Chrome.'); return; }
+    canvas.focus({ preventScroll: true }); intentionalUnlock = false; mouseLockPending = true;
+    try {
+      const request = canvas.requestPointerLock();
+      request?.catch(() => {
+        mouseLockPending = false;
+        if (playActive()) toast('Click the town again to look around. Esc releases the mouse.');
+      });
+    } catch (_) { mouseLockPending = false; toast('Click the town again to look around.'); }
+  }
+  function toyDirection() {
+    return scene?.aimDirection() || { angle: scene?.viewYaw ?? game.player.angle, pitch: 0 };
+  }
+  function useToy() {
+    if (!playActive() || !mouseLocked() || game.player.vehicleId || game.physics?.get('player')) return;
+    const direction = toyDirection();
+    game.player.aimPitch = direction.pitch;
+    game.action(direction.angle, { pitch: direction.pitch }); events();
+  }
+  $('camera-sensitivity').addEventListener('input', event => {
+    const value = Number(event.target.value);
+    if (Number.isFinite(value)) cameraSensitivity = clamp(value, 0.25, 2);
+    settingsUI(); save();
+  });
+  $('camera-invert-y').addEventListener('change', event => { cameraInvertY = event.target.checked; settingsUI(); save(); });
+  document.addEventListener('pointerlockchange', () => {
+    mouseLockPending = false;
+    if (mouseLocked()) {
+      keys.clear();
+      if (!playActive()) releaseMouse();
+    } else {
+      setAim(false); keys.clear();
+      if (!intentionalUnlock && playActive()) setPause(true);
+      intentionalUnlock = false;
+    }
+  });
+  document.addEventListener('pointerlockerror', () => {
+    mouseLockPending = false;
+    if (playActive()) toast('Click the town again to look around. Esc releases the mouse.');
+  });
   function toyDetail(id) {
     if (!game.inventory.unlocked.includes(id)) return 'LOCKED · ' + money(GADGETS[id].price);
     return id === 'cannon' ? game.inventory.ammo.cannon + ' / 12 charges' : 'Unlimited nonsense';
@@ -96,7 +154,7 @@
   function openWheel() {
     if (!started || paused || graphicsFailed || !$('help-screen').hidden || inventoryView) return;
     if (game.physics?.get('player')) { toast('Find your feet before changing toys. R skips the drama.'); return; }
-    wheelOpen = true; keys.clear(); stopDrag();
+    wheelOpen = true; keys.clear(); releaseMouse();
     wheelIndex = toyIds.indexOf(game.inventory.equipped);
     $('toy-wheel').hidden = false; renderWheel();
   }
@@ -120,7 +178,7 @@
   function openInventory(view) {
     if (!started) start();
     if (paused || graphicsFailed || !$('help-screen').hidden || !started) return;
-    closeWheel(false, false); keys.clear(); stopDrag();
+    closeWheel(false, false); keys.clear(); releaseMouse();
     if (inventoryView !== view) $('inventory-screen').querySelector('.inventory-scroll').scrollTop = 0;
     inventoryView = view; $('inventory-screen').hidden = false;
     $('pockets-panel').hidden = view !== 'pockets';
@@ -231,7 +289,7 @@
     if (!started) return;
     closeWheel(false, false); closeInventory(false);
     paused = value;
-    keys.clear(); stopDrag();
+    keys.clear(); releaseMouse();
     $('pause-screen').hidden = !paused;
     if (!paused) canvas.focus();
   }
@@ -241,7 +299,7 @@
     $('start-screen').hidden = true;
     $('pause-screen').hidden = true;
     audioStart(); canvas.focus();
-    toast('E borrows a ride. Hold Tab for toys; I opens your pockets.');
+    toast('Click the town to look around. Right mouse aims; left mouse uses your toy. Esc releases the mouse.');
     if (saveBlocked) toast('Saving is unavailable here. The full game still works this session.');
   }
   $('play-button').addEventListener('click', start);
@@ -265,7 +323,7 @@
   $('help-toggle').addEventListener('click', () => {
     closeWheel(false, false); closeInventory(false);
     helpWasPaused = paused;
-    if (started) { paused = true; keys.clear(); stopDrag(); }
+    if (started) { paused = true; keys.clear(); releaseMouse(); }
     $('help-screen').hidden = false; $('close-help').focus();
   });
   function closeHelp() {
@@ -284,32 +342,20 @@
   }));
   $('abandon-button').addEventListener('click', () => { if (!paused && !inventoryBusy() && started) { game.abandonMission(); events(); canvas.focus(); } });
   canvas.addEventListener('contextmenu', event => event.preventDefault());
-  canvas.addEventListener('pointerdown', event => {
-    if (!started || paused || inventoryBusy() || !$('help-screen').hidden || graphicsFailed) return;
+  // Mouse edges fire for each button in a chord, including aim + fire.
+  canvas.addEventListener('mousedown', event => {
+    if (!playActive()) return;
     canvas.focus({ preventScroll: true }); audioStart();
-    if (event.button === 2) {
-      dragging = true; dragX = event.clientX; dragY = event.clientY; dragPointerId = event.pointerId;
-      canvas.setPointerCapture(event.pointerId); event.preventDefault();
-    }
+    event.preventDefault();
+    if (!mouseLocked()) { lockMouse(); return; }
+    if (event.button === 2) setAim(true);
+    if (event.button === 0) useToy();
   });
   canvas.addEventListener('pointermove', event => {
-    const r = canvas.getBoundingClientRect();
-    aim.x = event.clientX - r.left; aim.y = event.clientY - r.top; aim.active = true;
-    if (dragging && started && !paused && !inventoryBusy() && $('help-screen').hidden) {
-      scene?.orbit(event.clientX - dragX, event.clientY - dragY);
-      dragX = event.clientX; dragY = event.clientY;
-    }
+    if (mouseLocked() && playActive()) scene?.orbit(event.movementX, event.movementY, { sensitivity: cameraSensitivity * (aiming ? 0.55 : 1), invertY: cameraInvertY });
   });
-  function stopDrag(event) {
-    dragging = false;
-    const pointerId = event?.pointerId ?? dragPointerId;
-    if (pointerId !== null && pointerId !== undefined && canvas.hasPointerCapture(pointerId)) canvas.releasePointerCapture(pointerId);
-    dragPointerId = null;
-  }
-  canvas.addEventListener('pointerup', stopDrag);
-  canvas.addEventListener('pointercancel', stopDrag);
-  canvas.addEventListener('lostpointercapture', () => { dragging = false; dragPointerId = null; });
-  canvas.addEventListener('pointerleave', () => { if (!dragging) aim.active = false; });
+  window.addEventListener('mouseup', event => { if (event.button === 2) setAim(false); });
+  canvas.addEventListener('pointercancel', () => setAim(false));
   window.addEventListener('keydown', event => {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.code === 'Escape' && !$('help-screen').hidden) { event.preventDefault(); closeHelp(); return; }
@@ -353,15 +399,11 @@
     if (!controlled.includes(event.code)) return;
     event.preventDefault(); keys.add(event.code);
     if (!event.repeat) {
-      if (event.code === 'KeyE') game.interact();
+      if (event.code === 'KeyE') { game.interact(); setAim(false); }
       if (event.code === 'KeyH') game.horn();
-      if (event.code === 'KeyR') { game.recover(); scene?.recenter(); }
+      if (event.code === 'KeyR') { game.recover(); setAim(false); scene?.recenter(); }
       if (event.code === 'KeyC') scene?.recenter();
-      if (event.code === 'KeyF') { if (game.flop()) keys.clear(); }
-      if (event.code === 'Space' && !game.player.vehicleId) {
-        const angle = aim.active && scene ? scene.aimAngle(aim.x, aim.y, width, height) : scene?.viewYaw ?? game.player.angle;
-        game.action(angle);
-      }
+      if (event.code === 'KeyF') { if (game.flop()) { keys.clear(); setAim(false); } }
       events();
     }
   });
@@ -373,7 +415,7 @@
 
   function graphicsError(message) {
     closeWheel(false, false); closeInventory(false);
-    graphicsFailed = true; paused = true; keys.clear(); stopDrag();
+    graphicsFailed = true; paused = true; keys.clear(); releaseMouse();
     $('renderer-error').hidden = false;
     $('renderer-error-detail').textContent = message;
     $('play-button').disabled = true;
@@ -416,6 +458,7 @@
     mini.fillStyle = '#fff8d9'; mini.beginPath(); mini.moveTo(6, 0); mini.lineTo(-4, -4); mini.lineTo(-3, 0); mini.lineTo(-4, 4); mini.closePath(); mini.fill(); mini.restore();
   }
   function render(dt) {
+    if (aiming && (!playActive() || !mouseLocked() || game.player.vehicleId || game.physics?.get('player'))) setAim(false);
     if (scene && !graphicsFailed) { scene.update(dt, { reducedMotion, paused: paused || inventoryBusy() || !started }); renderedFrames++; }
   }
   function hud() {
@@ -423,6 +466,8 @@
     $('equipped-toy').textContent = GADGETS[game.inventory.equipped].name + (game.inventory.equipped === 'cannon' ? ' · ' + game.inventory.ammo.cannon + ' charges' : '') + ' · TAB';
     canvas.dataset.equippedToy = game.inventory.equipped;
     canvas.dataset.inventoryMode = wheelOpen ? 'wheel' : inventoryView || 'none';
+    canvas.dataset.mouseLocked = String(mouseLocked());
+    canvas.dataset.aiming = String(aiming);
     renderInventory();
     const fallen = game.physics?.get('player');
     canvas.dataset.ragdollCount = String(game.physics?.bodies.size || 0);
@@ -434,15 +479,18 @@
       canvas.dataset.cameraMode = camera.mode;
       canvas.dataset.cameraYaw = Number(camera.viewYaw ?? scene.viewYaw).toFixed(4);
       canvas.dataset.cameraDistance = Number(camera.distance).toFixed(3);
+      canvas.dataset.cameraPitch = Number(camera.viewPitch || 0).toFixed(4);
+      canvas.dataset.cameraFov = Number(camera.fov || scene.camera.fov).toFixed(3);
       for (const name of ['x','y','z','targetX','targetY','targetZ']) canvas.dataset['camera' + name[0].toUpperCase() + name.slice(1)] = Number(camera[name]).toFixed(3);
       canvas.dataset.cameraObstructed = String(camera.obstructed);
       canvas.dataset.renderCalls = String(scene.renderer?.info.render.calls || 0);
     }
     canvas.dataset.worldX = game.current.x.toFixed(3); canvas.dataset.worldY = game.current.y.toFixed(3);
     canvas.dataset.frames = String(renderedFrames);
-    $('aim-reticle').hidden = !started || paused || inventoryBusy() || !!game.player.vehicleId || !!fallen || !$('help-screen').hidden || graphicsFailed;
-    if (aim.active) { $('aim-reticle').style.left = aim.x + 'px'; $('aim-reticle').style.top = aim.y + 'px'; }
-    else { $('aim-reticle').style.left = '50%'; $('aim-reticle').style.top = '50%'; }
+    $('aim-reticle').hidden = !playActive() || !mouseLocked() || !!game.player.vehicleId || !!fallen;
+    $('aim-reticle').classList.toggle('aiming', aiming);
+    $('mouse-hint').hidden = !playActive() || mouseLocked();
+    $('game-shell').classList.toggle('aiming', aiming);
     $('speed-value').textContent = game.player.vehicleId ? Math.round(Math.abs(game.current.speed || 0) * 0.28) + ' KM/H' : fallen ? (fallen.phase === 'recover' ? 'GETTING UP' : 'WHOOPS!') : 'ON FOOT';
     $('speed-caption').textContent = game.player.vehicleId ? 'SHIFT BOOST · SPACE DRIFT' : fallen ? 'R · SKIP THE DRAMA' : 'F · DRAMATIC FLOP';
     const t = target();
@@ -478,7 +526,7 @@
     $('garage-status').textContent = nearest ? (nearest.id === 'wash' ? 'At the wash · E repairs and clears heat.' : 'At the garage · G saves rides. I buys supplies.') : 'Visit GARAGE for rides, toys and supplies. WASH clears heat.';
     $('boost-price').textContent = game.upgrades.boost >= 3 ? 'MAXED' : money(200 + game.upgrades.boost * 150);
     $('armor-price').textContent = game.upgrades.armor >= 3 ? 'MAXED' : money(150 + game.upgrades.armor * 125);
-    const hint = nearest ? (nearest.id === 'wash' ? 'E · wash & cool off ($75)' : 'G · garage collection   I · supplies & toys') : car ? (Math.abs(car.speed) < 45 ? 'E · hop out   H · honk   SPACE · drift' : 'SPACE · drift   SHIFT · boost   H · honk') : game.cars.some(c => dist(c, game.player) < 65) ? 'E · borrow this ride' : 'SPACE · ' + GADGETS[game.inventory.equipped].name + '   TAB · toys   I · pockets';
+    const hint = nearest ? (nearest.id === 'wash' ? 'E · wash & cool off ($75)' : 'G · garage collection   I · supplies & toys') : car ? (Math.abs(car.speed) < 45 ? 'E · hop out   H · honk   SPACE · drift' : 'SPACE · drift   SHIFT · boost   H · honk') : game.cars.some(c => dist(c, game.player) < 65) ? 'E · borrow this ride' : 'RIGHT MOUSE · aim   LEFT MOUSE · ' + GADGETS[game.inventory.equipped].name + '   TAB · toys';
     $('interaction-hint').textContent = hint;
     if (fallen) $('interaction-hint').textContent = fallen.phase === 'recover' ? 'Just finding my feet…  R · recover now' : 'Oh, crumbs! Getting up shortly…  R · recover now';
     $('interaction-hint').hidden = !started;
@@ -495,7 +543,13 @@
       const input = { up: keys.has('KeyW') || keys.has('ArrowUp'), down: keys.has('KeyS') || keys.has('ArrowDown'), left: keys.has('KeyA') || keys.has('ArrowLeft'), right: keys.has('KeyD') || keys.has('ArrowRight'), boost: keys.has('ShiftLeft') || keys.has('ShiftRight'), brake: keys.has('Space') };
       if (!game.player.vehicleId) input.moveAngle = scene?.viewYaw ?? -Math.PI / 2;
       let count = 0;
-      while (accumulator >= 1 / 60 && count++ < 8) { game.update(1 / 60, input); accumulator -= 1 / 60; }
+      while (accumulator >= 1 / 60 && count++ < 8) {
+        game.update(1 / 60, input);
+        if (aiming && !game.physics?.get('player') && !game.player.vehicleId) {
+          const direction = toyDirection(); game.player.angle = direction.angle; game.player.aimPitch = direction.pitch;
+        }
+        accumulator -= 1 / 60;
+      }
       saveElapsed += dt;
       if (saveElapsed > 5) { save(); saveElapsed = 0; }
       events();

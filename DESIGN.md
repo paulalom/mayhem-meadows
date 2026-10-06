@@ -30,12 +30,12 @@ The player can ignore contracts and play freely. There is no mandatory story seq
 - **Forgiving collisions:** cars bounce and lose some speed; they do not get stuck against corners. Heavy impacts reduce vehicle condition. A wreck becomes a confetti cloud and ejects the player safely.
 - **Borrow any civilian car:** press Interact near a stationary car. Traffic slows for intersections. Exiting at speed is blocked with a useful message; exiting while stopped places you on a free side of the car.
 - **Three recognizable rides:** a forgiving compact, a fast but loose sports car, and a slower, sturdy van. Their silhouettes and colors explain their character.
-- **On foot:** camera-relative movement, sprint, car entry, and a short-range confetti popper aimed into the 3D world with the pointer. Confetti can startle residents and distract police; it is a toy, not a realistic weapon system.
+- **On foot:** camera-relative movement, sprint, car entry, and a short-range confetti popper aimed along the camera view into the 3D world. Confetti can startle residents and distract police; it is a toy, not a realistic weapon system.
 - **Immediate recovery:** a dedicated unstuck action returns you to a safe nearby road with a small score penalty. No long walk back after a bad crash.
 - **Physical tumbles:** moving cars and confetti bursts send residents into jointed ragdolls. On foot, the player tumbles after a vehicle impact or can press F for a voluntary dramatic flop. Gravity, connected limbs, bouncing contacts, and street friction produce a different little mishap each time. Everyone gets up after a few seconds; R skips the player's recovery wait.
 - **Solid bodies:** vehicle contacts use rotated car footprints, and standing people cannot walk through cars or each other. Ragdoll joints and limbs contact the ground, building walls, and moving cars. Hits create confetti and fake curses, with no cash reward for hitting people.
 
-Prototype controls: WASD/arrow keys to move or drive; right mouse drag to orbit the camera; C to recenter; E to enter/exit or use a nearby service; Space for handbrake while driving or a confetti burst on foot; Shift for boost/sprint; H for horn; F for an on-foot flop; Esc/P to pause; R for recovery. Contract buttons live in the HUD so accepting a gig never depends on finding a tiny interaction point.
+Prototype controls: WASD/arrow keys to move or drive; click the town to capture the mouse, then move it to look; hold right mouse for shoulder aiming with slower sensitivity; left-click to use the equipped toy on foot; C to recenter; E to enter/exit or use a nearby service; Space for the driving handbrake; Shift for boost/sprint; H for horn; F for an on-foot flop; Esc to release the mouse and pause, P to pause; R for recovery. Contract buttons live in the HUD so accepting a gig never depends on finding a tiny interaction point.
 
 ## Toys, pockets, and a place to park
 
@@ -47,13 +47,13 @@ Inventory should create new funny choices within seconds. The three toys occupy 
 | Inflatable hammer | A close-range padded swing with a firm ragdoll shove | $120 permanent unlock; unlimited uses, slower swing |
 | Party cannon | A visible traveling ball that bursts into a wider confetti party | $280 unlock includes six charges; twelve-charge capacity |
 
-Space uses the equipped toy on foot and remains the handbrake in a car. Hits produce confetti, fake curses, physics tumbles, and heat. They do not pay cash. Each toy has a different reach and rhythm, so choosing one changes the situation rather than only increasing a number.
+Left-click uses the equipped toy on foot. Hold right mouse to aim with a center crosshair, closer shoulder view, and slower sensitivity. The first click on an uncaptured game only captures the mouse; it never accidentally fires. Space remains the handbrake in a car. Hits produce confetti, fake curses, physics tumbles, and heat. They do not pay cash. Each toy has a different reach and rhythm, so choosing one changes the situation rather than only increasing a number.
 
 Press **I** for pockets. Carry at most five biscuits (+40 composure, $15 each), three repair tapes (+55 current-car condition, $35 each), and three refill packs (+6 cannon charges, $30 each). Starter supplies are two biscuits, one tape, and one refill. Supplies work anywhere they are useful; a full meter, missing car, or locked cannon consumes nothing. A partial top-up uses one item and stops at the cap. Buying supplies requires stopping at Sprinkle Garage.
 
 Press **G** for a three-slot car collection. At Sprinkle Garage, save the civilian ride you are driving, bring a saved ride back out at a collision-safe spot, repair it for $45, or repaint it for $25. Stored rides retain condition and paint, including after a reload. A wreck must be repaired before retrieval. Bringing out a deployed ride moves that car instead of creating a duplicate. Existing boost and armor upgrades apply to every ride. Browsing is available anywhere; car management requires a garage visit.
 
-The added outing loop is **finish a gig → restock or unlock a toy → save a favorite ride → return to free roam with a new way to cause trouble**. No weight limits, sorting chores, random loot tiers, or compulsory shopping interrupt the driving loop. Pocket and collection menus freeze simulation time and return keyboard focus to the game when closed. Persistent inventory is validated and old saves migrate with their cash and upgrades intact.
+The added outing loop is **finish a gig → restock or unlock a toy → save a favorite ride → return to free roam with a new way to cause trouble**. No weight limits, sorting chores, random loot tiers, or compulsory shopping interrupt the driving loop. Pocket and collection menus freeze simulation time and release the mouse; closing them returns keyboard focus to the game. A visible prompt asks for a click to capture the mouse again. Persistent inventory is validated and old saves migrate with their cash and upgrades intact.
 
 A full garage can release a slot for a new favorite. Releasing ownership leaves a deployed car in town, preserves its condition, and pays no cash; it is a collection choice rather than a way to farm money.
 
@@ -61,8 +61,9 @@ A full garage can release a slot for a new favorite. Releasing ownership leaves 
 
 The camera makes the town feel like a place you can run through. Keep the player, the next corner, and the nearest traffic readable; a pleasing view should also explain where to go.
 
-- **On-foot orbit:** WASD follows the camera's horizontal forward/right directions. Right mouse drag changes yaw and pitch without locking the pointer. C returns the view behind the character.
-- **Driving chase:** the camera follows behind the car with enough height to read an intersection. Let the player look around; return smoothly toward the travel direction so steering and view stay connected.
+- **On-foot orbit:** WASD follows the camera's horizontal forward/right directions. Clicking the town captures the mouse; movement looks naturally left/right and up/down without holding a button. C returns the view behind the character. Help offers look sensitivity and an invert up/down preference.
+- **Shoulder aiming:** holding right mouse on foot moves the camera closer over the character's shoulder and slows looking. The character turns toward the camera's aim direction, and the crosshair stays centered. Left-click fires or swings the equipped toy. Releasing aim returns to the exploration view.
+- **Driving chase:** the camera follows behind the car with enough height to read an intersection. Mouse movement temporarily suspends automatic following so it never fights looking around; after a short delay, return smoothly behind the car.
 - **Safe camera distance:** shorten the camera boom when buildings obstruct the view, then ease it back out in open space. The camera must not spend a chase inside a wall.
 - **Readable objectives:** glowing ground rings and upright markers reveal mission targets in perspective. A HUD compass supplies bearing and distance when the target is around a corner; the overhead minimap shows routes, services, and patrols.
 - **Street movement and ragdolls:** upright characters and cars use the flat arcade streets. Fallen characters use a separate three-dimensional joint solver with vertical gravity, limb constraints, and solid contacts. Decorative trees, curbs, and lamps provide depth; there are no stairs, jumps, or elevated roads in this milestone.
@@ -148,7 +149,8 @@ No multiplayer, huge procedural city, interiors, stairs, jumping, elevated drivi
 - Do car entry, exit, collision resolution, and mission targets avoid inaccessible positions?
 - Do pause, tab switching, retry, save reload, mute, and reduced motion behave predictably?
 - Does the game stay smooth with maximum patrols and confetti active?
-- Can players turn a corner, borrow a car, and aim confetti without fighting the camera?
+- Can players turn a corner, borrow a car, and aim confetti without fighting the camera? Does looking right turn the view right, and does holding aim slow it comfortably?
+- Does the first capture click avoid firing? Do Esc, menus, full screen, and tab changes release the mouse safely, clear held input, and show how to resume looking?
 - Does the view stay outside buildings, and do markers plus minimap keep destinations easy to find?
 - Do file-open play, full screen, camera recentering, and the WebGL failure overlay behave predictably?
 - Do falling bodies retain connected limbs and stay outside walls, vehicles, and the ground? Can both residents and the player get up in a safe position?

@@ -21,7 +21,7 @@ function makeScene() {
     T, game, scene: new T.Scene(), _geometries: [], _materials: new Map(),
     _color: new T.Color(), _residents: new Map(), _ragdollRenderedCount: 0,
     _lastPlayerX: game.player.x, _lastPlayerY: game.player.y, _walkPhase: 0,
-    reducedMotion: false
+    reducedMotion: false, _cameraInfo: { aiming: false }
   });
   scene._cube = scene._geometry(new T.BoxGeometry(1, 1, 1));
   scene._sphere = scene._geometry(new T.IcosahedronGeometry(1, 1));
@@ -53,8 +53,10 @@ function addCamera(scene) {
   Object.assign(scene, {
     camera: new T.PerspectiveCamera(57, 1280 / 720, 0.06, 175),
     _yaw: -Math.PI / 2, _requestedYaw: -Math.PI / 2, _driveOffset: 0,
-    _pitch: 0, _orbitTimer: 0, _cameraMode: 'foot', _lastVehicleId: null, _hasCamera: false,
+    _pitch: -0.24, _viewPitch: -0.24, _aiming: false, _aimBlend: 0,
+    _orbitTimer: 0, _cameraMode: 'foot', _lastVehicleId: null, _hasCamera: false,
     _cameraTarget: new T.Vector3(), _desiredCamera: new T.Vector3(),
+    _lookTarget: new T.Vector3(), _viewDirection: new T.Vector3(),
     _sun: new T.DirectionalLight(), _buildingVolumes: cameraTown._buildingVolumes, _cameraInfo: {}
   });
 }
