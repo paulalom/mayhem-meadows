@@ -66,6 +66,8 @@ The [gameplay design](DESIGN.md) explains the intended loops, tuning, scope, and
 
 The [story campaign design](CAMPAIGN.md) specifies **Operation Unboring**, a proposed ten-job campaign beginning with Spanner's phone call and directions to Sprinkle Garage. Its first playable milestone is the call, the drive, and the garage meeting; campaign gameplay is planned for a later build.
 
+The [police balance design](POLICE.md) proposes a forgiving mischief buildup, explicit chase reasons, announced reinforcement waves, and a capped four-car swarm. These rules are planned for a gameplay update; the current prototype retains its existing three-patrol heat system.
+
 ## Development
 
 The checked-in engine bundle is ready to play. You do not need npm or a build step to open the game.

@@ -70,22 +70,13 @@ The camera makes the town feel like a place you can run through. Keep the player
 
 ## Trouble and the Fun Police
 
-Heat has three visible levels. The number of pursuing patrols follows the level rather than scaling without limit.
+The next balance gives the player room for several small incidents before pursuit. A visible mischief meter rises from witnessed reports: ordinary horns, drift, light bumps, owned rides, and authorized story actions add nothing. The meter warns at 25, dispatches one patrol at 50, brings a three-car swarm at 80, and caps the response at four patrols at 100. Quiet travel cools minor trouble before a chase begins.
 
-| Heat | Response | Player's opportunity |
-| --- | --- | --- |
-| 0 | Patrols wander. | Explore and learn the town. |
-| 1 | One patrol investigates/chases. | Practice escape; the chase is gentle. |
-| 2 | Two patrols pursue. | Use corners, parks, and alleys to break sight. |
-| 3 | Three patrols pursue aggressively. | Commit to escape or spend cash on a wash. |
+The [police balance design](POLICE.md) specifies incident values, witness reporting, staggered reinforcement arrivals, persistent chase reasons, and fair escape rules. Every pursuit names its cause. Losing sight immediately shows SEARCHING with a visible 12-, 18-, or 24-second escape countdown. Police follow reported or last-seen locations; fresh sightings and reports explain any search reset.
 
-Heat rises from startling residents, hitting traffic hard, and bothering patrols. A borrowed car creates a small first-time heat bump. **There is no cash reward for hitting people.** Different driving stunts are the interesting scoring actions.
+The swarm creates pressure through converging roads and clear warnings. Every base car can outrun a patrol on a straight, one exit stays open, contact damage is capped across all officers, and reinforcements arrive through distant clear streets. Escape clears both wanted stars and accumulated mischief. The $75 wash remains an optional repair and escape shortcut; campaign pursuits supply a voucher. Free-roam capture retains the modest cleanup fee and preserves upgrades, while campaign capture and checkpoint retries are free.
 
-Police follow roads and chase the player's last known position. Buildings block their view. When no patrol sees the player, an escape countdown appears; breaking sight must produce immediate readable feedback. New trouble resets that countdown. A car wash clears heat and repairs the car for a visible price.
-
-Police contact gradually drains composure rather than causing an instant fail. If composure runs out, you get a “BUSTED-ISH” screen, lose a modest amount of cash, and reappear at the town square with your upgrades intact. Restarting takes one button.
-
-Prototype target tuning: 8 seconds out of sight to start cooling; approximately 6 seconds per heat level to clear it; 2 seconds of grace after recovery. These values are playtest hypotheses, not fixed requirements.
+These thresholds and up to four patrols are proposed tuning for the next gameplay build. The current playable prototype uses immediate heat increments, three pursuit levels, and up to three patrols.
 
 ## Contracts
 
@@ -95,7 +86,7 @@ Only one contract is active at a time. Every destination is marked in the world 
 | --- | --- | --- |
 | Ridiculous delivery | “Emergency Disco”: pick up an enormous imaginary disco ball and deliver it to the dance hall. | Reach pickup, then drop-off. Faster and cleaner trips earn a bonus. |
 | Checkpoint dash | “The Lawn Enforcement Slalom”: race through a sequence of colorful gates. | Follow 5–7 ordered checkpoints; choose your own roads between them. |
-| Party route | “Operation Un-Boring”: bring a confetti parade to three neighborhoods. | Stop at party markers and press the horn; the challenge is route choice under rising heat. |
+| Party route | “Operation Un-Boring”: bring a confetti parade to three neighborhoods. | Stop at party markers and press the horn; choose a route and add optional driving stunts. Required party actions are authorized under the planned police balance. |
 
 Contract timers control the speed bonus. Finishing overtime still earns base pay; abandoning loses its potential payout, not already-earned cash. The player can retry or choose another immediately. Repeating a contract varies its destination to encourage route learning.
 
@@ -152,7 +143,7 @@ No multiplayer, huge procedural city, interiors, stairs, jumping, elevated drivi
 - Can a new player enter a car and start a job without reading a manual?
 - Is a 30-second free drive enjoyable before rewards exist?
 - Does the first contract fit in 1–3 minutes and teach a useful route?
-- Does losing police sight visibly begin escape? Can a new player escape heat 1?
+- Can the player read the cause of police attention, notice the warning before dispatch, and cause several small incidents before a chase? Can a new player escape one patrol with a base ride?
 - Can mistakes produce a recovery within ten seconds?
 - Do car entry, exit, collision resolution, and mission targets avoid inaccessible positions?
 - Do pause, tab switching, retry, save reload, mute, and reduced motion behave predictably?
