@@ -4,6 +4,19 @@ const assert = require('node:assert/strict');
 const { Game } = require('../core.js');
 const C = require('../vendor/cannon.cjs');
 const { PERSON_HEIGHT, PLAYER_RADIUS } = require('../physics.js');
+const VehicleStats = require('../vehicle-stats.js');
+const { VehicleWorld } = require('../vehicle-physics.js');
+
+const controlledWorld = (damage = {}) => {
+  const ride = { id: 'controlled-car', kind: 'compact', x: 1000, y: 1000, angle: 0, speed: 0, vx: 0, vy: 0, health: 100, maxHealth: 100, engineHealth: 100, handlingHealth: 100, ...damage };
+  const world = new VehicleWorld({ cars: [ride], police: [], buildings: [], staticObjects: [], worldSize: 5600 }, VehicleStats.CAR_TYPES);
+  return { ride, world };
+};
+const driveWorld = (fixture, seconds, command) => {
+  fixture.world.sync();
+  for (let t = 0; t < seconds - 0.00001; t += 1 / 60) { fixture.world.control(fixture.ride, command); fixture.world.step(1 / 60); }
+  return fixture.ride;
+};
 
 const empty = () => {
   const game = new Game({ seed: 42 });
@@ -218,4 +231,74 @@ test('world-size resynchronization preserves live cars while replacing all four 
   assert.equal(game.vehiclePhysics.world.bodies.filter(candidate => candidate.kind === 'boundary').length, 4);
   for (const wall of oldWalls) assert.equal(game.vehiclePhysics.world.bodies.includes(wall), false);
   assert.ok(game.vehiclePhysics.world.bodies.some(candidate => candidate.kind === 'boundary' && candidate.position.x === 6210 / 20), 'east boundary follows the resized world');
+});
+
+test('component damage reduces manual acceleration and caps boosted and AI driving at the damaged model speed', () => {
+  const healthy = controlledWorld(), damaged = controlledWorld({ health: 45, engineHealth: 45, handlingHealth: 70 });
+  driveWorld(healthy, 0.4, { up: true }); driveWorld(damaged, 0.4, { up: true });
+  assert.ok(damaged.ride.speed < healthy.ride.speed * 0.6, 'a damaged engine noticeably loses acceleration');
+  for (const command of [{ up: true, boost: true, maxSpeed: 450 }, { targetSpeed: 900, heading: 0 }]) {
+    const good = controlledWorld(), bad = controlledWorld({ health: 45, engineHealth: 45 });
+    driveWorld(good, 4, command); driveWorld(bad, 4, command);
+    const base = VehicleStats.getModel(bad.ride), effective = VehicleStats.performance(bad.ride);
+    const cap = (command.maxSpeed || base.maxSpeed) * effective.maxSpeed / base.maxSpeed;
+    assert.ok(bad.ride.speed <= cap + 2, 'boost and AI respect the degraded top speed');
+    assert.ok(good.ride.speed > bad.ride.speed * 1.4, 'healthy and damaged models have distinct usable speed');
+  }
+});
+
+test('model choice affects the physical driving limits', () => {
+  const standard = controlledWorld(), streetbug = controlledWorld({ modelId: 'pogo-streetbug' });
+  driveWorld(standard, 3, { up: true }); driveWorld(streetbug, 3, { up: true });
+  assert.ok(standard.ride.speed > streetbug.ride.speed + 15);
+  assert.ok(streetbug.ride.speed <= VehicleStats.getModel(streetbug.ride).maxSpeed + 5, 'the arcade speed cap permits only a small solver overshoot');
+});
+
+test('stalled or wrecked vehicles cannot drive in either direction but retain inertia and braking', () => {
+  for (const damage of [{ engineHealth: 0 }, { health: 0 }, { exploded: true }]) {
+    for (const command of [{ up: true }, { down: true }, { targetSpeed: 200, heading: 0 }, { targetSpeed: -100, heading: 0 }]) {
+      const fixture = controlledWorld(damage); driveWorld(fixture, 0.6, command);
+      assert.ok(Math.abs(fixture.ride.speed) < 0.01, 'unpowered cars stay stationary under throttle');
+    }
+    const coast = controlledWorld({ ...damage, speed: 180, vx: 180 }), braking = controlledWorld({ ...damage, speed: 180, vx: 180 });
+    driveWorld(coast, 0.25, { up: true }); driveWorld(braking, 0.25, { brake: true });
+    assert.ok(coast.ride.speed > 170, 'engine failure does not erase existing momentum');
+    assert.ok(braking.ride.speed < coast.ride.speed * 0.5, 'brakes still work without an engine');
+  }
+});
+
+test('steering damage weakens chassis turning and tyre grip without removing control', () => {
+  const healthy = controlledWorld({ speed: 180, vx: 180, vy: 80 }), damaged = controlledWorld({ speed: 180, vx: 180, vy: 80, handlingHealth: 15 });
+  driveWorld(healthy, 0.15, { up: true, steer: 1 }); driveWorld(damaged, 0.15, { up: true, steer: 1 });
+  assert.ok(Math.abs(damaged.ride.angle) > 0.01);
+  assert.ok(Math.abs(damaged.ride.angle) < Math.abs(healthy.ride.angle) * 0.7, 'the damaged chassis responds more slowly');
+  const goodGrip = controlledWorld({ speed: 180, vx: 180, vy: 80 }), badGrip = controlledWorld({ speed: 180, vx: 180, vy: 80, handlingHealth: 15 });
+  driveWorld(goodGrip, 0.15, { up: true }); driveWorld(badGrip, 0.15, { up: true });
+  assert.ok(badGrip.ride.vy > goodGrip.ride.vy * 1.5, 'damaged tyres retain more lateral slide');
+});
+
+test('blast impulses update real body velocity in metres per second and survive resynchronization', () => {
+  const fixture = controlledWorld(), { world, ride } = fixture;
+  const body = world.get(ride.id), initial = body.velocity.clone();
+  world.impulse(ride, { x: 4, y: 3, z: -2 });
+  assert.equal(body.velocity.x, initial.x + 4); assert.equal(body.velocity.y, initial.y + 3); assert.equal(body.velocity.z, initial.z - 2);
+  assert.equal(ride.vx, 80); assert.equal(ride.vy, -40); assert.equal(ride.verticalVelocity, 3);
+  world.sync();
+  assert.equal(body.velocity.x, 4); assert.equal(body.velocity.y, 3); assert.equal(body.velocity.z, -2);
+  world.step(1 / 60);
+  assert.ok(ride.x > 1000); assert.ok(ride.y < 1000); assert.ok(ride.elevation > 0);
+  const heavy = controlledWorld({ kind: 'van', modelId: 'tumble-hauler' });
+  heavy.world.impulse(heavy.ride, { x: 4, y: 3, z: -2 });
+  assert.equal(heavy.world.get(heavy.ride.id).velocity.x, 4, 'mass-scaled impulses deliver the supplied velocity to heavier models');
+});
+
+test('blast impulses respect velocity edits made by exiting a vehicle and preserve pending position edits', () => {
+  const fixture = controlledWorld({ speed: 180, vx: 180 }), { world, ride } = fixture;
+  driveWorld(fixture, 0.2, { up: true });
+  ride.x = 1200; ride.vx = 0; ride.vy = 0; ride.speed = 0; ride.verticalVelocity = 0;
+  world.impulse(ride, { x: -3, y: 2, z: 1 });
+  const body = world.get(ride.id);
+  assert.equal(body.position.x, 60); assert.equal(body.velocity.x, -3); assert.equal(body.velocity.z, 1); assert.equal(body.velocity.y, 2);
+  world.sync();
+  assert.equal(body.position.x, 60); assert.equal(body.velocity.x, -3); assert.equal(body.velocity.z, 1); assert.equal(body.velocity.y, 2);
 });

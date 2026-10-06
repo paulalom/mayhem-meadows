@@ -37,6 +37,10 @@ The player can ignore contracts and play freely. There is no mandatory story seq
 
 Prototype controls: WASD/arrow keys to move or drive; click the town to capture the mouse, then move it to look; hold right mouse for shoulder aiming with slower sensitivity; left-click to use the equipped toy on foot; C to recenter; E to enter/exit or use a nearby service; Space to jump on foot or use the driving handbrake; Shift for boost/sprint; H for horn; F for an on-foot flop; Esc to release the mouse and pause, P to pause; R for recovery. Contract buttons live in the HUD so accepting a gig never depends on finding a tiny interaction point.
 
+## Vehicle condition
+
+Each civilian chassis has two fictional make/model variants with different power, handling, grip and durability. Impacts reduce body, engine and handling health independently for civilian and police vehicles. Engine damage cuts acceleration and speed; running-gear damage reduces steering and grip. Progressive dents, cracked glass and smoke communicate these losses. Critical hull or engine damage starts an eight-second fire warning before an explosion; blasts can start delayed chain fires, move nearby vehicles and knock people over. Drivers can bail out with E or stop and use tape. Full garage/wash repairs restore all systems and visuals; tape restores 55 to each meter and extinguishes the fire. Recovery changes position/orientation without repairing damage. Garage saves retain make/model and all component condition, including dangerous fire state.
+
 ## Toys, pockets, and a place to park
 
 Inventory should create new funny choices within seconds. The three toys occupy fixed wheel slots: hold Tab, choose with the pointer, arrows, or 1–3, then release to equip. Escape cancels. The wheel pauses the town and timers; opening it clears movement keys so choosing a toy never accidentally drives into a wall.

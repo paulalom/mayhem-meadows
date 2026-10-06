@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const { Game, SIZE, CAR_TYPES, GADGETS, POCKET_ITEMS, PAINT_COLORS, DISTRICTS } = MayhemCore;
+  const { Game, SIZE, VehicleStats, GADGETS, POCKET_ITEMS, PAINT_COLORS, DISTRICTS } = MayhemCore;
   const $ = id => document.getElementById(id);
   const canvas = $('game-canvas');
   const game = new Game();
@@ -16,6 +16,7 @@
   let wheelOpen = false, wheelIndex = 0, inventoryView = null, garageSignature = '';
   const toyIds = ['popper', 'hammer', 'cannon'];
   const money = n => '$' + Math.round(n).toLocaleString();
+  const vehicleName = vehicle => { const model = VehicleStats.getModel(vehicle); return model.make + ' ' + model.model; };
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   const inventoryBusy = () => wheelOpen || inventoryView !== null;
@@ -232,7 +233,10 @@
     updateAudio();
   }
   function renderGarage() {
-    const records = game.garage.cars.map(record => ({ ...record, health: game.cars.find(car => car.garageId === record.id)?.health ?? record.health }));
+    const records = game.garage.cars.map(record => {
+      const deployed = game.cars.find(car => car.garageId === record.id);
+      return { ...record, ...(deployed ? { health: deployed.health, engineHealth: deployed.engineHealth, handlingHealth: deployed.handlingHealth, burning: deployed.burning, exploded: deployed.exploded } : {}), maxHealth: game.maxHealth };
+    });
     $('garage-count').textContent = records.length + ' / 3 rides';
     $('garage-empty').hidden = records.length !== 0;
     const currentSaved = records.some(record => record.id === game.current.garageId);
@@ -249,13 +253,16 @@
       const card = document.createElement('article'); card.className = 'saved-car'; card.dataset.garageId = record.id;
       const heading = document.createElement('div'); heading.className = 'saved-car-heading';
       const copy = document.createElement('div');
-      const name = document.createElement('h3'); name.className = 'saved-car-name'; name.textContent = CAR_TYPES[record.kind].name;
-      const condition = document.createElement('p'); condition.className = 'saved-car-condition'; condition.textContent = Math.round(record.health / game.maxHealth * 100) + '% condition · shared tune-ups';
-      copy.append(name, condition); heading.append(copy);
+      const name = document.createElement('h3'); name.className = 'saved-car-name'; name.textContent = vehicleName(record);
+      const condition = document.createElement('p'); condition.className = 'saved-car-condition'; condition.textContent = Math.round(VehicleStats.condition(record) * 100) + '% body · ' + Math.round(record.engineHealth ?? 100) + '% engine · ' + Math.round(record.handlingHealth ?? 100) + '% handling · ' + VehicleStats.status(record);
+      const stats = document.createElement('p'); stats.className = 'saved-car-condition';
+      const effective = VehicleStats.performance(record);
+      stats.textContent = 'Accel ' + (effective.acceleration / 20).toFixed(1) + ' m/s² · top ' + Math.round(effective.maxSpeed * 3.6 / 20) + ' km/h · handling ' + effective.handling.toFixed(1);
+      copy.append(name, condition, stats); heading.append(copy);
       const badge = document.createElement('span'); badge.className = 'saved-car-badge'; badge.style.background = record.color; badge.setAttribute('aria-label', 'Current paint ' + record.color); heading.append(badge);
       const actions = document.createElement('div'); actions.className = 'saved-car-actions';
-      const retrieve = document.createElement('button'); retrieve.type = 'button'; retrieve.className = 'inventory-action'; retrieve.dataset.retrieveCar = record.id; retrieve.textContent = record.health <= 0 ? 'Needs repair first' : 'Bring it out ↗'; retrieve.disabled = !game.garageAvailable || record.health <= 0; actions.append(retrieve);
-      const repair = document.createElement('button'); repair.type = 'button'; repair.className = 'inventory-action'; repair.dataset.repairCar = record.id; repair.textContent = 'Un-dent · $45'; repair.disabled = !game.garageAvailable || record.health >= game.maxHealth || game.money < 45; actions.append(repair);
+      const retrieve = document.createElement('button'); retrieve.type = 'button'; retrieve.className = 'inventory-action'; retrieve.dataset.retrieveCar = record.id; retrieve.textContent = record.health <= 0 || record.burning || record.exploded ? 'Needs repair first' : 'Bring it out ↗'; retrieve.disabled = !game.garageAvailable || record.health <= 0 || record.burning || record.exploded; actions.append(retrieve);
+      const repair = document.createElement('button'); repair.type = 'button'; repair.className = 'inventory-action'; repair.dataset.repairCar = record.id; repair.textContent = 'Un-dent · $45'; repair.disabled = !game.garageAvailable || !VehicleStats.isDamaged(record) || game.money < 45; actions.append(repair);
       const release = document.createElement('button'); release.type = 'button'; release.className = 'inventory-action'; release.dataset.releaseCar = record.id; release.textContent = 'Release slot'; release.title = 'Remove ownership; any deployed car stays in town'; release.disabled = !game.garageAvailable; actions.append(release);
       const swatches = document.createElement('div'); swatches.className = 'garage-swatches'; swatches.setAttribute('aria-label', 'Paint choices · $25 each');
       for (const color of PAINT_COLORS) {
@@ -286,7 +293,7 @@
       card.querySelector('.pocket-count').textContent = count + ' / ' + definition.cap;
       card.querySelector('.pocket-description').textContent = definition.description;
       const use = card.querySelector('[data-use-pocket]'), buy = card.querySelector('[data-buy-pocket]');
-      const needed = id === 'biscuits' ? game.player.composure < 100 : id === 'repairTape' ? !!game.player.vehicleId && Math.abs(game.current.speed || 0) <= 45 && game.current.health < game.maxHealth : game.inventory.unlocked.includes('cannon') && game.inventory.ammo.cannon < 12;
+      const needed = id === 'biscuits' ? game.player.composure < 100 : id === 'repairTape' ? !!game.player.vehicleId && Math.abs(game.current.speed || 0) <= 45 && VehicleStats.isDamaged(game.current) : game.inventory.unlocked.includes('cannon') && game.inventory.ammo.cannon < 12;
       use.disabled = fallen || count <= 0 || !needed;
       use.textContent = id === 'refill' ? 'Load cannon' : 'Use one';
       buy.disabled = !available || count >= definition.cap || game.money < definition.price;
@@ -566,7 +573,7 @@
     $('aim-reticle').classList.toggle('aiming', aiming);
     $('mouse-hint').hidden = !playActive() || mouseLocked();
     $('game-shell').classList.toggle('aiming', aiming);
-    $('speed-value').textContent = game.player.vehicleId ? Math.round(Math.abs(game.current.speed || 0) * 0.28) + ' KM/H' : fallen ? (fallen.phase === 'recover' ? 'GETTING UP' : 'WHOOPS!') : 'ON FOOT';
+    $('speed-value').textContent = game.player.vehicleId ? Math.round(Math.abs(game.current.speed || 0) * 3.6 / 20) + ' KM/H' : fallen ? (fallen.phase === 'recover' ? 'GETTING UP' : 'WHOOPS!') : 'ON FOOT';
     $('speed-caption').textContent = game.player.vehicleId ? (game.current.upright === false ? 'R · RIGHT THIS RIDE' : 'SHIFT BOOST · SPACE DRIFT') : fallen ? 'R · SKIP THE DRAMA' : 'SPACE · JUMP   F · FLOP';
     const t = target();
     $('target-compass').hidden = !t;
@@ -583,8 +590,18 @@
     $('composure-bar').style.width = game.player.composure + '%';
     $('composure-meter')?.setAttribute('aria-valuenow', Math.round(game.player.composure));
     const car = game.player.vehicleId ? game.current : null;
-    const condition = car ? clamp(car.health / game.maxHealth * 100, 0, 100) : 100;
-    $('ride-name').textContent = car ? (CAR_TYPES[car.kind]?.name || 'Borrowed ride') : 'Fresh sneakers';
+    const condition = car ? VehicleStats.condition(car) * 100 : 100;
+    const rideName = car ? vehicleName(car) : 'Fresh sneakers';
+    $('ride-name').textContent = rideName; $('ride-name').title = rideName;
+    $('ride-stats').hidden = !car;
+    $('ride-health').hidden = !car;
+    $('ride-status').textContent = car ? VehicleStats.status(car) : 'Ready for a stroll';
+    $('ride-status').dataset.danger = Boolean(car?.burning);
+    if (car) {
+      const stats = VehicleStats.performance(car);
+      $('ride-stats').textContent = 'ACC ' + (stats.acceleration / 20).toFixed(1) + ' m/s² · TOP ' + Math.round(stats.maxSpeed * 3.6 / 20) + ' km/h · TURN ' + stats.handling.toFixed(1);
+      $('ride-health').textContent = 'ENGINE ' + Math.round(stats.engineHealth) + '% · HANDLING ' + Math.round(stats.handlingHealth) + '%';
+    }
     $('ride-bar').style.width = condition + '%';
     $('ride-meter')?.setAttribute('aria-valuenow', Math.round(condition));
     $('ride-condition').textContent = car ? Math.round(condition) + '%' : '—';
@@ -602,7 +619,9 @@
     $('boost-price').textContent = game.upgrades.boost >= 3 ? 'MAXED' : money(200 + game.upgrades.boost * 150);
     $('armor-price').textContent = game.upgrades.armor >= 3 ? 'MAXED' : money(150 + game.upgrades.armor * 125);
     let hint = nearest ? (nearest.id === 'wash' ? 'E · wash & cool off ($75)' : 'G · garage collection   I · supplies & toys') : car ? (Math.abs(car.speed) < 45 ? 'E · hop out   H · honk   SPACE · drift' : 'SPACE · drift   SHIFT · boost   H · honk') : game.cars.some(c => dist(c, game.player) < 65) ? 'E · borrow this ride' : 'RIGHT MOUSE · aim   LEFT MOUSE · ' + GADGETS[game.inventory.equipped].name + '   TAB · toys';
-    if (car?.upright === false) hint = 'R · right your ride and return to the road';
+    if (car?.burning) hint = 'ENGINE FIRE · ' + Math.max(0, Math.ceil(8 - car.fireTime)) + 's · E BAIL OUT · stop + I for repair tape';
+    else if (car && car.engineHealth <= 0) hint = 'ENGINE STALLED · stop + I for repair tape · E hop out';
+    else if (car?.upright === false) hint = 'R · right your ride and return to the road';
     else if (car && car.elevation > 0.16) hint = 'AIRBORNE!   R · recover to the road';
     $('interaction-hint').textContent = hint;
     if (fallen) $('interaction-hint').textContent = fallen.phase === 'recover' ? 'Just finding my feet…  R · recover now' : 'Oh, crumbs! Getting up shortly…  R · recover now';

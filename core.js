@@ -10,11 +10,8 @@
   const BUILDING_SETBACK = ROAD_WIDTH / 2 + SIDEWALK_WIDTH;
   const DISTRICTS = World.DISTRICTS;
   const districtAt = World.districtAt;
-  const CAR_TYPES = {
-    compact: { name: 'Pocket Rocket', maxSpeed: 300, acceleration: 430, handling: 2.7, grip: 9, mass: 1, width: 27, length: 46 },
-    sports: { name: 'Sprinkle GT', maxSpeed: 370, acceleration: 490, handling: 2.5, grip: 6, mass: 0.9, width: 28, length: 49 },
-    van: { name: 'Party Wagon', maxSpeed: 260, acceleration: 340, handling: 2.1, grip: 10, mass: 1.4, width: 32, length: 55 }
-  };
+  const VehicleStats = root.MayhemVehicleStats || (typeof require === 'function' ? require('./vehicle-stats.js') : null);
+  const { CAR_TYPES, CAR_MODELS } = VehicleStats;
   const COLORS = ['#ffd15b', '#fb8097', '#67d3c8', '#a6a0fa', '#90c66b', '#6fb5eb'];
   const GADGETS = {
     popper: { name: 'Confetti Popper', description: 'Unlimited bursts of close-up silliness.', price: 0, cooldown: 0.55 },
@@ -23,7 +20,7 @@
   };
   const POCKET_ITEMS = {
     biscuits: { name: 'Biscuits', description: 'Restore 40 composure.', price: 15, cap: 5 },
-    repairTape: { name: 'Repair Tape', description: 'Restore 55 condition to your stopped car.', price: 35, cap: 3 },
+    repairTape: { name: 'Repair Tape', description: 'Restore 55 body, engine and handling health; put out a stopped car fire.', price: 35, cap: 3 },
     refill: { name: 'Party Refill', description: 'Add 6 Party Cannon shots, up to 12.', price: 30, cap: 3 }
   };
   const owns = (object, key) => typeof key === 'string' && Object.prototype.hasOwnProperty.call(object, key);
@@ -159,7 +156,7 @@
       this._makePedestrians();
       const patrolPoint = this.nodes.find(node => distance(node, this.player) > 500 && this._vehicleFree({ ...node, kind: 'compact', angle: 0 })) || this._safeRoadPosition({ x: 1260, y: 180 });
       this.police.push({ id: 'police-' + this._nextId++, x: patrolPoint.x, y: patrolPoint.y, angle: patrolPoint.angle || 0,
-        speed: 0, route: [], routeTimer: 0, lastSeen: { x: this.player.x, y: this.player.y } });
+        ...this._vehicleState('compact'), speed: 0, route: [], routeTimer: 0, lastSeen: { x: this.player.x, y: this.player.y } });
     }
 
     _makePedestrians() {
@@ -189,10 +186,21 @@
     }
 
     _addCar(x, y, angle, kind, color, traffic = false) {
-      const car = { id: 'car-' + this._nextId++, x, y, angle, speed: 0, health: this.maxHealth, color, kind, traffic, vx: 0, vy: 0, borrowed: false, route: [], elevation: 0, verticalVelocity: 0, grounded: true, upright: true };
+      const state = this._vehicleState(kind);
+      const models = Object.values(CAR_MODELS).filter(model => model.kind === kind);
+      // Stable variety without consuming the town's seeded random sequence.
+      if (models.length) state.modelId = models[(this._nextId - 1) % models.length].id;
+      const car = { id: 'car-' + this._nextId++, x, y, angle, speed: 0, ...state, color, kind, traffic, vx: 0, vy: 0, borrowed: false, route: [], elevation: 0, verticalVelocity: 0, grounded: true, upright: true };
       this.cars.push(car);
       return car;
     }
+
+    _vehicleState(kind) {
+      return { kind, modelId: VehicleStats.getModel({ kind }).id, maxHealth: this.maxHealth,
+        health: this.maxHealth, engineHealth: 100, handlingHealth: 100, burning: false, fireTime: 0, exploded: false };
+    }
+
+    vehicleStats(vehicle = this.current) { return VehicleStats.performance(vehicle); }
 
     _isFree(x, y, radius = PLAYER_RADIUS) {
       if (x < radius || y < radius || x > SIZE - radius || y > SIZE - radius) return false;
@@ -606,16 +614,17 @@
 
     interact() {
       if (this.ragdolls.get(this.player.id)) return false;
+      if (this.player.vehicleId && this.current.burning) return this._exitCar(this.current, true);
       if (this.player.elevation > 0.16) { this._toast('Land before hopping in or out.'); return false; }
       if (this.player.vehicleId) {
         const car = this.current;
         if (car.upright === false || car.elevation > 0.16) { this._toast('Your ride needs its wheels on the road. Press R to recover.'); return false; }
         if (Math.abs(car.speed) > 45) { this._toast('Slow down before hopping out.'); return false; }
         const wash = this.services.find(s => s.id === 'wash' && distance(s, car) < 85);
-        if (wash && (this.heat > 0 || car.health < this.maxHealth)) return this._useService(wash);
+        if (wash && (this.heat > 0 || VehicleStats.isDamaged(car))) return this._useService(wash);
         return this._exitCar(car);
       }
-      const nearby = this.cars.filter(car => car.health > 0 && distance(car, this.player) < 75 && Math.abs(car.speed) < 110 && car.elevation < 0.16 && car.upright !== false).sort((a, b) => distance(a, this.player) - distance(b, this.player));
+      const nearby = this.cars.filter(car => car.health > 0 && !car.burning && !car.exploded && distance(car, this.player) < 75 && Math.abs(car.speed) < 110 && car.elevation < 0.16 && car.upright !== false).sort((a, b) => distance(a, this.player) - distance(b, this.player));
       if (nearby.length) {
         const car = nearby[0];
         this.player.vehicleId = car.id;
@@ -653,10 +662,10 @@
 
     _useService(service) {
       if (service.id === 'garage') { this._toast('Sprinkle Garage: press G for your car collection, or I for toys and pocket supplies.'); return true; }
-      if (this.heat === 0 && (!this.player.vehicleId || this.current.health >= this.maxHealth)) { this._toast('Already sparkling clean!'); return false; }
+      if (this.heat === 0 && (!this.player.vehicleId || !VehicleStats.isDamaged(this.current))) { this._toast('Already sparkling clean!'); return false; }
       if (this.money < 75) { this._toast('The wash costs $75. Finish a gig for cash.', 'warning'); return false; }
       this.money -= 75; this.heat = 0; this.escapeTimer = 0; this.player.composure = 100;
-      if (this.player.vehicleId) this.current.health = this.maxHealth;
+      if (this.player.vehicleId) VehicleStats.repair(this.current, this.maxHealth);
       this._confetti(this.current.x, this.current.y, 36); this._toast('Squeaky clean: heat cleared and car repaired!', 'success'); this._sound('purchase');
       return true;
     }
@@ -799,7 +808,7 @@
       const entity = this.current, p = this._safeRoadPosition(entity, this.player.vehicleId ? 18 : PLAYER_RADIUS, this.player.vehicleId ? entity : null);
       entity.x = p.x; entity.y = p.y;
       if (this.player.vehicleId && Number.isFinite(p.angle)) entity.angle = p.angle;
-      if (this.player.vehicleId) { this.vehiclePhysics.reset(entity); entity.health = Math.max(25, entity.health); }
+      if (this.player.vehicleId) this.vehiclePhysics.reset(entity);
       this.player.x = p.x; this.player.y = p.y; this.player.composure = Math.max(60, this.player.composure);
       this.player.elevation = this.player.verticalVelocity = 0; this.player.grounded = true;
       this.graceTimer = 2; this.score = Math.max(0, this.score - 20);
@@ -899,8 +908,8 @@
       } else if (id === 'repairTape') {
         if (!this.player.vehicleId) { this._toast('Hop in a damaged car before using Repair Tape.'); return false; }
         if (Math.abs(this.current.speed) > 45) { this._toast('Stop your car before applying Repair Tape.'); return false; }
-        if (this.current.health >= this.maxHealth) { this._toast('This ride needs no tape.'); return false; }
-        this.current.health = Math.min(this.maxHealth, this.current.health + 55);
+        if (!VehicleStats.isDamaged(this.current)) { this._toast('This ride needs no tape.'); return false; }
+        VehicleStats.repair(this.current, this.maxHealth, 55);
         this._syncGarage();
       } else if (id === 'refill') {
         if (!this.inventory.unlocked.includes('cannon')) { this._toast('Unlock the Party Cannon before using a refill.'); return false; }
@@ -914,7 +923,15 @@
     _syncGarage() {
       for (const record of this.garage.cars) {
         const deployed = this.cars.find(car => car.garageId === record.id);
-        if (deployed) { record.health = clamp(finite(deployed.health, 0), 0, this.maxHealth); record.color = deployed.color; }
+        if (deployed) {
+          record.health = clamp(finite(deployed.health, 0), 0, this.maxHealth); record.color = deployed.color;
+          record.modelId = VehicleStats.getModel(deployed).id;
+          record.engineHealth = clamp(finite(deployed.engineHealth, 100), 0, 100);
+          record.handlingHealth = clamp(finite(deployed.handlingHealth, 100), 0, 100);
+          record.burning = Boolean(deployed.burning); record.fireTime = clamp(finite(deployed.fireTime, 0), 0, 8);
+          record.exploded = Boolean(deployed.exploded);
+        }
+        record.maxHealth = this.maxHealth;
       }
     }
 
@@ -922,14 +939,15 @@
       if (!this._requireGarage()) return false;
       if (!this.player.vehicleId || !this.cars.includes(this.current)) { this._toast('Drive a civilian car here to save it in your collection.'); return false; }
       const car = this.current;
-      if (car.health <= 0) { this._toast('Repair this ride before adding it to your collection.'); return false; }
+      if (car.health <= 0 || car.burning) { this._toast('Repair this ride before adding it to your collection.'); return false; }
       if (car.garageId && this.garage.cars.some(record => record.id === car.garageId)) { this._syncGarage(); this._toast('This ride is already in your collection.'); return false; }
       if (this.garage.cars.length >= 3) { this._toast('Your three garage spaces are full.'); return false; }
       let number = 1;
       while (this.garage.cars.some(record => record.id === 'ride-' + number)) number++;
       const record = { id: 'ride-' + number, kind: car.kind, color: car.color, health: car.health };
       this.garage.cars.push(record); car.garageId = record.id; car.borrowed = true;
-      this._toast(CAR_TYPES[car.kind].name + ' saved! Your collection survives reloads.', 'success'); this._sound('purchase'); return true;
+      this._syncGarage();
+      this._toast(VehicleStats.getModel(car).name + ' saved! Your collection survives reloads.', 'success'); this._sound('purchase'); return true;
     }
 
     garageRetrieve(id) {
@@ -937,7 +955,7 @@
       this._syncGarage();
       const record = this.garage.cars.find(car => car.id === id);
       if (!record) return false;
-      if (record.health <= 0) { this._toast('This ride is wrecked. Repair it in your collection before retrieving it.'); return false; }
+      if (record.health <= 0 || record.burning || record.exploded) { this._toast('Repair this ride in your collection before retrieving it.'); return false; }
       const deployed = this.cars.find(car => car.garageId === id);
       const garage = this.services.find(service => service.id === 'garage');
       const preview = { id: deployed ? deployed.id : '', kind: record.kind, angle: -Math.PI / 2, x: garage.x, y: garage.y };
@@ -955,9 +973,14 @@
       const car = deployed || this._addCar(position.x, position.y, position.angle, record.kind, record.color);
       car.x = position.x; car.y = position.y; car.angle = position.angle;
       car.health = record.health; car.color = record.color; car.garageId = record.id;
+      Object.assign(car, { modelId: VehicleStats.getModel(record).id, maxHealth: this.maxHealth,
+        engineHealth: finite(record.engineHealth, 100), handlingHealth: finite(record.handlingHealth, 100),
+        burning: false, fireTime: 0, exploded: false });
+      delete car.explosionTime;
       car.speed = car.vx = car.vy = 0; car.traffic = false; car.borrowed = true;
       this.player.vehicleId = car.id; this.player.x = car.x; this.player.y = car.y; this.player.angle = car.angle;
-      this._toast(CAR_TYPES[record.kind].name + ' retrieved. Ready for a spin!', 'success'); this._sound('enter'); return true;
+      this.vehiclePhysics.reset(car);
+      this._toast(VehicleStats.getModel(car).name + ' retrieved. Ready for a spin!', 'success'); this._sound('enter'); return true;
     }
 
     garageRepair(id) {
@@ -965,10 +988,10 @@
       this._syncGarage();
       const record = this.garage.cars.find(car => car.id === id);
       if (!record) return false;
-      if (record.health >= this.maxHealth) { this._toast('This collected ride is already in perfect condition.'); return false; }
+      if (!VehicleStats.isDamaged(record)) { this._toast('This collected ride is already in perfect condition.'); return false; }
       if (this.money < 45) { this._toast('A garage repair costs $45.', 'warning'); return false; }
-      this.money -= 45; record.health = this.maxHealth;
-      this.cars.filter(car => car.garageId === record.id).forEach(car => { car.health = this.maxHealth; });
+      this.money -= 45; VehicleStats.repair(record, this.maxHealth);
+      this.cars.filter(car => car.garageId === record.id).forEach(car => VehicleStats.repair(car, this.maxHealth));
       this._toast('Collected ride fully repaired for $45. Ready to retrieve!', 'success'); this._sound('purchase'); return true;
     }
 
@@ -998,9 +1021,9 @@
       if (!this._requireGarage()) return false;
       if (item === 'repair') {
         if (!this.player.vehicleId) { this._toast('Hop in a car before buying a repair.'); return false; }
-        if (this.current.health >= this.maxHealth) { this._toast('This ride is already in perfect condition.'); return false; }
+        if (!VehicleStats.isDamaged(this.current)) { this._toast('This ride is already in perfect condition.'); return false; }
         if (this.money < 45) { this._toast('A repair costs $45.', 'warning'); return false; }
-        this.money -= 45; this.current.health = this.maxHealth;
+        this.money -= 45; VehicleStats.repair(this.current, this.maxHealth);
       } else if (item === 'boost' || item === 'armor') {
         const level = this.upgrades[item], price = item === 'boost' ? 200 + level * 150 : 150 + level * 125;
         if (level >= 3) { this._toast('That upgrade is already maxed out.'); return false; }
@@ -1008,7 +1031,7 @@
         this._syncGarage();
         this.money -= price; this.upgrades[item]++;
         if (item === 'armor') {
-          this.cars.forEach(car => { if (car.health > 0) car.health = Math.min(this.maxHealth, car.health + 25); });
+          this.cars.forEach(car => { if (car.health > 0) car.health = Math.min(this.maxHealth, car.health + 25); car.maxHealth = this.maxHealth; });
           this.garage.cars.forEach(record => { if (record.health > 0 && !this.cars.some(car => car.garageId === record.id)) record.health = Math.min(this.maxHealth, record.health + 25); });
         }
       } else return false;
@@ -1046,7 +1069,8 @@
         contact.prop._lastImpactAt = this.time;
         this._damageProp(contact.prop, (contact.speed - 55) * .9, contact.entity, contact.entity.id === this.player.vehicleId);
       }
-      for (const contact of contacts) if (contact.entity.id === this.player.vehicleId) this._impact(contact.entity, contact.speed, contact.vehicle);
+      for (const contact of contacts) this._impact(contact.entity, contact.speed, contact.vehicle);
+      this._vehicleDamageStep(dt);
       for (const vehicle of this._vehicles()) this._vehiclePeople(vehicle, vehicle.vx || 0, vehicle.vy || 0);
       if (this.player.vehicleId) {
         const car = this.current;
@@ -1126,7 +1150,7 @@
     }
 
     _drive(car, dt, input) {
-      const type = CAR_TYPES[car.kind] || CAR_TYPES.compact;
+      const type = VehicleStats.getModel(car);
       const max = type.maxSpeed * (input.boost ? 1.2 + this.upgrades.boost * 0.075 : 1);
       const steer = Number(Boolean(input.right)) - Number(Boolean(input.left));
       this.vehiclePhysics.control(car, { ...input, steer, maxSpeed: max });
@@ -1153,19 +1177,76 @@
     }
 
     _impact(car, speed, traffic) {
-      // The rigid-body solver owns bounce; this handler only owns game feedback.
-      if (this._impactCooldown > 0 || this.graceTimer > 0) return;
-      this._impactCooldown = 0.6;
-      if (speed > 65) {
-        car.health -= (speed - 50) * 0.11 / ((CAR_TYPES[car.kind] || CAR_TYPES.compact).mass * (1 + this.upgrades.armor * 0.1));
-        this._confetti(car.x, car.y, 16); this._sound('crash');
+      // Debounce each chassis independently; the solver reports both vehicles.
+      const driven = car.id === this.player.vehicleId;
+      if (!Number.isFinite(speed) || speed <= 65 || car.exploded || this.time - (car._impactAt ?? -10) < 0.6 || driven && this.graceTimer > 0) return;
+      car._impactAt = this.time;
+      const model = VehicleStats.getModel(car), armor = driven || car.garageId ? 1 + this.upgrades.armor * 0.1 : 1;
+      this._damageVehicle(car, (speed - 50) * 0.11 / (model.mass * model.durability * armor));
+      if (distance(car, this.current) < 300) { this._confetti(car.x, car.y, 16); this._sound('crash'); }
+      if (driven) {
         if (this.mission) this.missionStats.collisions++;
         if (traffic && speed > 140) this._raiseHeat(1, 'Whoops! The Fun Police heard that bumper bonk.');
       }
-      if (car.health <= 0) {
-        car.health = 0; car.traffic = false; this._confetti(car.x, car.y, 75); this._exitCar(car, true); this.graceTimer = 2;
-        this._toast('Your ride popped! Borrow another, or press R to recover.', 'warning');
+    }
+
+    _damageVehicle(car, amount) {
+      if (car.exploded || !Number.isFinite(amount) || amount <= 0) return;
+      const model = VehicleStats.getModel(car);
+      car.maxHealth = finite(car.maxHealth, this.maxHealth);
+      car.health = Math.max(0, finite(car.health, car.maxHealth) - amount);
+      car.engineHealth = Math.max(0, finite(car.engineHealth, 100) - amount * 1.15 / model.engineDurability);
+      car.handlingHealth = Math.max(0, finite(car.handlingHealth, 100) - amount * 0.85);
+      if (!car.burning && (car.engineHealth <= 22 || VehicleStats.condition(car) <= 0.18)) {
+        car.burning = true; car.fireTime = 0;
+        if (distance(car, this.current) < 200) this._toast(car.id === this.player.vehicleId ? 'ENGINE FIRE! E to bail out, or stop and use Repair Tape before it blows!' : 'That engine is on fire. Keep clear!', 'warning');
       }
+      if (car.health <= 0) this._wreckVehicle(car);
+    }
+
+    _wreckVehicle(car) {
+      car.health = 0; car.traffic = false;
+      if (car.id === this.player.vehicleId) {
+        this._exitCar(car, true); this.graceTimer = 2;
+        this._toast('Your ride is wrecked! Keep clear of the fire and borrow another.', 'warning');
+      }
+    }
+
+    _vehicleDamageStep(dt) {
+      for (const car of this._vehicles()) {
+        if (!car.burning || car.exploded) continue;
+        car.fireTime = finite(car.fireTime, 0) + dt;
+        car.health = Math.max(0, car.health - dt * 2.5);
+        car.engineHealth = Math.max(0, car.engineHealth - dt * 7);
+        car.handlingHealth = Math.max(0, car.handlingHealth - dt * 3);
+        if (car.health <= 0) this._wreckVehicle(car);
+        if (car.fireTime >= 8) this._explodeVehicle(car);
+      }
+    }
+
+    _explodeVehicle(car) {
+      if (car.exploded) return false;
+      car.exploded = true; car.burning = false; car.fireTime = 0; car.explosionTime = this.time;
+      car.engineHealth = car.handlingHealth = 0; this._wreckVehicle(car);
+      this.vehiclePhysics.impulse(car, { x: 0, y: 3.2, z: 0 });
+      if (distance(car, this.current) < 400) { this._sound('crash'); this._confetti(car.x, car.y, 65, finite(car.elevation, 0) + 0.8); }
+      // Delayed chain fires give nearby drivers the same chance to get away.
+      const radius = 160, height = finite(car.elevation, 0) + 0.7;
+      for (const other of this._vehicles()) {
+        const reach = Math.hypot(distance(car, other), (finite(other.elevation, 0) + 0.7 - height) * VehiclePhysics.SCALE);
+        if (other === car || reach >= radius) continue;
+        const strength = 1 - reach / radius, heading = Math.atan2(other.y - car.y, other.x - car.x);
+        this._damageVehicle(other, 65 * strength);
+        this.vehiclePhysics.impulse(other, { x: Math.cos(heading) * 6 * strength, y: 3 * strength, z: Math.sin(heading) * 6 * strength });
+      }
+      for (const person of this.peds.concat(this.player.vehicleId ? [] : [this.player])) {
+        const reach = Math.hypot(distance(car, person), (finite(person.elevation, 0) + PERSON_HEIGHT / 2 - height) * VehiclePhysics.SCALE);
+        if (reach >= radius || person === this.player && this.graceTimer > 0) continue;
+        const strength = 1 - reach / radius, heading = Math.atan2(person.y - car.y, person.x - car.x);
+        this._knockDown(person, { x: Math.cos(heading) * 7 * strength, y: 2 + 3 * strength, z: Math.sin(heading) * 7 * strength });
+        if (person === this.player) person.composure = Math.max(10, person.composure - 40 * strength);
+      }
+      return true;
     }
 
     _traffic(car, dt) {
@@ -1243,16 +1324,20 @@
 
     _updatePolice(dt) {
       const wanted = Math.max(1, this.heat);
-      while (this.police.length < wanted) {
+      const disabled = this.police.filter(cop => cop.health <= 0 || cop.burning || cop.exploded).slice(-3);
+      this.police = this.police.filter(cop => cop.health > 0 && !cop.burning && !cop.exploded).slice(0, wanted).concat(disabled);
+      let activeCount = this.police.length - disabled.length;
+      while (activeCount < wanted) {
         const candidates = this.nodes.map(node => ({ ...node, angle: this._roadPosition(node).angle })).filter(node => distance(this.current,node)>440 &&
           this._vehicleFree({ ...node,kind:'compact' }) && this._vehicles().every(vehicle => distance(vehicle,node)>100));
         candidates.sort((a, b) => Math.abs(distance(this.current, a) - 650) - Math.abs(distance(this.current, b) - 650));
         const point = candidates.length ? candidates[0] : this._safeRoadPosition({ x:this.current.x+650,y:this.current.y },18);
-        this.police.push({ id: 'police-' + this._nextId++, x:point.x,y:point.y,angle:point.angle || 0, speed: 0, route: [], routeTimer: 0, lastSeen: { x: this.current.x, y: this.current.y } });
+        this.police.push({ id: 'police-' + this._nextId++, ...this._vehicleState('compact'), x:point.x,y:point.y,angle:point.angle || 0, speed: 0, route: [], routeTimer: 0, lastSeen: { x: this.current.x, y: this.current.y } });
+        activeCount++;
       }
-      if (this.police.length > wanted) this.police.length = wanted;
       let seen = false, contact = false;
       for (const cop of this.police) {
+        if (cop.health <= 0 || cop.burning || cop.exploded) continue;
         cop.distracted = Math.max(0, (cop.distracted || 0) - dt);
         const sight = this.heat > 0 && cop.distracted <= 0 && this.graceTimer <= 0 && distance(cop, this.current) < 340 + this.heat * 65 && !this.buildings.some(b => segmentHitsRect(cop, this.current, b));
         if (sight) { seen = true; cop.lastSeen = { x: this.current.x, y: this.current.y }; }
@@ -1304,7 +1389,7 @@
       const oldArmor = this.upgrades.armor;
       this.upgrades.boost = numeric(upgrades.boost, 0, 0, 3);
       this.upgrades.armor = numeric(upgrades.armor, 0, 0, 3);
-      this.cars.forEach(car => { if (car.health > 0) car.health = clamp(car.health + (this.upgrades.armor - oldArmor) * 25, 0, this.maxHealth); });
+      this.cars.forEach(car => { if (car.health > 0) car.health = clamp(car.health + (this.upgrades.armor - oldArmor) * 25, 0, this.maxHealth); car.maxHealth = this.maxHealth; });
       const defaults = starterInventory();
       const inventory = data.version === 2 && data.inventory && typeof data.inventory === 'object' && !Array.isArray(data.inventory) ? data.inventory : {};
       const unlocked = ['popper'];
@@ -1322,14 +1407,22 @@
         if (cars.length >= 3) break;
         if (!record || typeof record !== 'object' || typeof record.id !== 'string' || !/^ride-[1-9][0-9]{0,3}$/.test(record.id) ||
           cars.some(car => car.id === record.id) || !owns(CAR_TYPES, record.kind) || !COLORS.includes(record.color)) continue;
-        cars.push({ id: record.id, kind: record.kind, color: record.color, health: clamp(finite(record.health, 0), 0, this.maxHealth) });
+        const health = clamp(finite(record.health, 0), 0, this.maxHealth);
+        const legacyCondition = health / this.maxHealth * 100;
+        cars.push({ id: record.id, kind: record.kind, modelId: VehicleStats.getModel(record).id,
+          color: record.color, health, maxHealth: this.maxHealth,
+          engineHealth: clamp(finite(record.engineHealth, legacyCondition), 0, 100),
+          handlingHealth: clamp(finite(record.handlingHealth, legacyCondition), 0, 100),
+          burning: record.burning === true && record.exploded !== true,
+          fireTime: clamp(finite(record.fireTime, 0), 0, 8), exploded: record.exploded === true });
       }
       this.garage = { cars };
       const deployed = new Set();
       for (const car of this.cars) if (car.garageId) {
         const record = cars.find(saved => saved.id === car.garageId);
         if (record && !deployed.has(record.id) && record.kind === car.kind) {
-          deployed.add(record.id); car.health = record.health; car.color = record.color;
+          deployed.add(record.id); Object.assign(car, { ...record, id: car.id, garageId: record.id });
+          delete car.explosionTime;
         } else delete car.garageId;
       }
       return true;
@@ -1337,7 +1430,7 @@
   }
 
   Game.SIZE = SIZE;
-  const api = { Game, SIZE, ROAD_CENTERS, ROAD_WIDTH, SIDEWALK_WIDTH, BUILDING_SETBACK, DISTRICTS, districtAt, CAR_TYPES, GADGETS, POCKET_ITEMS, PAINT_COLORS: Object.freeze(COLORS.slice()) };
+  const api = { Game, SIZE, ROAD_CENTERS, ROAD_WIDTH, SIDEWALK_WIDTH, BUILDING_SETBACK, DISTRICTS, districtAt, CAR_TYPES, CAR_MODELS, VehicleStats, GADGETS, POCKET_ITEMS, PAINT_COLORS: Object.freeze(COLORS.slice()) };
   root.MayhemCore = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(globalThis);

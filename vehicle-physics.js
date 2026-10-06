@@ -2,6 +2,7 @@
   'use strict';
   const C = root.CANNON || (typeof require === 'function' ? require('./vendor/cannon.cjs') : null);
   const Physics = root.MayhemPhysics || (typeof require === 'function' ? require('./physics.js') : null);
+  const VehicleStats = root.MayhemVehicleStats || (typeof require === 'function' ? require('./vehicle-stats.js') : null);
   const SCALE = 20;
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const height = entity => entity.kind === 'van' ? 1.7 : 1.3;
@@ -99,10 +100,23 @@
         verticalVelocity: entity.verticalVelocity, orientation: JSON.stringify(entity.orientation) };
     }
 
+    _syncEntry(entity, entry, clearControl = true) {
+      const body = entry.body, old = entry.snapshot;
+      const positionChanged = entity.x !== old.x || entity.y !== old.y || entity.elevation !== old.elevation;
+      const angleChanged = entity.angle !== old.angle, orientationChanged = JSON.stringify(entity.orientation) !== old.orientation;
+      if (positionChanged) { body.position.set(entity.x / SCALE, finite(entity.elevation) + entry.height / 2 + 0.004, entity.y / SCALE); body.wakeUp(); body.aabbNeedsUpdate = true; }
+      if (orientationChanged && entity.orientation) body.quaternion.set(entity.orientation.x, entity.orientation.y, entity.orientation.z, entity.orientation.w);
+      else if (angleChanged) body.quaternion.setFromEuler(0, -entity.angle, 0);
+      if (entity.vx !== old.vx || entity.vy !== old.vy) { body.velocity.x = finite(entity.vx) / SCALE; body.velocity.z = finite(entity.vy) / SCALE; body.wakeUp(); }
+      else if (entity.speed !== old.speed) { body.velocity.x = Math.cos(entity.angle) * entity.speed / SCALE; body.velocity.z = Math.sin(entity.angle) * entity.speed / SCALE; body.wakeUp(); }
+      if (entity.verticalVelocity !== old.verticalVelocity) { body.velocity.y = finite(entity.verticalVelocity); body.wakeUp(); }
+      if (clearControl) entry.control = null;
+    }
+
     _body(entity) {
       let entry = this.bodies.get(entity.id);
       if (entry) return entry;
-      const type = this.types[entity.kind] || this.types.compact, h = height(entity);
+      const type = VehicleStats.getModel(entity), h = height(entity);
       const body = new C.Body({ mass: 700 * type.mass, material: this.carMaterial, linearDamping: 0.015, angularDamping: 0.28,
         sleepSpeedLimit: 0.08, sleepTimeLimit: 1.5 });
       body.addShape(new C.Box(new C.Vec3(type.length / 40, h / 2, type.width / 40)));
@@ -133,16 +147,8 @@
       }
       const alive = new Set();
       for (const entity of this.game.cars.concat(this.game.police)) {
-        alive.add(entity.id); const entry = this._body(entity), body = entry.body, old = entry.snapshot;
-        const positionChanged = entity.x !== old.x || entity.y !== old.y || entity.elevation !== old.elevation;
-        const angleChanged = entity.angle !== old.angle, orientationChanged = JSON.stringify(entity.orientation) !== old.orientation;
-        if (positionChanged) { body.position.set(entity.x / SCALE, finite(entity.elevation) + entry.height / 2 + 0.004, entity.y / SCALE); body.wakeUp(); body.aabbNeedsUpdate = true; }
-        if (orientationChanged && entity.orientation) body.quaternion.set(entity.orientation.x, entity.orientation.y, entity.orientation.z, entity.orientation.w);
-        else if (angleChanged) body.quaternion.setFromEuler(0, -entity.angle, 0);
-        if (entity.vx !== old.vx || entity.vy !== old.vy) { body.velocity.x = finite(entity.vx) / SCALE; body.velocity.z = finite(entity.vy) / SCALE; body.wakeUp(); }
-        else if (entity.speed !== old.speed) { body.velocity.x = Math.cos(entity.angle) * entity.speed / SCALE; body.velocity.z = Math.sin(entity.angle) * entity.speed / SCALE; body.wakeUp(); }
-        if (entity.verticalVelocity !== old.verticalVelocity) { body.velocity.y = finite(entity.verticalVelocity); body.wakeUp(); }
-        entry.control = null;
+        alive.add(entity.id); const entry = this._body(entity);
+        this._syncEntry(entity, entry);
       }
       for (const [id, entry] of this.bodies) if (!alive.has(id)) { this.world.removeBody(entry.body); this.bodies.delete(id); }
     }
@@ -150,33 +156,50 @@
     control(entity, command) { this._body(entity).control = command; }
     get(id) { return this.bodies.get(id)?.body || null; }
 
+    // Blast vectors are changes in world-space velocity (metres per second).
+    // Mirror only velocity fields so sync still detects pending teleports.
+    impulse(entity, velocity) {
+      const entry = this._body(entity), body = entry.body;
+      this._syncEntry(entity, entry, false);
+      body.applyImpulse(new C.Vec3(finite(velocity.x) * body.mass, finite(velocity.y) * body.mass, finite(velocity.z) * body.mass));
+      entity.vx = body.velocity.x * SCALE; entity.vy = body.velocity.z * SCALE; entity.verticalVelocity = body.velocity.y;
+      entity.speed = entity.vx * Math.cos(finite(entity.angle)) + entity.vy * Math.sin(finite(entity.angle));
+      for (const field of ['vx', 'vy', 'verticalVelocity', 'speed']) entry.snapshot[field] = entity[field];
+      body.wakeUp(); return body;
+    }
+
     _supported(body) {
       return this.world.contacts.some(contact => contact.bi === body && contact.ni.y < -0.65 || contact.bj === body && contact.ni.y > 0.65);
     }
 
     _drive(entry, dt) {
-      const body = entry.body, entity = body.entity, command = entry.control, type = this.types[entity.kind] || this.types.compact;
+      const body = entry.body, entity = body.entity, command = entry.control, base = VehicleStats.getModel(entity), type = VehicleStats.performance(entity);
       const up = body.quaternion.vmult(new C.Vec3(0, 1, 0)), forward = body.quaternion.vmult(new C.Vec3(1, 0, 0));
       const grounded = (body.position.y - entry.height / 2 < 0.15 || this._supported(body)) && up.y > 0.55;
       if (!grounded) return;
       if (!command) { body.force.x -= body.velocity.x * body.mass * 0.5; body.force.z -= body.velocity.z * body.mass * 0.5; return; }
       const heading = Math.atan2(forward.z, forward.x), speed = body.velocity.x * Math.cos(heading) + body.velocity.z * Math.sin(heading);
+      const speedRatio = type.maxSpeed / base.maxSpeed;
+      const max = (command.maxSpeed || base.maxSpeed) * speedRatio / SCALE, reverseMax = 5.5 * speedRatio;
       let acceleration = 0, steer = command.steer || 0;
       if (command.targetSpeed !== undefined) {
-        acceleration = clamp((command.targetSpeed / SCALE - speed) * 4, -12, type.acceleration / SCALE);
+        const target = clamp(command.targetSpeed / SCALE, -reverseMax, max);
+        acceleration = clamp((target - speed) * 4, -12, type.acceleration / SCALE);
+        // A stalled engine can slow a forward-moving car, but cannot power
+        // reverse or accelerate a car already rolling backwards.
+        if (!type.driveable) acceleration = speed > 0 ? Math.min(0, acceleration) : 0;
         const error = Math.atan2(Math.sin(command.heading - heading), Math.cos(command.heading - heading));
         steer = clamp(error * 2, -1, 1);
       } else {
         if (command.up) acceleration += type.acceleration / SCALE * (command.boost ? 1.3 : 1);
-        if (command.down) acceleration -= speed > 0.75 ? 35 : 13;
+        if (command.down) acceleration -= speed > 0.75 ? 35 : type.driveable ? 13 * type.acceleration / base.acceleration : 0;
         if (!command.up && !command.down) acceleration -= speed * 1.1;
       }
-      const max = (command.maxSpeed || type.maxSpeed) / SCALE;
-      if (speed > max) acceleration = Math.min(acceleration, (max - speed) * 8);
-      if (speed < -5.5) acceleration = Math.max(acceleration, (-5.5 - speed) * 8);
+      if (type.driveable && speed > max) acceleration = Math.min(acceleration, (max - speed) * 8);
+      if (type.driveable && speed < -reverseMax) acceleration = Math.max(acceleration, (-reverseMax - speed) * 8);
       if (command.brake) acceleration -= speed * 3.8;
       const lateral = -body.velocity.x * Math.sin(heading) + body.velocity.z * Math.cos(heading);
-      const grip = command.brake ? 2.4 : type.grip;
+      const grip = command.brake ? 2.4 * type.grip / base.grip : type.grip;
       body.force.x += body.mass * (Math.cos(heading) * acceleration + Math.sin(heading) * lateral * grip);
       body.force.z += body.mass * (Math.sin(heading) * acceleration - Math.cos(heading) * lateral * grip);
       const yawRate = steer * type.handling * clamp(Math.abs(speed) / 7.5, 0.2, 1) * (command.brake ? 1.35 : 1) * Math.sign(speed);

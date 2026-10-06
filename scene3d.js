@@ -6,6 +6,7 @@
   const MUZZLE_HEIGHT = root.MayhemPhysics?.MUZZLE_HEIGHT ?? 1.15 * CHARACTER_SCALE;
   const FOOT_PIVOT = 1.03 * CHARACTER_SCALE;
   const SIDEWALK_WIDTH = (root.MayhemWorld?.SIDEWALK_WIDTH ?? 32) / UNIT;
+  const VehicleStats = root.MayhemVehicleStats || root.MayhemCore?.VehicleStats;
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   const angle = v => Math.atan2(Math.sin(v), Math.cos(v));
   const mix = (a, b, f) => a + (b - a) * f;
@@ -813,6 +814,7 @@
 
     _vehicle(entity, police) {
       const T = this.T, group = new T.Group();
+      const geometryStart = this._geometries.length;
       const kind = police ? 'compact' : entity.kind;
       const dimensions = root.MayhemCore.CAR_TYPES[kind] || root.MayhemCore.CAR_TYPES.compact;
       const length = dimensions.length / UNIT, width = dimensions.width / UNIT;
@@ -821,8 +823,8 @@
       const under = this._material('#485767'), tires = this._material('#354555');
       this._box(group, under, 0, 0.38, 0, length * 0.94, 0.30, width * 0.91);
       const shell = this._box(group, body, 0, 0.65, 0, length, 0.45, width);
-      this._box(group, body, length * 0.33, 0.87, 0, length * 0.30, 0.12, width * 0.96);
-      this._box(group, glass, -0.19, kind === 'van' ? 1.225 : 1.00, 0, length * (kind === 'van' ? 0.67 : 0.47), kind === 'van' ? 0.84 : 0.41, width * 0.78);
+      const hood = this._box(group, body, length * 0.33, 0.87, 0, length * 0.30, 0.12, width * 0.96);
+      const windows = this._box(group, glass, -0.19, kind === 'van' ? 1.225 : 1.00, 0, length * (kind === 'van' ? 0.67 : 0.47), kind === 'van' ? 0.84 : 0.41, width * 0.78);
       this._box(group, body, -0.20, kind === 'van' ? 1.60 : 1.22, 0, length * (kind === 'van' ? 0.69 : 0.48), 0.11, width * 0.84);
       // Slim pillars split the windows, and two bumpers frame the chunky body.
       for (const side of [-1, 1]) {
@@ -831,8 +833,10 @@
         this._box(group, '#eb8781', -length / 2 - 0.012, 0.72, side * width * 0.30, 0.06, 0.15, 0.23, false);
         this._box(group, under, 0.13, 0.87, side * width * 0.50, 0.16, 0.04, 0.018, false);
       }
-      this._box(group, '#e9e4d3', length / 2 + 0.04, 0.44, 0, 0.12, 0.12, width * 0.91);
-      this._box(group, '#e9e4d3', -length / 2 - 0.04, 0.44, 0, 0.12, 0.12, width * 0.91);
+      const bumpers = [
+        this._box(group, '#e9e4d3', length / 2 + 0.04, 0.44, 0, 0.12, 0.12, width * 0.91),
+        this._box(group, '#e9e4d3', -length / 2 - 0.04, 0.44, 0, 0.12, 0.12, width * 0.91)
+      ];
       if (kind === 'sports') this._box(group, body, -length * 0.43, 1.04, 0, 0.15, 0.07, width * 1.08);
       const wheels = [];
       for (const front of [-1, 1]) for (const side of [-1, 1]) {
@@ -853,14 +857,41 @@
         blue = this._box(group, this._material('#84d5ff', { unlit: true }), -0.12, 1.39, 0.24, 0.19, 0.13, 0.35, false);
       }
       for (const wheel of wheels) this._mergeColored(wheel);
-      const paint = this._mergeColored(group, [shell, red, blue], police ? null : body);
+      const paint = this._mergeColored(group, [shell, hood, windows, ...bumpers, red, blue], body);
+      const cracks = new T.Group(); cracks.name = 'Cracked vehicle windows';
+      // White fissures sit just outside both side windows and the windshield.
+      for (const side of [-1, 1]) for (let i = 0; i < 3; i++) {
+        const crack = this._box(cracks, '#bfced1', -0.3 + i * 0.13, windows.position.y + (i - 1) * 0.05,
+          side * width * 0.393, 0.018, 0.18, 0.009, false);
+        crack.rotation.z = (i % 2 ? -0.7 : 0.5) * side;
+      }
+      for (let i = 0; i < 3; i++) {
+        const crack = this._box(cracks, '#bfced1', windows.position.x + windows.scale.x / 2 + 0.006,
+          windows.position.y + (i - 1) * 0.045, (i - 1) * width * 0.11, 0.009, 0.21, 0.017, false);
+        crack.rotation.x = i % 2 ? 0.6 : -0.7;
+      }
+      this._mergeColored(cracks); cracks.visible = false; group.add(cracks);
       // Physics rotates about the chassis centre. Keep the original visual
       // coordinates inside a child, so a roll never orbits the model's feet.
       const centerHeight = (entity.colliderHeight || (kind === 'van' ? 1.7 : 1.3)) / 2;
       const pivot = new T.Group();
       group.position.y = 0.04 - centerHeight; pivot.add(group);
       this.scene.add(pivot);
-      return { group: pivot, visual: group, centerHeight, wheels, shell, body, paint, color: entity.color, red, blue, police, roll: 0 };
+      // Each car owns the few mutable materials; changing one car never changes
+      // another car which happens to share its original paint or glass color.
+      const damageBody = body.clone(), damageGlass = glass.clone(), damageTrim = bumpers[0].material.clone();
+      this._materials.set('vehicle-body-' + entity.id, damageBody);
+      this._materials.set('vehicle-glass-' + entity.id, damageGlass);
+      this._materials.set('vehicle-trim-' + entity.id, damageTrim);
+      const originals = [shell, hood, windows, ...bumpers].map(mesh => ({ mesh,
+        position: mesh.position.clone(), scale: mesh.scale.clone(), rotation: mesh.rotation.clone(), material: mesh.material }));
+      const model = { group: pivot, visual: group, centerHeight, length, width, wheels, shell, hood, windows, bumpers, cracks,
+        body, paint, baseColors: paint && Float32Array.from(paint.mesh.geometry.attributes.color.array),
+        damageBody, damageGlass, damageTrim, originals, color: entity.color, red, blue, police, roll: 0,
+        damageKey: null, fireAnchor: new T.Vector3() };
+      model.effects = this._makeVehicleEffects(entity.id);
+      model.geometries = this._geometries.slice(geometryStart);
+      return model;
     }
 
     _mergeColored(group, preserve = [], paintMaterial = null) {
@@ -914,9 +945,153 @@
       if (!paint?.ranges.length) return;
       const colors = paint.mesh.geometry.attributes.color, value = model.body.color;
       for (const range of paint.ranges) {
-        for (let i = range.start; i < range.start + range.count; i++) colors.setXYZ(i, value.r, value.g, value.b);
+        for (let i = range.start; i < range.start + range.count; i++) {
+          colors.setXYZ(i, value.r, value.g, value.b);
+          model.baseColors[i * 3] = value.r; model.baseColors[i * 3 + 1] = value.g; model.baseColors[i * 3 + 2] = value.b;
+        }
       }
       colors.needsUpdate = true;
+      model.damageKey = null;
+    }
+
+    _makeVehicleEffects(id) {
+      const T = this.T, group = new T.Group(); group.name = 'Vehicle fire and smoke'; group.visible = false;
+      const flames = new T.InstancedMesh(this._cone, this._material('#ffffff', { unlit: true }), 12);
+      const smoke = new T.InstancedMesh(this._sphere, this._material('#464b50', { unlit: true, opacity: 0.52, depthWrite: false }), 12);
+      for (const mesh of [flames, smoke]) {
+        mesh.instanceMatrix.setUsage(T.DynamicDrawUsage); mesh.frustumCulled = false; mesh.count = 0;
+      }
+      const flashMaterial = this._material('#ffaf36', { unlit: true, opacity: 0.9, depthWrite: false }).clone();
+      this._materials.set('vehicle-flash-' + id, flashMaterial);
+      const flash = this._mesh(this._sphere, flashMaterial, group, 0, 0, 0, 1, 1, 1, false); flash.visible = false;
+      group.add(flames, smoke); this.scene.add(group);
+      return { group, flames, smoke, flash, dummy: new T.Object3D(), color: new T.Color(), blastOrigin: new T.Vector3(), explosionTime: null };
+    }
+
+    _retireVehicle(id, model) {
+      model.group.visible = model.effects.group.visible = false;
+      this.scene.remove(model.group, model.effects.group);
+      this._vehicles.delete(id);
+      // The body, window cracks and merged wheels own their buffers; the basic
+      // shapes and original palette materials remain shared by the whole town.
+      const owned = new Set(model.geometries);
+      for (const geometry of owned) geometry.dispose();
+      this._geometries = this._geometries.filter(geometry => !owned.has(geometry));
+      for (const key of ['vehicle-body-', 'vehicle-glass-', 'vehicle-trim-', 'vehicle-flash-']) {
+        const name = key + id, material = this._materials.get(name);
+        material?.dispose(); this._materials.delete(name);
+      }
+      model.effects.flames.dispose?.(); model.effects.smoke.dispose?.();
+    }
+
+    _damageVehicle(model, entity) {
+      const health = Number.isFinite(entity.health) ? entity.health : 100;
+      const maxHealth = Number.isFinite(entity.maxHealth) && entity.maxHealth > 0 ? entity.maxHealth : 100;
+      const damage = entity.exploded ? 1 : 1 - (VehicleStats ? VehicleStats.condition(entity) : clamp(health / maxHealth, 0, 1));
+      const scorch = entity.exploded ? 0.94 : entity.burning ? clamp(0.25 + (entity.fireTime || 0) * 0.09, 0.25, 0.88) : 0;
+      const key = damage + ':' + scorch + ':' + model.color;
+      if (model.damageKey === key) return;
+      model.damageKey = key;
+      for (const original of model.originals) {
+        original.mesh.position.copy(original.position); original.mesh.scale.copy(original.scale); original.mesh.rotation.copy(original.rotation);
+        original.mesh.material = original.material;
+      }
+      // Damage stays inside the physical chassis pivot and can be fully undone.
+      model.shell.scale.x *= 1 - damage * 0.13; model.shell.scale.y *= 1 - damage * 0.26;
+      model.shell.rotation.z = damage * 0.055; model.shell.rotation.x = damage * 0.045;
+      model.hood.position.x -= damage * model.length * 0.085; model.hood.position.y += damage * 0.11;
+      model.hood.scale.x *= 1 - damage * 0.36; model.hood.scale.z *= 1 - damage * 0.09;
+      model.hood.rotation.z = damage * 0.33; model.hood.rotation.x = damage * 0.12;
+      model.windows.scale.y *= 1 - damage * 0.17; model.windows.rotation.z = damage * -0.035;
+      for (let i = 0; i < model.bumpers.length; i++) {
+        const bumper = model.bumpers[i]; bumper.position.x += (i ? 1 : -1) * damage * model.length * 0.085;
+        bumper.position.y -= damage * (i ? 0.035 : 0.09); bumper.rotation.x = damage * (i ? -0.11 : 0.18);
+        bumper.rotation.y = damage * (i ? 0.09 : -0.14); bumper.scale.z *= 1 - damage * 0.14;
+      }
+      model.cracks.visible = damage > 0.22 && !entity.exploded;
+      model.damageBody.color.copy(model.body.color).multiplyScalar(1 - damage * 0.24).lerp(this._color.set('#252a2e'), scorch);
+      model.damageGlass.color.copy(model.originals[2].material.color).multiplyScalar(1 - damage * 0.46).lerp(this._color.set('#20272b'), scorch);
+      model.damageTrim.color.copy(model.originals[3].material.color).multiplyScalar(1 - damage * 0.26).lerp(this._color.set('#343a3d'), scorch);
+      const changed = damage > 0 || scorch > 0;
+      model.shell.material = changed ? model.damageBody : model.body;
+      model.hood.material = changed ? model.damageBody : model.body;
+      model.windows.material = changed ? model.damageGlass : model.originals[2].material;
+      for (const bumper of model.bumpers) bumper.material = changed ? model.damageTrim : model.originals[3].material;
+      // Keep the familiar disabled chassis shade for a cold, intact wreck.
+      if (health <= 0 && !entity.burning && !entity.exploded) model.damageBody.color.set('#8f9aa1');
+      if (model.paint && model.baseColors) {
+        const colors = model.paint.mesh.geometry.attributes.color;
+        const dark = 1 - damage * 0.19, char = this._color.set('#252a2e');
+        for (let i = 0; i < colors.count; i++) {
+          const at = i * 3;
+          colors.setXYZ(i, mix(model.baseColors[at] * dark, char.r, scorch), mix(model.baseColors[at + 1] * dark, char.g, scorch), mix(model.baseColors[at + 2] * dark, char.b, scorch));
+        }
+        colors.needsUpdate = true;
+      }
+      if (model.police) {
+        model.red.visible = model.blue.visible = !entity.exploded;
+      }
+    }
+
+    _vehicleEffects(model, entity) {
+      const effect = model.effects, now = Number.isFinite(this.game.time) ? this.game.time : 0;
+      const engine = Number.isFinite(entity.engineHealth) ? entity.engineHealth : 100;
+      const explosionTime = Number.isFinite(entity.explosionTime) && entity.exploded ? entity.explosionTime : null;
+      const age = explosionTime === null ? Infinity : now - explosionTime;
+      const blast = age >= 0 && age < 1.7;
+      const burning = Boolean(entity.burning && !entity.exploded);
+      const smoking = !entity.exploded && (burning || engine < 45);
+      effect.group.visible = burning || smoking || blast;
+      effect.flames.visible = burning; effect.flames.count = burning ? 12 : 0;
+      effect.smoke.visible = smoking || blast;
+      effect.flash.visible = blast && age < (this.reducedMotion ? 0.6 : 0.8);
+      if (!effect.group.visible) { effect.smoke.count = 0; effect.explosionTime = explosionTime; return; }
+      model.group.updateWorldMatrix(true, false);
+      model.visual.updateWorldMatrix(true, false);
+      model.fireAnchor.set(model.length * 0.30, 0.93, 0); model.visual.localToWorld(model.fireAnchor);
+      if (explosionTime !== effect.explosionTime) {
+        effect.explosionTime = explosionTime; effect.blastOrigin.copy(model.fireAnchor);
+      }
+      // Plumes and flames rise in world space even when the chassis is upside down.
+      effect.group.position.copy(blast ? effect.blastOrigin : model.fireAnchor);
+      const time = this.reducedMotion ? 0 : now, dummy = effect.dummy, color = effect.color;
+      if (burning) {
+        for (let i = 0; i < 6; i++) {
+          const phase = time * 6.8 + i * 1.7, height = 0.8 + i % 3 * 0.18 + Math.sin(phase) * 0.17;
+          const x = (i % 3 - 1) * 0.24, z = (i < 3 ? -1 : 1) * model.width * 0.22;
+          dummy.position.set(x + Math.sin(phase * 0.7) * 0.045, height / 2 - 0.06, z);
+          dummy.rotation.set(Math.sin(phase) * 0.07, i, Math.cos(phase) * 0.09);
+          dummy.scale.set(0.22, height, 0.24); dummy.updateMatrix();
+          effect.flames.setMatrixAt(i * 2, dummy.matrix); color.set('#ff7925'); effect.flames.setColorAt(i * 2, color);
+          dummy.scale.set(0.12, height * 0.66, 0.13); dummy.position.y = height * 0.33 - 0.08; dummy.updateMatrix();
+          effect.flames.setMatrixAt(i * 2 + 1, dummy.matrix); color.set('#ffe893'); effect.flames.setColorAt(i * 2 + 1, color);
+        }
+        effect.flames.instanceMatrix.needsUpdate = true; effect.flames.instanceColor.needsUpdate = true;
+      }
+      let smokeCount = 0;
+      if (smoking) {
+        const intensity = burning ? 1 : clamp((45 - engine) / 45, 0.1, 1);
+        for (let i = 0; i < 8; i++) {
+          const rise = (time * 0.7 + i / 8) % 1, size = (0.22 + rise * 0.62) * intensity;
+          dummy.position.set(Math.sin(i * 2.1 + time * 0.35) * rise * 0.42, 0.5 + rise * 3.8, Math.cos(i * 1.3) * rise * 0.32);
+          dummy.rotation.set(i, 0, i * 0.4); dummy.scale.set(size, size * 0.9, size); dummy.updateMatrix();
+          effect.smoke.setMatrixAt(smokeCount++, dummy.matrix);
+        }
+      }
+      if (blast) {
+        for (let i = 0; i < 4; i++) {
+          const radius = this.reducedMotion ? 1.1 : 0.5 + age * 1.8;
+          const rise = this.reducedMotion ? 1.1 : age * 1.5;
+          dummy.position.set(Math.cos(i * Math.PI / 2) * radius * 0.62, rise + 0.4, Math.sin(i * Math.PI / 2) * radius * 0.62);
+          dummy.rotation.set(i, 0, 0); dummy.scale.setScalar(radius * Math.max(0.05, 1 - age / 1.7)); dummy.updateMatrix();
+          effect.smoke.setMatrixAt(smokeCount++, dummy.matrix);
+        }
+        const radius = this.reducedMotion ? 1.1 : 0.45 + Math.min(age, 0.55) * 4.5;
+        effect.flash.scale.set(radius, radius * 0.82, radius);
+        effect.flash.position.y = this.reducedMotion ? 0.4 : age * 0.6;
+        effect.flash.material.opacity = Math.max(0, 0.88 * (1 - age / 0.8));
+      }
+      effect.smoke.count = smokeCount; effect.smoke.instanceMatrix.needsUpdate = true;
     }
 
     _bubble() {
@@ -1421,7 +1596,11 @@
         else model.group.rotation.set(0, -entity.angle, 0);
         model.group.visible = true;
         model.roll = angle(model.roll + (entity.speed || 0) / UNIT / 0.31 * dt);
-        for (const wheel of model.wheels) wheel.rotation.z = model.roll;
+        const wheelDamage = 1 - clamp((Number.isFinite(entity.handlingHealth) ? entity.handlingHealth : 100) / 100, 0, 1);
+        for (let i = 0; i < model.wheels.length; i++) {
+          model.wheels[i].rotation.z = model.roll;
+          model.wheels[i].rotation.y = wheelDamage * (i % 2 ? -0.14 : 0.09);
+        }
         if (model.police) {
           const flashing = this.game.heat > 0 && !this.reducedMotion;
           const redOn = !flashing || Math.sin(this.game.time * 13) > 0;
@@ -1429,12 +1608,11 @@
           model.blue.scale.y = redOn ? 0.075 : 0.13;
         } else {
           this._paintVehicle(model, entity.color);
-          const broken = entity.health <= 0;
-          if (!fullOrientation) model.group.rotation.z = broken ? 0.055 : 0;
-          model.shell.material = broken ? this._material('#8f9aa1') : model.body;
         }
+        this._damageVehicle(model, entity);
+        this._vehicleEffects(model, entity);
       }
-      for (const [id, model] of this._vehicles) if (!active.has(id)) model.group.visible = false;
+      for (const [id, model] of this._vehicles) if (!active.has(id)) this._retireVehicle(id, model);
     }
 
     _projectileEffects() {
@@ -1554,6 +1732,7 @@
       this._debris?.dispose();
       for (const mesh of this._propInstances || []) mesh.dispose();
       this._riverFlow?.dispose();
+      for (const model of this._vehicles.values()) { model.effects.flames.dispose(); model.effects.smoke.dispose(); }
       for (const geometry of this._geometries) geometry.dispose();
       for (const material of this._materials.values()) material.dispose();
       for (const texture of this._textures) texture.dispose();

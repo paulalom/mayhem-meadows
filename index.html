@@ -11,6 +11,7 @@
     <script src="vendor/cannon.min.js" defer></script>
     <script src="world.js" defer></script>
     <script src="physics.js" defer></script>
+    <script src="vehicle-stats.js" defer></script>
     <script src="vehicle-physics.js" defer></script>
     <script src="core.js" defer></script>
     <script src="scene3d.js" defer></script>
@@ -67,7 +68,7 @@
               <button id="radio-next" type="button" aria-label="Next radio station (N)" title="Next station · N">›</button>
             </div>
             <div class="minimap-panel"><span class="minimap-title">Your little trouble map <span aria-hidden="true">N ↑</span></span><canvas id="minimap-canvas" width="140" height="140" aria-label="Overhead town minimap showing districts, buildings, your position, services, patrols, and mission targets"></canvas></div>
-            <div class="ride-strip"><span class="ride-icon" aria-hidden="true">↗</span><div class="ride-copy"><span class="stat-label">Current ride</span><strong id="ride-name">Your own two feet</strong></div><div class="ride-condition"><div class="ride-condition-label"><span class="stat-label">Ride condition</span><span id="ride-condition">100%</span></div><div id="ride-meter" class="meter ride-meter" role="progressbar" aria-label="Ride condition" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100"><span id="ride-bar"></span></div></div></div>
+            <div class="ride-strip"><span class="ride-icon" aria-hidden="true">↗</span><div class="ride-copy"><span id="ride-status" class="stat-label">Current ride</span><strong id="ride-name">Your own two feet</strong><span id="ride-stats" class="ride-stats" hidden></span><span id="ride-health" class="ride-stats" hidden></span></div><div class="ride-condition"><div class="ride-condition-label"><span class="stat-label">Ride condition</span><span id="ride-condition">100%</span></div><div id="ride-meter" class="meter ride-meter" role="progressbar" aria-label="Ride condition" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100"><span id="ride-bar"></span></div></div></div>
 
             <div id="start-screen" class="screen-overlay start-screen">
               <div class="start-card">

@@ -65,6 +65,11 @@ button:active:not(:disabled){transform:translateY(1px)}
 .ride-condition .stat-label{font-size:7px;letter-spacing:.5px;display:block}
 #ride-condition{font-family:"Courier New",monospace;font-size:8px;font-weight:700;color:var(--yellow);white-space:nowrap}
 .ride-meter>span{background:var(--yellow)}
+.ride-copy strong{max-width:220px}
+.ride-stats{font:700 8px "Courier New",monospace;color:var(--muted);line-height:1.4}
+#ride-health{color:var(--aqua)}
+#ride-status[data-danger="true"]{color:#ff9775}
+@media(max-width:600px){.game-shell .ride-strip{left:8px;right:8px;bottom:8px;padding:8px;gap:6px;min-width:0}.ride-strip .ride-copy{flex:1;min-width:0}.ride-strip .ride-copy strong{max-width:none;white-space:normal}.ride-strip .ride-stats{font-size:7px;overflow-wrap:anywhere}.ride-strip .ride-condition{width:62px;flex-shrink:0;margin-left:0}.ride-strip .ride-condition-label{flex-wrap:wrap;gap:3px}.ride-strip .ride-condition .stat-label{white-space:normal}.ride-strip .ride-icon{display:none}.game-shell .interaction-hint{bottom:111px}.game-shell .equipped-panel{bottom:164px}}
 .radio-panel{position:absolute;left:17px;bottom:136px;z-index:1;display:flex;align-items:center;gap:7px;width:265px;max-width:calc(100% - 34px);padding:9px 11px;background:rgba(20,29,39,.94);border-left:3px solid var(--coral);border-radius:4px}
 .radio-copy{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
 .radio-copy .stat-label{font-size:7px;color:var(--coral);display:flex;justify-content:space-between;gap:5px}
