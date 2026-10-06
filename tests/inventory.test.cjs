@@ -101,7 +101,8 @@ test('Party Cannon movement is frame-rate independent and rotated cars stop a sh
   const a = makeGame(), b = makeGame();
   for (const game of [a, b]) {
     shop(game); game.purchaseGadget('cannon'); game.buildings = []; game.peds = []; game.police = []; game.cars = [];
-    game.player.x = game.player.y = 1080; game.action(0);
+    // Aim at chassis height; a lob can now legitimately clear a low car roof.
+    game.player.x = game.player.y = 1080; game.action(0, { pitch: 0 });
   }
   a.update(0.25); advance(b, 0.25);
   assert.deepEqual(a.projectiles, b.projectiles);
@@ -143,8 +144,9 @@ test('close-range toys hit along a slightly downward aim and block obstructed sh
 test('aimed Party Cannon follows vertical pitch, hits at body height, and leaves sky bursts harmless', () => {
   const makeShot = pitch => {
     const game = makeGame(); shop(game); game.purchaseGadget('cannon');
-    game.buildings = []; game.cars = []; game.police = []; game.player.x = game.player.y = 1080;
-    game.peds = game.peds.slice(0, 1); Object.assign(game.peds[0], { x: 1230, y: 1080, pace: 0 });
+    // Use an open road; the town centre now contains a solid fountain.
+    game.buildings = []; game.cars = []; game.police = []; game.player.x = 1080; game.player.y = 900;
+    game.peds = game.peds.slice(0, 1); Object.assign(game.peds[0], { x: 1230, y: 900, pace: 0 });
     assert.equal(game.action(0, { pitch }), true); return game;
   };
   const sky = makeShot(1.1), level = makeShot(0);

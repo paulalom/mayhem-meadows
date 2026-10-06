@@ -18,11 +18,11 @@ test('town starts near a usable car and all contract targets are reachable', () 
 
 test('movement is frame-rate independent, normalized diagonally, and ignores invalid dt', () => {
   const a = makeGame(), b = makeGame();
-  // Keep the speed check in open space; the nearby starter car is now solid.
-  a.player.x = b.player.x = 1080;
+  // Use an open road: the former park-centre fixture is now a solid fountain.
+  a.player.x = b.player.x = 1080; a.player.y = b.player.y = 900;
   a.update(0.25, { up: true, right: true }); advance(b, 0.25, { up: true, right: true });
   assert.ok(Math.hypot(a.player.x - b.player.x, a.player.y - b.player.y) < 0.00001);
-  assert.ok(Math.abs(Math.hypot(a.player.x - 1080, a.player.y - 1080) - 155 * 0.25) < 0.001);
+  assert.ok(Math.abs(Math.hypot(a.player.x - 1080, a.player.y - 900) - 155 * 0.25) < 0.001);
   const before = { ...a.player }; a.update(NaN, { up: true }); a.update(-1, { up: true });
   assert.deepEqual(a.player, before);
 });
@@ -39,7 +39,7 @@ test('on-foot movement follows the camera forward and right directions', () => {
     { moveAngle: 0, input: { left: true }, dx: 0, dy: -1 }
   ];
   for (const { moveAngle, input, dx, dy } of cases) {
-    const game = makeGame(); game.player.x = 1080;
+    const game = makeGame(); game.player.x = 1080; game.player.y = 900;
     const start = { ...game.player };
     game.update(0.25, { ...input, moveAngle });
     assert.ok(Math.abs(game.player.x - start.x - dx * 155 * 0.25) < 0.00001);
@@ -50,7 +50,7 @@ test('on-foot movement follows the camera forward and right directions', () => {
 
 test('camera-relative diagonals keep walking and sprinting speed and face movement', () => {
   for (const moveAngle of [-Math.PI / 2, 0, Math.PI / 2, 0.7]) for (const boost of [false, true]) {
-    const game = makeGame(); game.player.x = 1080;
+    const game = makeGame(); game.player.x = 1080; game.player.y = 900;
     const start = { ...game.player };
     game.update(0.25, { up: true, right: true, boost, moveAngle });
     const dx = game.player.x - start.x, dy = game.player.y - start.y;
@@ -304,9 +304,11 @@ test('vehicle OBB contacts detect front bumpers while leaving genuinely clear si
 test('a bumper collision does not award the close-shave bonus, while a clear fast pass does', () => {
   for (const offset of [0, 40]) {
     const game = makeGame(); game.cars = []; game.peds = []; game.police = []; game.graceTimer = 0;
-    const car = game._addCar(900, 1080, 0, 'compact', '#ffd15b'); game._addCar(940, 1080 + offset, 0, 'compact', '#fb8097');
+    // A four-unit bumper gap is clear before the step, but the fast car reaches
+    // contact during it. Style must wait for the real solver's result.
+    const car = game._addCar(900, 900, 0, 'compact', '#ffd15b'); game._addCar(950, 900 + offset, 0, 'compact', '#fb8097');
     game.player.vehicleId = car.id; car.speed = car.vx = 300;
-    game._drive(car, 1 / 60, { up: true });
+    game.update(1 / 30, { up: true });
     assert.equal(game.score, offset ? 8 : 0); assert.equal(car.health < game.maxHealth, !offset);
   }
 });

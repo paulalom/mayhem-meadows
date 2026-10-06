@@ -56,12 +56,14 @@
       this._geometries = [];
       this._textures = [];
       this._buildingVolumes = [];
+      this._propVolumes = [];
+      this._propAimMeshes = [];
       this._vehicles = new Map();
       this._residents = new Map();
       this._ragdollRenderedCount = 0;
       this._cameraInfo = { x: 0, y: 0, z: 0, targetX: 0, targetY: 0, targetZ: 0, mode: 'foot', distance: 0, obstructed: false, viewYaw: this._yaw, viewPitch: this._viewPitch, aiming: false, fov: this.camera.fov };
       this._cube = this._geometry(new T.BoxGeometry(1, 1, 1));
-      this._cylinder = this._geometry(new T.CylinderGeometry(1, 1, 1, 10));
+      this._cylinder = this._geometry(new T.CylinderGeometry(1, 1, 1, 12));
       this._sphere = this._geometry(new T.IcosahedronGeometry(1, 1));
       this._cone = this._geometry(new T.ConeGeometry(1, 1, 7));
       this._ringGeometry = this._geometry(new T.TorusGeometry(2.35, 0.085, 6, 48));
@@ -257,11 +259,8 @@
         this._staticBox('#a5b4b6', centerX + 2.2, height + 0.49, centerZ + 2, 1.4, 0.5, 1.0);
       }
       this._park();
+      this._physicalProps();
       this._services();
-      for (const x of centers) for (const z of centers) {
-        if ((Math.round(x / 18) + Math.round(z / 18)) % 2) continue;
-        this._lamp(x + 3.14, z + 3.2);
-      }
       for (let i = 0; i < 26; i++) {
         const border = i % 4, at = 2 + Math.floor(i / 4) * 17;
         this._tree(border === 0 ? -5 : border === 1 ? size + 5 : at, border === 2 ? -5 : border === 3 ? size + 5 : at, 1.2, i);
@@ -300,14 +299,14 @@
       return sign;
     }
 
-    _tree(x, z, scale = 1, variety = 0) {
-      this._static(this._cylinder, this._material('#a88462'), x, 0.7 * scale, z, 0.14 * scale, 1.4 * scale, 0.14 * scale);
+    _tree(x, z, scale = 1, variety = 0, includeTrunk = true, elevation = 0) {
+      if (includeTrunk) this._static(this._cylinder, this._material('#a88462'), x, elevation + 0.7 * scale, z, 0.14 * scale, 1.4 * scale, 0.14 * scale);
       if (variety % 3 === 0) {
-        this._static(this._cone, this._material('#63ac85'), x, 1.95 * scale, z, 0.95 * scale, 2.5 * scale, 0.95 * scale);
-        this._static(this._cone, this._material('#80bf8e'), x, 2.75 * scale, z, 0.65 * scale, 1.8 * scale, 0.65 * scale);
+        this._static(this._cone, this._material('#63ac85'), x, elevation + 1.95 * scale, z, 0.95 * scale, 2.5 * scale, 0.95 * scale);
+        this._static(this._cone, this._material('#80bf8e'), x, elevation + 2.75 * scale, z, 0.65 * scale, 1.8 * scale, 0.65 * scale);
       } else {
-        this._static(this._sphere, this._material(variety % 2 ? '#88be83' : '#67af91'), x, 2.0 * scale, z, 1.0 * scale, 1.22 * scale, 1.0 * scale);
-        this._static(this._sphere, this._material('#a5cb82'), x - 0.35 * scale, 2.5 * scale, z + 0.2 * scale, 0.65 * scale, 0.65 * scale, 0.65 * scale);
+        this._static(this._sphere, this._material(variety % 2 ? '#88be83' : '#67af91'), x, elevation + 2.0 * scale, z, 1.0 * scale, 1.22 * scale, 1.0 * scale);
+        this._static(this._sphere, this._material('#a5cb82'), x - 0.35 * scale, elevation + 2.5 * scale, z + 0.2 * scale, 0.65 * scale, 0.65 * scale, 0.65 * scale);
       }
     }
 
@@ -321,17 +320,6 @@
       this._staticBox('#94c99b', 54, 0.075, 54, 12.0, 0.14, 12.0, false);
       this._staticBox('#e6d8b2', 54, 0.155, 54, 1.5, 0.04, 11.9, false);
       this._staticBox('#e6d8b2', 54, 0.157, 54, 11.9, 0.04, 1.5, false);
-      this._static(this._cylinder, this._material('#eee7d3'), 54, 0.35, 54, 1.65, 0.5, 1.65);
-      this._static(this._cylinder, this._material('#7dd9e6'), 54, 0.63, 54, 1.43, 0.07, 1.43, null, false);
-      this._static(this._cylinder, this._material('#f3eddc'), 54, 0.95, 54, 0.18, 1.3, 0.18);
-      this._static(this._cylinder, this._material('#f3eddc'), 54, 1.36, 54, 0.78, 0.18, 0.78);
-      this._static(this._sphere, this._material('#a3e5eb'), 54, 1.70, 54, 0.18, 0.55, 0.18, null, false);
-      for (let i = 0; i < 4; i++) {
-        const x = i % 2 ? 58.2 : 49.7, z = i > 1 ? 58.3 : 49.6;
-        this._tree(x, z, 1.05, i);
-        this._staticBox('#cf9771', x + (i % 2 ? -1.25 : 1.25), 0.44, z, 1.4, 0.15, 0.45);
-        this._staticBox('#cf9771', x + (i % 2 ? -1.25 : 1.25), 0.83, z + 0.21, 1.4, 0.54, 0.13);
-      }
       this._sign('MAYHEM MEADOWS', 48.05, 1.0, 54, -Math.PI / 2, '#f3e5ad', '#40785f', 3.5, 0.6);
       for (let i = 0; i < 8; i++) {
         const x = 49 + i * 1.2;
@@ -339,17 +327,54 @@
       }
     }
 
+    _physicalProps() {
+      // The town map owns both physical shapes and their visual placement.
+      // Decoration can change without introducing a second obstacle layout.
+      const colors = {
+        tree: ['#a88462', '#67af91'], lamp: ['#536d74', '#536d74', '#fcf1be'],
+        bench: ['#cf9771'], fountain: ['#eee7d3', '#f3eddc', '#f3eddc'],
+        garage: ['#b8a1e0', '#ffe0b1'], wash: ['#89d7d1']
+      };
+      for (const object of this.game.staticObjects || []) {
+        const x = object.x / UNIT, z = object.y / UNIT, elevation = object.elevation || 0;
+        const yaw = -(object.angle || 0), cosine = Math.cos(yaw), sine = Math.sin(yaw);
+        for (let i = 0; i < (object.parts || []).length; i++) {
+          const part = object.parts[i], offset = part.offset || [0, object.height / 2, 0];
+          const half = part.half || [object.width / UNIT / 2, object.height / 2, object.depth / UNIT / 2];
+          const px = x + cosine * offset[0] + sine * offset[2], py = elevation + offset[1], pz = z - sine * offset[0] + cosine * offset[2];
+          const choices = colors[object.kind] || ['#b8a1e0'];
+          const color = part.color || choices[Math.min(i, choices.length - 1)];
+          const shape = part.shape || 'box';
+          const geometry = shape === 'cylinder' ? this._cylinder : shape === 'sphere' ? this._sphere : this._cube;
+          const sx = shape === 'cylinder' || shape === 'sphere' ? half[0] : half[0] * 2;
+          const sy = shape === 'sphere' ? half[1] : half[1] * 2;
+          const sz = shape === 'cylinder' || shape === 'sphere' ? half[2] : half[2] * 2;
+          const material = this._material(color);
+          this._static(geometry, material, px, py, pz, sx, sy, sz, [0, yaw, 0]);
+          if (geometry && this._propAimMeshes) {
+            // Raycast the exact shared shape without adding another draw call;
+            // its visible twin is baked into the static material batches.
+            const aimMesh = new this.T.Mesh(geometry, material);
+            aimMesh.position.set(px, py, pz); aimMesh.scale.set(sx, sy, sz); aimMesh.rotation.y = yaw;
+            aimMesh.updateMatrixWorld(true); this._propAimMeshes.push(aimMesh);
+          }
+          const extentX = Math.abs(cosine) * half[0] + Math.abs(sine) * half[2];
+          const extentZ = Math.abs(sine) * half[0] + Math.abs(cosine) * half[2];
+          this._propVolumes.push({ minX: px - extentX, maxX: px + extentX, minY: py - half[1], maxY: py + half[1], minZ: pz - extentZ, maxZ: pz + extentZ });
+        }
+        if (object.kind === 'tree') this._tree(x, z, object.scale || 1.05, object.variety || 0, false, elevation);
+        if (object.kind === 'fountain') {
+          this._static(this._cylinder, this._material('#7dd9e6'), x, elevation + 0.63, z, 1.43, 0.07, 1.43, null, false);
+          this._static(this._sphere, this._material('#a3e5eb'), x, elevation + 1.70, z, 0.18, 0.55, 0.18, null, false);
+        }
+        if (object.kind === 'garage') this._sign('SPRINKLE GARAGE', x, elevation + 1.26, z - 0.68, 0, '#fff1c8', '#775688', 1.75, 0.5);
+        if (object.kind === 'wash') this._sign('COOL-DOWN CAR WASH', x, elevation + 2.62, z - 0.35, Math.PI, '#dcfff1', '#3c827d', 4.5, 0.48);
+      }
+    }
+
     _services() {
-      // Service kiosks sit in the park-side setback, leaving simulation roads clear.
-      this._staticBox('#b8a1e0', 47.1, 0.9, 46.8, 1.9, 1.8, 1.3);
-      this._staticBox('#ffe0b1', 47.1, 1.88, 46.8, 2.1, 0.18, 1.5);
-      this._sign('SPRINKLE GARAGE', 47.1, 1.26, 46.12, 0, '#fff1c8', '#775688', 1.75, 0.5);
       this._serviceRing(45, 45, '#c9a5ff');
       const x = 81, z = 99;
-      this._staticBox('#89d7d1', x - 2.25, 1.25, z + 3.35, 0.26, 2.5, 0.26);
-      this._staticBox('#89d7d1', x + 2.25, 1.25, z + 3.35, 0.26, 2.5, 0.26);
-      this._staticBox('#89d7d1', x, 2.55, z + 3.35, 4.8, 0.35, 0.65);
-      this._sign('COOL-DOWN CAR WASH', x, 2.62, z + 3.0, Math.PI, '#dcfff1', '#3c827d', 4.5, 0.48);
       this._serviceRing(x, z, '#78eee2');
     }
 
@@ -432,11 +457,11 @@
       this._box(group, under, 0, 0.38, 0, length * 0.94, 0.30, width * 0.91);
       const shell = this._box(group, body, 0, 0.65, 0, length, 0.45, width);
       this._box(group, body, length * 0.33, 0.87, 0, length * 0.30, 0.12, width * 0.96);
-      this._box(group, glass, -0.19, 1.00, 0, length * (kind === 'van' ? 0.67 : 0.47), kind === 'van' ? 0.62 : 0.41, width * 0.78);
-      this._box(group, body, -0.20, kind === 'van' ? 1.33 : 1.22, 0, length * (kind === 'van' ? 0.69 : 0.48), 0.11, width * 0.84);
+      this._box(group, glass, -0.19, kind === 'van' ? 1.225 : 1.00, 0, length * (kind === 'van' ? 0.67 : 0.47), kind === 'van' ? 0.84 : 0.41, width * 0.78);
+      this._box(group, body, -0.20, kind === 'van' ? 1.60 : 1.22, 0, length * (kind === 'van' ? 0.69 : 0.48), 0.11, width * 0.84);
       // Slim pillars split the windows, and two bumpers frame the chunky body.
       for (const side of [-1, 1]) {
-        this._box(group, body, -0.19, 1.02, side * width * 0.405, 0.08, 0.46, 0.055, false);
+        this._box(group, body, -0.19, kind === 'van' ? 1.225 : 1.02, side * width * 0.405, 0.08, kind === 'van' ? 0.84 : 0.46, 0.055, false);
         this._box(group, '#f2edce', length / 2 + 0.012, 0.73, side * width * 0.30, 0.06, 0.17, 0.24, false);
         this._box(group, '#eb8781', -length / 2 - 0.012, 0.72, side * width * 0.30, 0.06, 0.15, 0.23, false);
         this._box(group, under, 0.13, 0.87, side * width * 0.50, 0.16, 0.04, 0.018, false);
@@ -464,8 +489,13 @@
       }
       for (const wheel of wheels) this._mergeColored(wheel);
       const paint = this._mergeColored(group, [shell, red, blue], police ? null : body);
-      this.scene.add(group);
-      return { group, wheels, shell, body, paint, color: entity.color, red, blue, police, roll: 0 };
+      // Physics rotates about the chassis centre. Keep the original visual
+      // coordinates inside a child, so a roll never orbits the model's feet.
+      const centerHeight = (entity.colliderHeight || (kind === 'van' ? 1.7 : 1.3)) / 2;
+      const pivot = new T.Group();
+      group.position.y = 0.04 - centerHeight; pivot.add(group);
+      this.scene.add(pivot);
+      return { group: pivot, visual: group, centerHeight, wheels, shell, body, paint, color: entity.color, red, blue, police, roll: 0 };
     }
 
     _mergeColored(group, preserve = [], paintMaterial = null) {
@@ -608,7 +638,7 @@
         this._aimBox.max.set(box.maxX, box.maxY, box.maxZ);
         if (this._ray.ray.intersectBox(this._aimBox, this._aimHit)) saveHit(this._aimHit);
       }
-      const subjects = [];
+      const subjects = [...(this._propAimMeshes || [])];
       for (const model of this._residents?.values() || []) if (model.group.visible) subjects.push(model.group);
       for (const [id, model] of this._vehicles || []) if (model.group.visible && id !== this.game.player.vehicleId) subjects.push(model.group);
       for (const group of subjects) group.updateWorldMatrix(true, true);
@@ -635,7 +665,8 @@
       const dz = this._aimPoint.z - this.game.player.y / UNIT;
       const forward = dx * Math.cos(this.viewYaw) + dz * Math.sin(this.viewYaw);
       if (Math.hypot(dx, dz) < 0.25 || forward <= 0) return { angle: this.viewYaw, pitch: this.viewPitch };
-      return { angle: Math.atan2(dz, dx), pitch: Math.atan2(this._aimPoint.y - 1.15, Math.hypot(dx, dz)) };
+      const muzzleHeight = (Number.isFinite(this.game.player.elevation) ? this.game.player.elevation : 0) + 1.15;
+      return { angle: Math.atan2(dz, dx), pitch: Math.atan2(this._aimPoint.y - muzzleHeight, Math.hypot(dx, dz)) };
     }
 
     get viewYaw() { return this._cameraInfo.viewYaw; }
@@ -800,7 +831,9 @@
       const current = this.game.current, driving = Boolean(this.game.player.vehicleId);
       const fallen = !driving && this._bodyFor(this.game.player);
       let x = current.x / UNIT, z = current.y / UNIT;
-      let targetHeight = fallen ? Math.max(0.55, (fallen.joints.pelvis.y + fallen.joints.chest.y) / 2 + 0.15) : driving ? 1.0 : 1.03;
+      const elevation = Number.isFinite(current.elevation) ? current.elevation : 0;
+      // A roof landing needs the pivot above the roof's near-plane envelope.
+      let targetHeight = fallen ? Math.max(0.55, (fallen.joints.pelvis.y + fallen.joints.chest.y) / 2 + 0.15) : elevation + (driving ? 1.15 : 1.03);
       if (fallen) {
         // A physical pelvis is smaller than the camera clearance envelope.
         // Move the look-at pivot out of that envelope before solving the boom,
@@ -926,7 +959,7 @@
       const game = this.game, player = game.player, model = this._player;
       const playerBody = this._bodyFor(player);
       model.group.visible = !player.vehicleId && !playerBody;
-      model.group.position.set(player.x / UNIT, 0.03, player.y / UNIT);
+      model.group.position.set(player.x / UNIT, (Number.isFinite(player.elevation) ? player.elevation : 0) + 0.03, player.y / UNIT);
       model.group.rotation.y = -player.angle;
       const movement = Math.hypot(player.x - this._lastPlayerX, player.y - this._lastPlayerY) / UNIT;
       this._lastPlayerX = player.x; this._lastPlayerY = player.y;
@@ -955,7 +988,7 @@
         if (!resident) continue;
         const body = this._bodyFor(ped);
         resident.group.visible = !body;
-        resident.group.position.set(ped.x / UNIT, 0.03, ped.y / UNIT);
+        resident.group.position.set(ped.x / UNIT, (Number.isFinite(ped.elevation) ? ped.elevation : 0) + 0.03, ped.y / UNIT);
         resident.group.rotation.y = -ped.angle;
         const walk = !this.reducedMotion && ped.stunned <= 0 ? Math.sin(game.time * ped.pace / UNIT * 5 + Number(ped.id.split('-')[1])) * 0.30 : 0;
         resident.leftLeg.rotation.z = walk; resident.rightLeg.rotation.z = -walk;
@@ -980,8 +1013,11 @@
         active.add(entity.id);
         let model = this._vehicles.get(entity.id);
         if (!model) { model = this._vehicle(entity, entity.id.startsWith('police-')); this._vehicles.set(entity.id, model); }
-        model.group.position.set(entity.x / UNIT, 0.04, entity.y / UNIT);
-        model.group.rotation.y = -entity.angle;
+        model.group.position.set(entity.x / UNIT, (Number.isFinite(entity.elevation) ? entity.elevation : 0) + model.centerHeight, entity.y / UNIT);
+        const orientation = entity.orientation;
+        const fullOrientation = orientation && ['x', 'y', 'z', 'w'].every(key => Number.isFinite(orientation[key]));
+        if (fullOrientation) model.group.quaternion.set(orientation.x, orientation.y, orientation.z, orientation.w).normalize();
+        else model.group.rotation.set(0, -entity.angle, 0);
         model.group.visible = true;
         model.roll = angle(model.roll + (entity.speed || 0) / UNIT / 0.31 * dt);
         for (const wheel of model.wheels) wheel.rotation.z = model.roll;
@@ -993,7 +1029,7 @@
         } else {
           this._paintVehicle(model, entity.color);
           const broken = entity.health <= 0;
-          model.group.rotation.z = broken ? 0.055 : 0;
+          if (!fullOrientation) model.group.rotation.z = broken ? 0.055 : 0;
           model.shell.material = broken ? this._material('#8f9aa1') : model.body;
         }
       }

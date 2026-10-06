@@ -56,7 +56,7 @@
   }
   function sound(name) {
     if (muted || !audioContext || audioContext.state !== 'running') return;
-    const tones = { horn: [180, 0.18, 'sawtooth'], confetti: [650, 0.1, 'triangle'], flop: [260, 0.22, 'triangle'], crash: [75, 0.13, 'square'], pickup: [660, 0.14, 'sine'], complete: [880, 0.32, 'triangle'], bust: [120, 0.32, 'sawtooth'], upgrade: [1040, 0.2, 'sine'] };
+    const tones = { horn: [180, 0.18, 'sawtooth'], confetti: [650, 0.1, 'triangle'], jump: [340, 0.13, 'triangle'], flop: [260, 0.22, 'triangle'], crash: [75, 0.13, 'square'], pickup: [660, 0.14, 'sine'], complete: [880, 0.32, 'triangle'], bust: [120, 0.32, 'sawtooth'], upgrade: [1040, 0.2, 'sine'] };
     const [frequency, duration, type] = tones[name] || [420, 0.1, 'triangle'];
     const oscillator = audioContext.createOscillator(), gain = audioContext.createGain();
     const t = audioContext.currentTime;
@@ -399,6 +399,7 @@
     if (!controlled.includes(event.code)) return;
     event.preventDefault(); keys.add(event.code);
     if (!event.repeat) {
+      if (event.code === 'Space' && !game.player.vehicleId) game.jump();
       if (event.code === 'KeyE') { game.interact(); setAim(false); }
       if (event.code === 'KeyH') game.horn();
       if (event.code === 'KeyR') { game.recover(); setAim(false); scene?.recenter(); }
@@ -486,13 +487,16 @@
       canvas.dataset.renderCalls = String(scene.renderer?.info.render.calls || 0);
     }
     canvas.dataset.worldX = game.current.x.toFixed(3); canvas.dataset.worldY = game.current.y.toFixed(3);
+    canvas.dataset.elevation = Number(game.current.elevation || 0).toFixed(3);
+    canvas.dataset.verticalVelocity = Number(game.current.verticalVelocity || 0).toFixed(3);
+    canvas.dataset.grounded = String(game.current.grounded !== false);
     canvas.dataset.frames = String(renderedFrames);
     $('aim-reticle').hidden = !playActive() || !mouseLocked() || !!game.player.vehicleId || !!fallen;
     $('aim-reticle').classList.toggle('aiming', aiming);
     $('mouse-hint').hidden = !playActive() || mouseLocked();
     $('game-shell').classList.toggle('aiming', aiming);
     $('speed-value').textContent = game.player.vehicleId ? Math.round(Math.abs(game.current.speed || 0) * 0.28) + ' KM/H' : fallen ? (fallen.phase === 'recover' ? 'GETTING UP' : 'WHOOPS!') : 'ON FOOT';
-    $('speed-caption').textContent = game.player.vehicleId ? 'SHIFT BOOST · SPACE DRIFT' : fallen ? 'R · SKIP THE DRAMA' : 'F · DRAMATIC FLOP';
+    $('speed-caption').textContent = game.player.vehicleId ? (game.current.upright === false ? 'R · RIGHT THIS RIDE' : 'SHIFT BOOST · SPACE DRIFT') : fallen ? 'R · SKIP THE DRAMA' : 'SPACE · JUMP   F · FLOP';
     const t = target();
     $('target-compass').hidden = !t;
     if (t) {
@@ -526,7 +530,9 @@
     $('garage-status').textContent = nearest ? (nearest.id === 'wash' ? 'At the wash · E repairs and clears heat.' : 'At the garage · G saves rides. I buys supplies.') : 'Visit GARAGE for rides, toys and supplies. WASH clears heat.';
     $('boost-price').textContent = game.upgrades.boost >= 3 ? 'MAXED' : money(200 + game.upgrades.boost * 150);
     $('armor-price').textContent = game.upgrades.armor >= 3 ? 'MAXED' : money(150 + game.upgrades.armor * 125);
-    const hint = nearest ? (nearest.id === 'wash' ? 'E · wash & cool off ($75)' : 'G · garage collection   I · supplies & toys') : car ? (Math.abs(car.speed) < 45 ? 'E · hop out   H · honk   SPACE · drift' : 'SPACE · drift   SHIFT · boost   H · honk') : game.cars.some(c => dist(c, game.player) < 65) ? 'E · borrow this ride' : 'RIGHT MOUSE · aim   LEFT MOUSE · ' + GADGETS[game.inventory.equipped].name + '   TAB · toys';
+    let hint = nearest ? (nearest.id === 'wash' ? 'E · wash & cool off ($75)' : 'G · garage collection   I · supplies & toys') : car ? (Math.abs(car.speed) < 45 ? 'E · hop out   H · honk   SPACE · drift' : 'SPACE · drift   SHIFT · boost   H · honk') : game.cars.some(c => dist(c, game.player) < 65) ? 'E · borrow this ride' : 'RIGHT MOUSE · aim   LEFT MOUSE · ' + GADGETS[game.inventory.equipped].name + '   TAB · toys';
+    if (car?.upright === false) hint = 'R · right your ride and return to the road';
+    else if (car && car.elevation > 0.16) hint = 'AIRBORNE!   R · recover to the road';
     $('interaction-hint').textContent = hint;
     if (fallen) $('interaction-hint').textContent = fallen.phase === 'recover' ? 'Just finding my feet…  R · recover now' : 'Oh, crumbs! Getting up shortly…  R · recover now';
     $('interaction-hint').hidden = !started;

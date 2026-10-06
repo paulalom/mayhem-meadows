@@ -47,7 +47,7 @@ function matchesPoint(actual, joint, label) {
 
 function addCamera(scene) {
   const cameraTown = Object.create(Scene3D.prototype);
-  Object.assign(cameraTown, { T, game: scene.game, _buildingVolumes: [] });
+  Object.assign(cameraTown, { T, game: scene.game, _buildingVolumes: [], _propVolumes: [] });
   for (const name of ['_staticBox', '_static', '_material', '_sign', '_park', '_services', '_lamp', '_tree']) cameraTown[name] = () => {};
   cameraTown._town();
   Object.assign(scene, {

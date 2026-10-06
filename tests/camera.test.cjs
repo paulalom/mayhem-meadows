@@ -27,7 +27,7 @@ function makeScene() {
     _ray: new T.Raycaster(), _pointer: new T.Vector2(),
     _ground: new T.Plane(new T.Vector3(0, 1, 0), 0), _aimPoint: new T.Vector3(),
     _aimBox: new T.Box3(), _aimHit: new T.Vector3(), _residents: new Map(), _vehicles: new Map(),
-    _sun: new T.DirectionalLight(), _buildingVolumes: [], _cameraInfo: {}
+    _sun: new T.DirectionalLight(), _buildingVolumes: [], _propVolumes: [], _cameraInfo: {}
   });
   scene.camera.position.set(game.current.x / 20, 3.4, game.current.y / 20 + 5.7);
   // Use the real town geometry to obtain collision envelopes. Only decoration
@@ -40,7 +40,7 @@ function makeScene() {
 function assertSafeCamera(scene) {
   const info = scene.cameraInfo;
   for (const key of ['x', 'y', 'z', 'targetX', 'targetY', 'targetZ', 'distance', 'viewYaw', 'viewPitch', 'fov']) assert.ok(Number.isFinite(info[key]), key + ' must be finite');
-  assert.ok(info.distance > 0.01, 'the camera must never collapse onto its target');
+  assert.ok(info.distance > 0.01, 'the camera must never collapse onto its target: ' + JSON.stringify(info));
   assert.equal(info.mode, scene.game.player.vehicleId ? 'drive' : 'foot');
   assert.ok(Math.abs(info.targetX - scene.game.current.x / 20) < 1e-9);
   assert.ok(Math.abs(info.targetZ - scene.game.current.y / 20) < 1e-9);
@@ -249,4 +249,41 @@ test('ground aiming uses real camera projection and near-feet or sky clicks keep
   const distant = feet.clone().add(new T.Vector3(2, 0, -5));
   assert.ok(Math.abs(wrapped(aimAt(distant) - Math.atan2(-5, 2))) < 1e-9);
   assert.ok(Math.abs(wrapped(scene.aimAngle(scene.width / 2, 0) - scene.viewYaw)) < 1e-9);
+});
+
+test('jump and rooftop elevation raise the camera pivot and muzzle origin together', () => {
+  const scene = makeScene();
+  place(scene, { x: 900, y: 1080 }, -Math.PI / 2);
+  scene._buildingVolumes = []; scene._propAimMeshes = [];
+  scene.orbit(0, -100); frames(scene, 180);
+  const originalY = scene.cameraInfo.y, originalPitch = scene.aimDirection().pitch;
+  scene.game.player.elevation = 1.4; frames(scene, 180);
+  assert.ok(Math.abs(scene.cameraInfo.targetY - 2.43) < 0.000001);
+  assert.ok(Math.abs(scene.cameraInfo.y - originalY - 1.4) < 0.0001);
+  assert.ok(Math.abs(scene.aimDirection().pitch - originalPitch) < 0.0001, 'shot pitch is relative to the elevated muzzle');
+  scene.game.player.elevation = 8.0; frames(scene, 180);
+  assert.ok(Math.abs(scene.cameraInfo.targetY - 9.03) < 0.000001);
+  assert.ok(Math.abs(scene.aimDirection().pitch - originalPitch) < 0.0001);
+});
+
+test('the driving camera follows airborne height and rooftop landings without inheriting vehicle roll', () => {
+  const scene = makeScene();
+  assert.equal(scene.game.interact(), true);
+  frames(scene, 1);
+  const car = scene.game.current;
+  const orientation = new T.Quaternion().setFromEuler(new T.Euler(0.65, -0.5, 0.9));
+  car.orientation = { x: orientation.x, y: orientation.y, z: orientation.z, w: orientation.w };
+  const forward = new T.Vector3(1, 0, 0).applyQuaternion(orientation);
+  car.angle = Math.atan2(forward.z, forward.x); car.elevation = 5.5;
+  scene.recenter(); frames(scene, 180);
+  assert.ok(Math.abs(scene.cameraInfo.targetY - 6.65) < 0.000001);
+  assert.ok(Math.abs(wrapped(scene.viewYaw - car.angle)) < 0.000001);
+  const right = new T.Vector3(1, 0, 0).applyQuaternion(scene.camera.quaternion);
+  assert.ok(Math.abs(right.y) < 0.000001, 'camera horizon remains level during a roll');
+  for (const building of scene.game.buildings.slice(0, 5)) {
+    place(scene, { x: building.x + building.w / 2, y: building.y + building.h / 2 }, car.angle);
+    car.elevation = building.height + 0.02;
+    scene.recenter(); frames(scene, 30);
+    assert.ok(Math.abs(scene.cameraInfo.targetY - building.height - 1.17) < 0.000001);
+  }
 });

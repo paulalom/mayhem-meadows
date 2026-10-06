@@ -27,15 +27,15 @@ The player can ignore contracts and play freely. There is no mandatory story seq
 ## Driving and walking
 
 - **Arcade steering:** forward/reverse acceleration, speed-sensitive turning, generous braking, predictable grip, and a handbrake that makes drifting easy to discover.
-- **Forgiving collisions:** cars bounce and lose some speed; they do not get stuck against corners. Heavy impacts reduce vehicle condition. A wreck becomes a confetti cloud and ejects the player safely.
+- **Forgiving collisions:** cars have three-dimensional rigid bodies with gravity and elastic contacts. Walls, other cars, and fixed street/park props can bounce them away, lift a corner, or send them rolling. Height and full orientation determine contact, so a flying or flipped car is not forced into an upright road footprint. Heavy impacts reduce vehicle condition. A wreck becomes a confetti cloud and ejects the player safely.
 - **Borrow any civilian car:** press Interact near a stationary car. Traffic slows for intersections. Exiting at speed is blocked with a useful message; exiting while stopped places you on a free side of the car.
 - **Three recognizable rides:** a forgiving compact, a fast but loose sports car, and a slower, sturdy van. Their silhouettes and colors explain their character.
-- **On foot:** camera-relative movement, sprint, car entry, and a short-range confetti popper aimed along the camera view into the 3D world. Confetti can startle residents and distract police; it is a toy, not a realistic weapon system.
-- **Immediate recovery:** a dedicated unstuck action returns you to a safe nearby road with a small score penalty. No long walk back after a bad crash.
+- **On foot:** camera-relative movement, sprint, a Space jump with gravity and a landing, car entry, and a short-range confetti popper aimed along the camera view into the 3D world. Jumping requires a fresh press after landing; holding Space cannot produce repeated hops. Confetti can startle residents and distract police; it is a toy, not a realistic weapon system.
+- **Immediate recovery:** R returns you to a safe nearby road with a small score penalty and rights a flipped ride, clearing its physical motion as well as its visible pose. No long walk back after a bad crash.
 - **Physical tumbles:** moving cars and confetti bursts send residents into jointed ragdolls. On foot, the player tumbles after a vehicle impact or can press F for a voluntary dramatic flop. Gravity, connected limbs, bouncing contacts, and street friction produce a different little mishap each time. Everyone gets up after a few seconds; R skips the player's recovery wait.
-- **Solid bodies:** vehicle contacts use rotated car footprints, and standing people cannot walk through cars or each other. Ragdoll joints and limbs contact the ground, building walls, and moving cars. Hits create confetti and fake curses, with no cash reward for hitting people.
+- **Solid bodies:** vehicles use finite-height collision shapes and full three-dimensional rotation against the ground, walls, fixed props, and each other. Tree trunks, lamp posts, park benches/fountain, the garage kiosk, and the car wash frame have solid shapes. Standing people cannot walk through cars or each other. Ragdoll joints and limbs contact the ground, building walls, and moving cars. Hits create confetti and fake curses, with no cash reward for hitting people.
 
-Prototype controls: WASD/arrow keys to move or drive; click the town to capture the mouse, then move it to look; hold right mouse for shoulder aiming with slower sensitivity; left-click to use the equipped toy on foot; C to recenter; E to enter/exit or use a nearby service; Space for the driving handbrake; Shift for boost/sprint; H for horn; F for an on-foot flop; Esc to release the mouse and pause, P to pause; R for recovery. Contract buttons live in the HUD so accepting a gig never depends on finding a tiny interaction point.
+Prototype controls: WASD/arrow keys to move or drive; click the town to capture the mouse, then move it to look; hold right mouse for shoulder aiming with slower sensitivity; left-click to use the equipped toy on foot; C to recenter; E to enter/exit or use a nearby service; Space to jump on foot or use the driving handbrake; Shift for boost/sprint; H for horn; F for an on-foot flop; Esc to release the mouse and pause, P to pause; R for recovery. Contract buttons live in the HUD so accepting a gig never depends on finding a tiny interaction point.
 
 ## Toys, pockets, and a place to park
 
@@ -47,7 +47,7 @@ Inventory should create new funny choices within seconds. The three toys occupy 
 | Inflatable hammer | A close-range padded swing with a firm ragdoll shove | $120 permanent unlock; unlimited uses, slower swing |
 | Party cannon | A visible traveling ball that bursts into a wider confetti party | $280 unlock includes six charges; twelve-charge capacity |
 
-Left-click uses the equipped toy on foot. Hold right mouse to aim with a center crosshair, closer shoulder view, and slower sensitivity. The first click on an uncaptured game only captures the mouse; it never accidentally fires. Space remains the handbrake in a car. Hits produce confetti, fake curses, physics tumbles, and heat. They do not pay cash. Each toy has a different reach and rhythm, so choosing one changes the situation rather than only increasing a number.
+Left-click uses the equipped toy on foot. Hold right mouse to aim with a center crosshair, closer shoulder view, and slower sensitivity. The first click on an uncaptured game only captures the mouse; it never accidentally fires. Space jumps on foot and remains the handbrake in a car. Hits produce confetti, fake curses, physics tumbles, and heat. They do not pay cash. Each toy has a different reach and rhythm, so choosing one changes the situation rather than only increasing a number.
 
 Press **I** for pockets. Carry at most five biscuits (+40 composure, $15 each), three repair tapes (+55 current-car condition, $35 each), and three refill packs (+6 cannon charges, $30 each). Starter supplies are two biscuits, one tape, and one refill. Supplies work anywhere they are useful; a full meter, missing car, or locked cannon consumes nothing. A partial top-up uses one item and stops at the cap. Buying supplies requires stopping at Sprinkle Garage.
 
@@ -66,8 +66,8 @@ The camera makes the town feel like a place you can run through. Keep the player
 - **Driving chase:** the camera follows behind the car with enough height to read an intersection. Mouse movement temporarily suspends automatic following so it never fights looking around; after a short delay, return smoothly behind the car.
 - **Safe camera distance:** shorten the camera boom when buildings obstruct the view, then ease it back out in open space. The camera must not spend a chase inside a wall.
 - **Readable objectives:** glowing ground rings and upright markers reveal mission targets in perspective. A HUD compass supplies bearing and distance when the target is around a corner; the overhead minimap shows routes, services, and patrols.
-- **Street movement and ragdolls:** upright characters and cars use the flat arcade streets. Fallen characters use a separate three-dimensional joint solver with vertical gravity, limb constraints, and solid contacts. Decorative trees, curbs, and lamps provide depth; there are no stairs, jumps, or elevated roads in this milestone.
-- **Local rendering:** Three.js uses real perspective meshes and WebGL 2, with the engine bundled beside the game. No runtime asset download or service is needed. A friendly failure overlay explains when the browser cannot create a 3D view.
+- **Street movement and physics:** the road map stays flat, but cars use Cannon rigid bodies with gravity, height, and quaternion orientation. Elastic vehicle contacts produce airborne bounces, rolls, and landings against the ground, walls, cars, and fixed street/park props. Upright characters can jump. Fallen characters use a separate three-dimensional joint solver with vertical gravity, limb constraints, and solid contacts. There are no stairs or elevated road routes in this milestone.
+- **Local rendering:** Three.js uses real perspective meshes and WebGL 2, with the renderer and Cannon physics engine bundled beside the game. No runtime asset download or service is needed. A friendly failure overlay explains when the browser cannot create a 3D view.
 
 ## Trouble and the Fun Police
 
@@ -127,17 +127,17 @@ Crashes get a bassy cartoon thump; pickups get a rising jingle; a perfect drift 
 Build a complete small loop before adding a larger city:
 
 1. One compact hand-built town rendered in third-person 3D with locally bundled Three.js and WebGL 2.
-2. Walk, enter/exit, arcade driving, traffic, residents, collisions, and confetti.
+2. Walk, jump, enter/exit, arcade driving with three-dimensional rigid-body collisions, traffic, residents, and confetti.
 3. Three reusable contract types with checkpoints, timers, pay, and immediate retry.
 4. A readable three-level pursuit system, escape timer, composure, and quick recovery.
 5. Garage/wash services, two capped upgrades, local saving, minimap, objective compass, speed display, pause, sound and motion settings.
 6. Helpful first-run controls plus a clear “Play” button; no account, installation, or network requirement.
 
-Technical shape: plain HTML/CSS/JavaScript, local geometry and audio, a checked-in Three.js engine bundle, and no external services. A fixed-step simulation keeps movement consistent across frame rates; 3D rendering uses requestAnimationFrame while a separate 2D canvas draws the minimap. The camera and models interpret simulation state without changing contract, heat, upgrade, or saving rules. Input is scoped to the game, blur clears held keys, and background tabs pause. The static files run from a normal file open as well as any static server; npm is only needed to regenerate the engine bundle during development.
+Technical shape: plain HTML/CSS/JavaScript, local geometry and audio, checked-in Three.js and Cannon engine bundles, and no external services. A fixed-step simulation keeps movement consistent across frame rates; 3D rendering uses requestAnimationFrame while a separate 2D canvas draws the minimap. The camera and models interpret simulation state without changing contract, heat, upgrade, or saving rules. Input is scoped to the game, blur clears held keys, and background tabs pause. The static files run from a normal file open as well as any static server; npm is only needed to regenerate the engine bundle during development.
 
 ## Deliberate cuts
 
-No multiplayer, huge procedural city, interiors, stairs, jumping, elevated driving, character customization editor, loot grids or weight management, realistic damage, complex combat, story campaign, licensed music, or online economy in this slice. Touch controls and gamepad support can follow once keyboard driving and the camera are good.
+No multiplayer, huge procedural city, interiors, stairs, elevated road routes, character customization editor, loot grids or weight management, realistic damage, complex combat, story campaign, licensed music, or online economy in this slice. Touch controls and gamepad support can follow once keyboard driving and the camera are good.
 
 ## Playtest questions and acceptance checks
 
@@ -147,6 +147,8 @@ No multiplayer, huge procedural city, interiors, stairs, jumping, elevated drivi
 - Can the player read the cause of police attention, notice the warning before dispatch, and cause several small incidents before a chase? Can a new player escape one patrol with a base ride?
 - Can mistakes produce a recovery within ten seconds?
 - Do car entry, exit, collision resolution, and mission targets avoid inaccessible positions?
+- Do airborne cars retain height and full rotation, collide with walls and fixed props, bounce without explosive energy gain, and land safely? Can a flipped car recover without leaving its collision body behind?
+- Does Space jump only on foot, require a fresh press after landing, and leave left-click as the toy action? Do jumps pause and recover cleanly?
 - Do pause, tab switching, retry, save reload, mute, and reduced motion behave predictably?
 - Does the game stay smooth with maximum patrols and confetti active?
 - Can players turn a corner, borrow a car, and aim confetti without fighting the camera? Does looking right turn the view right, and does holding aim slow it comfortably?

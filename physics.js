@@ -30,11 +30,11 @@
   const vectorDistance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
   const restDistance = (a, b) => Math.hypot(ANATOMY[a][0] - ANATOMY[b][0], ANATOMY[a][1] - ANATOMY[b][1], ANATOMY[a][2] - ANATOMY[b][2]);
 
-  function upright(x, z, angle) {
+  function upright(x, z, angle, elevation = 0) {
     const c = Math.cos(angle), s = Math.sin(angle), pose = {};
     for (const name of JOINT_NAMES) {
       const [lx, y, lz] = ANATOMY[name];
-      pose[name] = { x: x + lx * c - lz * s, y, z: z + lx * s + lz * c };
+      pose[name] = { x: x + lx * c - lz * s, y: y + elevation, z: z + lx * s + lz * c };
     }
     return pose;
   }
@@ -59,46 +59,102 @@
     b.x -= x * factor * wb; b.y -= y * factor * wb; b.z -= z * factor * wb;
   }
 
-  // Sphere against a full 3D oriented box, including roofs. Local car X is
-  // forward, as in core.js. Buildings use the same path with yaw zero.
+  // Row-major rotation matrix. The quaternion is the rigid body's complete
+  // orientation; the legacy yaw convention sends local +X toward world +Z.
+  function boxBasis(orientation, angle = 0) {
+    if (orientation && ['x', 'y', 'z', 'w'].every(key => Number.isFinite(orientation[key]))) {
+      const length = Math.hypot(orientation.x, orientation.y, orientation.z, orientation.w);
+      if (length > 0.000001) {
+        const x = orientation.x / length, y = orientation.y / length, z = orientation.z / length, w = orientation.w / length;
+        return [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w),
+          2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w),
+          2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)];
+      }
+    }
+    const c = Math.cos(angle), s = Math.sin(angle);
+    return [c, 0, -s, 0, 1, 0, s, 0, c];
+  }
+
+  function prepareBox(box) {
+    box.basis = boxBasis(box.orientation, box.angle);
+    const m = box.basis;
+    box.extentX = Math.abs(m[0]) * box.hx + Math.abs(m[1]) * box.hy + Math.abs(m[2]) * box.hz;
+    box.extentY = Math.abs(m[3]) * box.hx + Math.abs(m[4]) * box.hy + Math.abs(m[5]) * box.hz;
+    box.extentZ = Math.abs(m[6]) * box.hx + Math.abs(m[7]) * box.hy + Math.abs(m[8]) * box.hz;
+    box.vx = finite(box.vx); box.vy = finite(box.vy); box.vz = finite(box.vz);
+    const angular = box.angularVelocity || {};
+    box.wx = clamp(finite(angular.x), -14, 14); box.wy = clamp(finite(angular.y), -14, 14); box.wz = clamp(finite(angular.z), -14, 14);
+    return box;
+  }
+
+  // Sphere against a full 3D oriented box, including flying/tipped roofs.
+  // Inverse rotation maps the sphere into the box's local frame; normals are
+  // then rotated back into the town frame.
   function sphereBox(point, radius, box) {
-    const dx = point.x - box.x, dz = point.z - box.z;
-    const lx = dx * box.c + dz * box.s, lz = -dx * box.s + dz * box.c;
-    const ly = point.y - box.y;
-    const qx = clamp(lx, -box.hx, box.hx), qy = clamp(ly, -box.hy, box.hy), qz = clamp(lz, -box.hz, box.hz);
+    const dx = point.x - box.x, dy = point.y - box.y, dz = point.z - box.z, m = box.basis;
+    const lx = dx * m[0] + dy * m[3] + dz * m[6], ly = dx * m[1] + dy * m[4] + dz * m[7], lz = dx * m[2] + dy * m[5] + dz * m[8];
+    let qx, qz;
+    const cylinder = box.shape === 'cylinder', radial = Math.hypot(lx, lz), cylinderRadius = Math.max(box.hx, box.hz);
+    if (cylinder) { const scale = radial > cylinderRadius ? cylinderRadius / radial : 1; qx = lx * scale; qz = lz * scale; }
+    else { qx = clamp(lx, -box.hx, box.hx); qz = clamp(lz, -box.hz, box.hz); }
+    const qy = clamp(ly, -box.hy, box.hy);
     let nx = lx - qx, ny = ly - qy, nz = lz - qz, length = Math.hypot(nx, ny, nz), depth;
     if (length >= radius) return null;
     if (length > 0.000001) { nx /= length; ny /= length; nz /= length; depth = radius - length; }
     else {
-      const sx = box.hx - Math.abs(lx), sy = box.hy - Math.abs(ly), sz = box.hz - Math.abs(lz);
-      if (sx <= sy && sx <= sz) { nx = lx < 0 ? -1 : 1; ny = 0; nz = 0; depth = radius + sx; }
-      else if (sy <= sz) { nx = 0; ny = ly < 0 ? -1 : 1; nz = 0; depth = radius + sy; }
-      else { nx = 0; ny = 0; nz = lz < 0 ? -1 : 1; depth = radius + sz; }
+      const sy = box.hy - Math.abs(ly);
+      if (cylinder) {
+        const side = cylinderRadius - radial;
+        if (side <= sy) { nx = radial > 0.000001 ? lx / radial : 1; ny = 0; nz = radial > 0.000001 ? lz / radial : 0; depth = radius + side; }
+        else { nx = 0; ny = ly < 0 ? -1 : 1; nz = 0; depth = radius + sy; }
+      } else {
+        const sx = box.hx - Math.abs(lx), sz = box.hz - Math.abs(lz);
+        if (sx <= sy && sx <= sz) { nx = lx < 0 ? -1 : 1; ny = 0; nz = 0; depth = radius + sx; }
+        else if (sy <= sz) { nx = 0; ny = ly < 0 ? -1 : 1; nz = 0; depth = radius + sy; }
+        else { nx = 0; ny = 0; nz = lz < 0 ? -1 : 1; depth = radius + sz; }
+      }
     }
-    return { x: nx * box.c - nz * box.s, y: ny, z: nx * box.s + nz * box.c, depth };
+    return { x: nx * m[0] + ny * m[1] + nz * m[2], y: nx * m[3] + ny * m[4] + nz * m[5], z: nx * m[6] + ny * m[7] + nz * m[8], depth };
   }
 
-  function horizontalBox(point, radius, box) {
+  function horizontalBox(point, radius, box, landedHeight = point.y) {
+    // Grounded recovery only needs clearance from volumes that could reach
+    // the standing person. A flying car overhead must not push them sideways.
+    // A person who actually landed on an elevated roof must leave its edge
+    // before getting up on the ground. People beneath it keep their clearance.
+    if ((box.y - box.extentY >= 1.75 && landedHeight < box.y) || box.y + box.extentY <= FLOOR) return null;
+    const m = box.basis, forward = Math.hypot(m[0], m[6]);
+    if (box.shape === 'cylinder' && Math.abs(m[4]) > 0.9999) {
+      const dx = point.x - box.x, dz = point.z - box.z, length = Math.hypot(dx, dz), depth = radius + Math.max(box.hx, box.hz) - length;
+      return depth > 0 ? { x: length > 0.000001 ? dx / length : 1, z: length > 0.000001 ? dz / length : 0, depth } : null;
+    }
+    const c = forward > 0.000001 ? m[0] / forward : 1, s = forward > 0.000001 ? m[6] / forward : 0;
+    const hx = Math.abs(c * m[0] + s * m[6]) * box.hx + Math.abs(c * m[1] + s * m[7]) * box.hy + Math.abs(c * m[2] + s * m[8]) * box.hz;
+    const hz = Math.abs(-s * m[0] + c * m[6]) * box.hx + Math.abs(-s * m[1] + c * m[7]) * box.hy + Math.abs(-s * m[2] + c * m[8]) * box.hz;
     const dx = point.x - box.x, dz = point.z - box.z;
-    const lx = dx * box.c + dz * box.s, lz = -dx * box.s + dz * box.c;
-    let nx = lx - clamp(lx, -box.hx, box.hx), nz = lz - clamp(lz, -box.hz, box.hz);
+    const lx = dx * c + dz * s, lz = -dx * s + dz * c;
+    let nx = lx - clamp(lx, -hx, hx), nz = lz - clamp(lz, -hz, hz);
     const length = Math.hypot(nx, nz);
     if (length >= radius) return null;
     let depth;
     if (length > 0.000001) { nx /= length; nz /= length; depth = radius - length; }
-    else if (box.hx - Math.abs(lx) < box.hz - Math.abs(lz)) { nx = lx < 0 ? -1 : 1; nz = 0; depth = radius + box.hx - Math.abs(lx); }
-    else { nx = 0; nz = lz < 0 ? -1 : 1; depth = radius + box.hz - Math.abs(lz); }
-    return { x: nx * box.c - nz * box.s, z: nx * box.s + nz * box.c, depth };
+    else if (hx - Math.abs(lx) < hz - Math.abs(lz)) { nx = lx < 0 ? -1 : 1; nz = 0; depth = radius + hx - Math.abs(lx); }
+    else { nx = 0; nz = lz < 0 ? -1 : 1; depth = radius + hz - Math.abs(lz); }
+    return { x: nx * c - nz * s, z: nx * s + nz * c, depth };
   }
 
   function contactVelocity(j, normal, box, friction = 0.06, bounce = 0.10) {
-    let vx = (j.x - j.px) / STEP - box.vx, vy = (j.y - j.py) / STEP, vz = (j.z - j.pz) / STEP - box.vz;
+    const dx = j.x - finite(box.x), dy = j.y - finite(box.y), dz = j.z - finite(box.z);
+    const surfaceX = finite(box.vx) + finite(box.wy) * dz - finite(box.wz) * dy;
+    const surfaceY = finite(box.vy) + finite(box.wz) * dx - finite(box.wx) * dz;
+    const surfaceZ = finite(box.vz) + finite(box.wx) * dy - finite(box.wy) * dx;
+    let vx = (j.x - j.px) / STEP - surfaceX, vy = (j.y - j.py) / STEP - surfaceY, vz = (j.z - j.pz) / STEP - surfaceZ;
     const into = vx * normal.x + vy * normal.y + vz * normal.z;
     if (into < 0) { vx -= normal.x * into * (1 + bounce); vy -= normal.y * into * (1 + bounce); vz -= normal.z * into * (1 + bounce); }
     const outward = Math.max(0, vx * normal.x + vy * normal.y + vz * normal.z);
-    vx = vx * (1 - friction) + normal.x * outward * friction + box.vx;
-    vy = vy * (1 - friction) + normal.y * outward * friction;
-    vz = vz * (1 - friction) + normal.z * outward * friction + box.vz;
+    vx = vx * (1 - friction) + normal.x * outward * friction + surfaceX;
+    vy = vy * (1 - friction) + normal.y * outward * friction + surfaceY;
+    vz = vz * (1 - friction) + normal.z * outward * friction + surfaceZ;
     j.px = j.x - vx * STEP; j.py = j.y - vy * STEP; j.pz = j.z - vz * STEP;
     limitVelocity(j);
   }
@@ -169,18 +225,19 @@
         return true;
       }
       if (this.bodies.size >= this.maxBodies) return false;
-      const angle = finite(entity.angle), pose = upright(entity.x / UNIT, entity.y / UNIT, angle);
+      const angle = finite(entity.angle), elevation = clamp(finite(entity.elevation) + finite(options.height), 0, 40);
+      const pose = upright(entity.x / UNIT, entity.y / UNIT, angle, elevation);
       const joints = {};
       for (const name of JOINT_NAMES) {
         const p = pose[name], anatomy = ANATOMY[name];
-        joints[name] = { x: p.x, y: p.y + clamp(finite(options.height), 0, 8), z: p.z, px: p.x, py: p.y + clamp(finite(options.height), 0, 8), pz: p.z, radius: anatomy[3], invMass: anatomy[4] };
+        joints[name] = { x: p.x, y: p.y, z: p.z, px: p.x, py: p.y, pz: p.z, radius: anatomy[3], invMass: anatomy[4] };
       }
       const constraints = BODYPARTS.concat(BRACES.map(([from, to]) => ({ from, to }))).map(part => ({ a: part.from, b: part.to, min: restDistance(part.from, part.to), max: restDistance(part.from, part.to) }));
       const bends = BENDS.map(([a, b, min]) => ({ a, b, min, max: restDistance(a, b) + 0.02 }));
       const body = { id: entity.id, owner: entity, angle, age: 0, phase: 'fall', recovery: 0, joints, standingPose: pose, lastImpact: 0, _points: JOINT_NAMES.map(name => joints[name]), _constraints: constraints, _bends: bends, _lastSafeX: entity.x / UNIT, _lastSafeZ: entity.y / UNIT };
       body._excluded = new Set(constraints.concat(bends).map(c => JOINT_NAMES.indexOf(c.a) + ':' + JOINT_NAMES.indexOf(c.b)));
       this.bodies.set(entity.id, body);
-      this._kick(body, impulse, 1);
+      this._kick(body, { ...impulse, y: finite(impulse.y) + finite(entity.verticalVelocity) }, 1);
       return true;
     }
 
@@ -204,7 +261,25 @@
       buildings.forEach((building, i) => {
         const height = clamp(finite(building.height, [5.3, 7, 4.5, 6.2, 8.2][i % 5]) + 0.3, 0.4, 40);
         if (![building.x, building.y, building.w, building.h].every(Number.isFinite)) return;
-        boxes.push({ x: (building.x + building.w / 2) / UNIT, z: (building.y + building.h / 2) / UNIT, y: height / 2, hx: building.w / UNIT / 2, hy: height / 2, hz: building.h / UNIT / 2, c: 1, s: 0, vx: 0, vz: 0, dynamic: false });
+        boxes.push(prepareBox({ x: (building.x + building.w / 2) / UNIT, z: (building.y + building.h / 2) / UNIT, y: height / 2, hx: building.w / UNIT / 2, hy: height / 2, hz: building.h / UNIT / 2, angle: 0, dynamic: false }));
+      });
+      (environment.staticObjects || []).forEach(object => {
+        if (!object || !Number.isFinite(object.x) || !Number.isFinite(object.y)) return;
+        // Trunks, benches, and lamp posts use the same compound solid volumes
+        // as the car world. Offsets and half-extents are already in metres.
+        const parts = Array.isArray(object.parts) ? object.parts : [{
+          offset: [0, finite(object.height, 1) / 2, 0],
+          half: [finite(object.width, 10) / UNIT / 2, finite(object.height, 1) / 2, finite(object.depth, 10) / UNIT / 2]
+        }];
+        const basis = boxBasis(object.orientation, finite(object.angle));
+        for (const part of parts) {
+          if (!part || !Array.isArray(part.offset) || !Array.isArray(part.half) || part.offset.length !== 3 || part.half.length !== 3 || !part.offset.concat(part.half).every(Number.isFinite) || part.half.some(n => n <= 0)) continue;
+          const [ox, oy, oz] = part.offset;
+          boxes.push(prepareBox({ x: object.x / UNIT + ox * basis[0] + oy * basis[1] + oz * basis[2],
+            y: finite(object.elevation) + ox * basis[3] + oy * basis[4] + oz * basis[5],
+            z: object.y / UNIT + ox * basis[6] + oy * basis[7] + oz * basis[8],
+            hx: part.half[0], hy: part.half[1], hz: part.half[2], shape: part.shape, angle: finite(object.angle), orientation: object.orientation, dynamic: false }));
+        }
       });
       for (const car of (environment.cars || []).concat(environment.police || [])) {
         if (!car || !Number.isFinite(car.x) || !Number.isFinite(car.y) || seen.has(car.id || car)) continue;
@@ -213,14 +288,18 @@
         const angle = finite(car.angle), length = clamp(finite(car.colliderLength, finite(car.length, dimension[0])), 10, 120) / UNIT;
         const width = clamp(finite(car.colliderWidth, finite(car.width, dimension[1])), 8, 80) / UNIT;
         const height = clamp(finite(car.colliderHeight, dimension[2]), 0.5, 4), c = Math.cos(angle), s = Math.sin(angle);
-        boxes.push({ x: car.x / UNIT, z: car.y / UNIT, y: (height + 0.13) / 2, hx: length / 2, hy: (height - 0.13) / 2, hz: width / 2, c, s, vx: clamp(finite(car.vx, finite(car.speed) * c) / UNIT, -20, 20), vz: clamp(finite(car.vy, finite(car.speed) * s) / UNIT, -20, 20), dynamic: true });
+        // The rigid body is centred at elevation + height/2. Older yaw-only
+        // callers retain their wheel clearance above the ground.
+        const bottom = car.orientation ? 0 : 0.13;
+        boxes.push(prepareBox({ x: car.x / UNIT, z: car.y / UNIT, y: finite(car.elevation) + (height + bottom) / 2, hx: length / 2, hy: (height - bottom) / 2, hz: width / 2, angle, orientation: car.orientation,
+          vx: clamp(finite(car.vx, finite(car.speed) * c) / UNIT, -20, 20), vy: clamp(finite(car.verticalVelocity), -20, 20), vz: clamp(finite(car.vy, finite(car.speed) * s) / UNIT, -20, 20), angularVelocity: car.angularVelocity, dynamic: true }));
       }
       return boxes;
     }
 
     _nearby(body, boxes) {
       const p = body.joints.pelvis;
-      return boxes.filter(box => Math.abs(p.x - box.x) <= box.hx + box.hz + 3 && Math.abs(p.z - box.z) <= box.hx + box.hz + 3);
+      return boxes.filter(box => Math.abs(p.x - box.x) <= box.extentX + 3 && Math.abs(p.z - box.z) <= box.extentZ + 3 && Math.abs(p.y - box.y) <= box.extentY + 3);
     }
 
     _recovery(body, boxes, size) {
@@ -229,7 +308,7 @@
       // clearance. This also lets a character stand beside a stopped car.
       const centre = { x: clamp(pelvis.x, 0.45, size - 0.45), y: 0.72, z: clamp(pelvis.z, 0.45, size - 0.45) };
       for (let pass = 0; pass < 3; pass++) for (const box of boxes) {
-        const hit = horizontalBox(centre, 0.43, box);
+        const hit = horizontalBox(centre, 0.43, box, pelvis.y);
         if (!hit) continue;
         centre.x += hit.x * hit.depth; centre.z += hit.z * hit.depth;
       }
@@ -299,6 +378,8 @@
         const p = body.joints.pelvis;
         body._lastSafeX = p.x; body._lastSafeZ = p.z;
         body.owner.x = p.x * UNIT; body.owner.y = p.z * UNIT;
+        body.owner.elevation = Math.max(0, p.y - ANATOMY.pelvis[1]);
+        body.owner.verticalVelocity = (p.y - p.py) / STEP;
         for (const j of body._points) limitVelocity(j);
       }
     }
@@ -310,7 +391,7 @@
       while (this._accumulator + 1e-10 >= STEP) {
         this._simulate(boxes, size); this._accumulator -= STEP;
         for (const [id, body] of this.bodies) {
-          if (body.age + 1e-8 >= 3.8) { this.bodies.delete(id); finished.push(body); }
+          if (body.age + 1e-8 >= 3.8) { this.bodies.delete(id); body.owner.elevation = 0; body.owner.verticalVelocity = 0; finished.push(body); }
         }
       }
       return finished;

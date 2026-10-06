@@ -23,7 +23,8 @@ function makeScene() {
   });
   scene._cube = scene._geometry(new T.BoxGeometry(1, 1, 1));
   scene._sphere = scene._geometry(new T.IcosahedronGeometry(1, 1));
-  scene._cylinder = scene._geometry(new T.CylinderGeometry(1, 1, 1, 10));
+  scene._cylinder = scene._geometry(new T.CylinderGeometry(1, 1, 1, 12));
+  scene._cone = scene._geometry(new T.ConeGeometry(1, 1, 7));
   scene._player = scene._person('#7b64df', true);
   scene.scene.add(scene._player.group);
   return scene;
@@ -70,6 +71,65 @@ test('held toy visibly follows upward and downward aim and lowers when aiming st
   assert.ok(barrel().y < -0.5, 'barrel points downward while looking down');
   scene._cameraInfo.aiming = false;
   assert.ok(barrel().y < -0.95, 'idle character lowers the held toy');
+});
+
+test('a real jump lifts the whole character above the street and lands back on its feet', () => {
+  const scene = makeScene(), game = scene.game;
+  game.player.x = 900; game.player.y = 1080;
+  game.peds = [];
+  assert.equal(game.jump(), true);
+  let apex = 0;
+  for (let frame = 0; frame < 90; frame++) {
+    game.update(1 / 60, {}); scene._people(1 / 60);
+    assert.ok(Math.abs(scene._player.group.position.y - game.player.elevation - 0.03) < 0.000001);
+    apex = Math.max(apex, scene._player.group.position.y);
+    assert.equal(scene._player.group.visible, true);
+  }
+  assert.ok(apex > 1.3, 'jump has a clearly visible arc above the street');
+  assert.equal(game.player.grounded, true);
+  assert.ok(Math.abs(scene._player.group.position.y - 0.03) < 0.00001);
+});
+
+test('airborne cars render the full quaternion about the same chassis centre as physics', () => {
+  const scene = makeScene(), game = scene.game, car = game.cars[0];
+  game.cars = [car]; game.police = [];
+  car.elevation = 4.2;
+  const orientation = new T.Quaternion().setFromEuler(new T.Euler(0.45, -0.7, 0.8));
+  car.orientation = { x: orientation.x, y: orientation.y, z: orientation.z, w: orientation.w };
+  car.speed = 240; game.vehiclePhysics.sync(); scene._cars(1 / 60);
+  const model = scene._vehicles.get(car.id), body = game.vehiclePhysics.bodies.get(car.id).body;
+  model.group.updateWorldMatrix(true, true);
+  assert.ok(Math.abs(model.group.position.y - body.position.y) < 0.005, 'both systems use the body centre, including spawn clearance');
+  assert.ok(1 - Math.abs(model.group.quaternion.dot(orientation)) < 0.000001);
+  const roofLocal = new T.Vector3(-0.20, 1.22, 0);
+  const actualRoof = model.visual.localToWorld(roofLocal.clone());
+  const expectedRoof = roofLocal.clone().add(new T.Vector3(0, 0.04 - model.centerHeight, 0)).applyQuaternion(orientation).add(model.group.position);
+  assert.ok(actualRoof.distanceTo(expectedRoof) < 0.00001, 'the roof rotates around the centre rather than the road origin');
+  const uprightWheel = model.wheels[0].rotation.z;
+  scene._cars(1 / 60);
+  assert.notEqual(model.wheels[0].rotation.z, uprightWheel, 'wheel spin stays independent of the chassis rotation');
+  assert.ok(1 - Math.abs(model.group.quaternion.dot(orientation)) < 0.000001);
+  car.orientation = null; car.angle = 0.3; scene._cars(0);
+  assert.ok(Math.abs(model.group.rotation.x) < 0.00001 && Math.abs(model.group.rotation.z) < 0.00001, 'legacy yaw never inherits an old tumble');
+});
+
+test('solid street props are rendered once from the shared compound shapes and placements', () => {
+  const scene = makeScene();
+  scene._staticParts = new Map(); scene._propVolumes = []; scene._propAimMeshes = []; scene._sign = () => {};
+  scene._physicalProps();
+  const partCount = scene.game.staticObjects.reduce((sum, object) => sum + object.parts.length, 0);
+  assert.equal(scene._propAimMeshes.length, partCount, 'each physical part has one matching raycast visual');
+  assert.equal(scene._propVolumes.length, partCount);
+  let index = 0;
+  for (const object of scene.game.staticObjects) for (const part of object.parts) {
+    const mesh = scene._propAimMeshes[index++];
+    assert.ok(Math.abs(mesh.position.x - object.x / 20 - part.offset[0]) < 0.000001);
+    assert.ok(Math.abs(mesh.position.y - object.elevation - part.offset[1]) < 0.000001);
+    assert.ok(Math.abs(mesh.position.z - object.y / 20 - part.offset[2]) < 0.000001);
+    const bounds = new T.Box3().setFromObject(mesh), size = bounds.getSize(new T.Vector3());
+    assert.ok(Math.abs(size.y - part.half[1] * 2) < 0.00001, 'visual collider height uses the map shape');
+    assert.ok(Math.abs(size.x - part.half[0] * 2) < 0.025, 'visible cylinder/box uses the physical footprint');
+  }
 });
 
 test('confetti renders at the vertical shot impact while ordinary confetti keeps its ground lift', () => {

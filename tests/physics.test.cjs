@@ -19,6 +19,13 @@ function clearance(joint, box) {
   return Math.hypot(lx - Math.max(-box.hx, Math.min(box.hx, lx)), joint.y - Math.max(box.bottom || 0, Math.min(box.top, joint.y)), lz - Math.max(-box.hz, Math.min(box.hz, lz)));
 }
 
+function solidClearance(point, box) {
+  const m = box.basis, x = point.x - box.x, y = point.y - box.y, z = point.z - box.z;
+  const local = [x * m[0] + y * m[3] + z * m[6], x * m[1] + y * m[4] + z * m[7], x * m[2] + y * m[5] + z * m[8]];
+  if (box.shape === 'cylinder') return Math.hypot(Math.max(0, Math.hypot(local[0], local[2]) - Math.max(box.hx, box.hz)), Math.max(0, Math.abs(local[1]) - box.hy));
+  return Math.hypot(...local.map((value, i) => value - Math.max(-[box.hx, box.hy, box.hz][i], Math.min([box.hx, box.hy, box.hz][i], value))));
+}
+
 test('weighted articulated body has real gravity and differential angular response', () => {
   const world = new RagdollWorld(), person = entity();
   assert.equal(world.trigger(person, { x: 4, y: 0, z: 1 }, { height: 4 }), true);
@@ -91,6 +98,141 @@ test('moving vehicle transfers velocity into fallen articulated limbs', () => {
   assert.ok(run(true) > run(false) + 0.7, 'moving car pushes a downed body along its direction');
 });
 
+test('jump-height ragdolls preserve their feet elevation and upward momentum', () => {
+  const world = new RagdollWorld(), person = { ...entity('jump'), elevation: 2.4, verticalVelocity: 5 };
+  world.trigger(person);
+  const body = world.get(person.id), initial = body.joints.pelvis.y;
+  assert.equal(initial, 3.12);
+  assert.equal(body.joints.leftFoot.y, 2.565);
+  advance(world, 0.1);
+  assert.ok(body.joints.pelvis.y > initial + 0.25, 'airborne flop inherits jump velocity');
+  advance(world, 3.7);
+  assert.equal(world.bodies.size, 0);
+  assert.equal(person.elevation, 0);
+  assert.equal(person.verticalVelocity, 0);
+});
+
+test('a fully rolled, elevated vehicle excludes joints and limb interiors in its actual orientation', () => {
+  const world = new RagdollWorld(), person = entity('rolled'), roll = Math.PI / 3;
+  const car = { id: 'rolling', kind: 'compact', x: 1000, y: 1000, elevation: 0.75, colliderHeight: 1.3,
+    orientation: { x: Math.sin(roll / 2), y: 0, z: 0, w: Math.cos(roll / 2) } };
+  const box = world._colliders({ cars: [car] })[0];
+  world.trigger(person, { x: 0.8, z: 0.5 }, { height: 3 });
+  const body = world.get(person.id);
+  let closest = Infinity;
+  for (let i = 0; i < 310; i++) {
+    world.step(STEP, { cars: [car] });
+    allFinite(body);
+    for (const joint of Object.values(body.joints)) {
+      const separation = solidClearance(joint, box);
+      closest = Math.min(closest, separation - joint.radius);
+      assert.ok(separation >= joint.radius - 0.002, 'sphere clears a rolled body, not only its yaw footprint');
+    }
+    for (const part of BODYPARTS) for (const t of [1 / 3, 2 / 3]) {
+      const a = body.joints[part.from], b = body.joints[part.to];
+      const sample = { x: a.x * (1 - t) + b.x * t, y: a.y * (1 - t) + b.y * t, z: a.z * (1 - t) + b.z * t };
+      assert.ok(solidClearance(sample, box) >= part.radius - 0.035, 'bone interior clears tipped vehicle');
+    }
+  }
+  assert.ok(closest < 0.01, 'falling person actually meets the tipped car');
+});
+
+test('a high flying car does not collide with or redirect a grounded ragdoll', () => {
+  const car = { id: 'overhead', kind: 'van', x: 1000, y: 1000, elevation: 4, colliderHeight: 1.7,
+    orientation: { x: 0, y: 0, z: 0, w: 1 }, vx: 140, verticalVelocity: 2, angularVelocity: { x: 2, y: 0, z: 1 } };
+  const run = cars => {
+    const world = new RagdollWorld(), person = entity('ground');
+    world.trigger(person, { x: 0.4, z: 0.2 });
+    const body = world.get(person.id);
+    advance(world, 3.8, { cars });
+    return JOINT_NAMES.map(name => body.joints[name]);
+  };
+  assert.deepEqual(run([car]), run([]), 'both collision and get-up ignore an overhead volume');
+});
+
+test('rising and spinning vehicle surfaces transfer their full 3D contact velocity', () => {
+  const velocity = (verticalVelocity, angularVelocity) => {
+    const world = new RagdollWorld(), person = entity('surface', 1011, 1000);
+    const car = { id: 'lift', kind: 'compact', x: 1000, y: 1000, elevation: 0, colliderHeight: 1.3,
+      orientation: { x: 0, y: 0, z: 0, w: 1 }, verticalVelocity, angularVelocity };
+    world.trigger(person, {}, { height: 0.86 });
+    const body = world.get(person.id);
+    world.step(STEP, { cars: [car] });
+    return (body.joints.leftFoot.y - body.joints.leftFoot.py) / STEP;
+  };
+  assert.ok(velocity(6) > velocity(0) + 3, 'moving roof lifts contacting feet');
+  assert.ok(velocity(0, { x: 0, y: 0, z: 8 }) > velocity(0) + 1.5, 'rolling roof adds angular contact motion');
+});
+
+test('compound fixed props exclude joint spheres and limb interiors', () => {
+  const world = new RagdollWorld(), person = entity('bench', 976, 1000);
+  const bench = { id: 'bench', kind: 'bench', x: 1000, y: 1000, parts: [
+    { offset: [0, 0.48, 0], half: [0.8, 0.12, 0.3] },
+    { offset: [0, 0.81, 0.23], half: [0.8, 0.33, 0.08] },
+    { offset: [-0.58, 0.23, 0], half: [0.06, 0.23, 0.24] },
+    { offset: [0.58, 0.23, 0], half: [0.06, 0.23, 0.24] }
+  ] };
+  const boxes = world._colliders({ staticObjects: [bench] });
+  world.trigger(person, { x: 2.5, y: 2 });
+  const body = world.get(person.id);
+  let contact = false;
+  for (let i = 0; i < 300; i++) {
+    world.step(STEP, { staticObjects: [bench] });
+    for (const box of boxes) {
+      for (const joint of Object.values(body.joints)) {
+        const gap = solidClearance(joint, box) - joint.radius;
+        contact ||= gap < 0.01;
+        assert.ok(gap >= -0.002, 'sphere clears fixed bench');
+      }
+      for (const part of BODYPARTS) for (const t of [1 / 3, 2 / 3]) {
+        const a = body.joints[part.from], b = body.joints[part.to];
+        const sample = { x: a.x * (1 - t) + b.x * t, y: a.y * (1 - t) + b.y * t, z: a.z * (1 - t) + b.z * t };
+        assert.ok(solidClearance(sample, box) >= part.radius - 0.04, 'limb interior clears fixed bench');
+      }
+    }
+  }
+  assert.ok(contact, 'the airborne body actually lands against the bench');
+});
+
+test('get-up chooses ground clearance beside a tipped vehicle', () => {
+  const world = new RagdollWorld(), person = entity('tipped'), roll = Math.PI / 2;
+  const car = { id: 'tipped-van', kind: 'van', x: 1000, y: 1000, elevation: 0.1, colliderHeight: 1.7,
+    orientation: { x: Math.sin(roll / 2), y: 0, z: 0, w: Math.cos(roll / 2) } };
+  const box = world._colliders({ cars: [car] })[0];
+  world.trigger(person, {}, { height: 2 });
+  const body = world.get(person.id);
+  advance(world, 3.8, { cars: [car] });
+  assert.equal(world.bodies.size, 0);
+  assert.equal(person.elevation, 0);
+  for (const joint of Object.values(body.joints)) assert.ok(solidClearance(joint, box) >= joint.radius - 0.002, 'recovered pose clears tipped body');
+  assert.ok(body.joints.pelvis.y < 1, 'recovered feet are on the ground');
+});
+
+test('round fixed posts collide as cylinders without filling their bounding-box corners', () => {
+  const post = { id: 'post', kind: 'tree', x: 1000, y: 1000, parts: [{ shape: 'cylinder', offset: [0, 1.5, 0], half: [0.5, 1.5, 0.5] }] };
+  const run = staticObjects => {
+    const world = new RagdollWorld(), person = entity('corner', 1011, 1011);
+    world.trigger(person);
+    world.step(STEP, { staticObjects });
+    return JOINT_NAMES.map(name => world.get(person.id).joints[name]);
+  };
+  assert.deepEqual(run([post]), run([]), 'a diagonal point clears the circular post, even inside its square bounds');
+  const world = new RagdollWorld(), person = entity('trunk', 977, 1000);
+  const box = world._colliders({ staticObjects: [post] })[0];
+  world.trigger(person, { x: 4, y: 2 });
+  const body = world.get(person.id);
+  let contact = false;
+  for (let i = 0; i < 220; i++) {
+    world.step(STEP, { staticObjects: [post] });
+    for (const joint of Object.values(body.joints)) {
+      const gap = solidClearance(joint, box) - joint.radius;
+      contact ||= gap < 0.01;
+      assert.ok(gap >= -0.002, 'joint clears the real cylindrical trunk');
+    }
+  }
+  assert.ok(contact, 'the body actually hits the post');
+});
+
 test('physical recovery returns near landing location and retires body once', () => {
   const world = new RagdollWorld(), person = entity();
   world.trigger(person, { x: 4, y: 2, z: 1 });
@@ -118,6 +260,23 @@ test('a body that lands on a parked roof gets up beside the car', () => {
   assert.equal(world.bodies.size, 0);
   assert.ok(Math.abs(body.joints.pelvis.x - 50) > 1.15 || Math.abs(body.joints.pelvis.z - 50) > 0.675, 'ground position leaves the vehicle footprint');
   assert.ok(body.joints.pelvis.y < 1, 'body returns to ground height before retiring');
+});
+
+test('recovery leaves a high car roof before returning the owner to ground height', () => {
+  const world = new RagdollWorld(), person = entity('high-roof');
+  const car = { id: 'high-ride', kind: 'compact', x: 1000, y: 1000, elevation: 4, colliderHeight: 1.3, orientation: { x: 0, y: 0, z: 0, w: 1 } };
+  const box = world._colliders({ cars: [car] })[0];
+  world.trigger(person, {}, { height: 6 });
+  const body = world.get(person.id);
+  advance(world, 2.9, { cars: [car] });
+  assert.ok(body.joints.pelvis.y > 5.2, 'the fixture actually lands on the elevated roof');
+  const finished = advance(world, 0.9, { cars: [car] });
+  assert.equal(finished.length, 1);
+  assert.equal(person.elevation, 0);
+  assert.ok(Math.abs(body.joints.pelvis.x - box.x) > box.hx || Math.abs(body.joints.pelvis.z - box.z) > box.hz, 'get-up chooses beside the high roof instead of underneath it');
+  assert.ok(body.joints.pelvis.y < 0.95, 'the get-up motor reaches the ground before retiring');
+  assert.ok(body.joints.leftFoot.y < 0.35 && body.joints.rightFoot.y < 0.35, 'feet finish at standing ground height');
+  for (const joint of Object.values(body.joints)) assert.ok(solidClearance(joint, box) >= joint.radius - 0.002, 'final standing pose clears the elevated vehicle');
 });
 
 test('capacity, retrigger cooldown, and sanitization bound repeated impacts', () => {

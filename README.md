@@ -6,7 +6,7 @@ A for-fun, original, GTA-inspired third-person 3D driving sandbox. Borrow a car,
 
 ## Play
 
-Open **index.html** in a desktop browser with WebGL 2 support. The game uses local HTML, CSS, JavaScript, procedurally modeled art, and synthesized sound. Its Three.js engine is bundled in **vendor/three.min.js**. No installation, backend, account, or network connection is required to play.
+Open **index.html** in a desktop browser with WebGL 2 support. The game uses local HTML, CSS, JavaScript, procedurally modeled art, and synthesized sound. Its Three.js renderer and Cannon physics engine are bundled locally under **vendor/**. No installation, backend, account, or network connection is required to play.
 
 Use a desktop keyboard and mouse with a WebGL 2 capable browser. If the game cannot create its 3D view, it shows a reload prompt; check that browser hardware acceleration is enabled.
 
@@ -30,25 +30,26 @@ The layout adapts to small screens, but touch controls and gamepads are not impl
 | Left-click | Fire the equipped popper/cannon or swing the hammer on foot |
 | C | Recenter the camera behind you |
 | E | Borrow/exit a nearby car; use the car wash |
-| Space | Handbrake/drift while driving |
+| Space | Jump on foot; handbrake/drift while driving |
 | Hold Tab | Open the toy wheel; hover, use arrows, or press 1–3; release Tab to equip |
 | I | Open pockets to use supplies or shop for supplies and toys |
 | G | Browse your garage collection; store, retrieve, or repaint at Sprinkle Garage |
 | Shift | Boost in a car; sprint on foot |
 | H | Horn; start a party at a party mission ring |
 | F | Dramatic ragdoll flop on foot; stand up automatically |
-| R | Recover to a safe road position |
+| R | Recover to a safe road position; right a flipped car |
 | P / Esc | Pause/resume; Esc also releases the mouse |
 
-Click the town to capture the mouse and start looking around. Your first click captures the mouse without firing a toy. Hold right mouse to aim toward the center crosshair; left-click uses the toy on foot, with or without aiming. Space remains the driving handbrake. Esc releases the mouse and pauses. Opening a menu also releases it and freezes the town; click the town again after closing the menu. Changing tabs or windows pauses the game. Sound, reduced motion, and full screen controls are in the header. Open help (?) to adjust look sensitivity or invert up/down; camera preferences stay in this browser.
+Click the town to capture the mouse and start looking around. Your first click captures the mouse without firing a toy. Hold right mouse to aim toward the center crosshair; left-click uses the toy on foot, with or without aiming. Space jumps on foot and remains the driving handbrake. Release it before jumping again. Esc releases the mouse and pauses. Opening a menu also releases it and freezes the town; click the town again after closing the menu. Changing tabs or windows pauses the game. Sound, reduced motion, and full screen controls are in the header. Open help (?) to adjust look sensitivity or invert up/down; camera preferences stay in this browser.
 
 ## The toybox
 
-- **Driving:** compact, sports car, and van handling; traffic; forgiving impacts; drifting and near-miss style points.
+- **Driving:** compact, sports car, and van handling; traffic; drifting and near-miss style points. Cars are three-dimensional rigid bodies with gravity: impacts can bounce, lift, roll, or flip them before they land. Press R to right your ride and return to a safe road position.
+- **Jumping:** press Space on foot for a jump with gravity and a landing, including onto low solid surfaces. Holding Space does not repeatedly jump; left-click remains the toy action.
 - **Third-person camera:** mouse movement looks around on foot, with a closer shoulder view and slower sensitivity while aiming. The driving camera follows smoothly and gives you time to look around before returning behind the car. Buildings shorten the camera distance to keep the view clear. Press C whenever you want to recenter.
 - **Navigation:** glowing 3D mission markers, an objective direction/distance indicator, and a separate overhead minimap.
 - **Ragdolls:** car impacts and confetti send residents tumbling. The player can take a tumble too. Jointed bodies fall, bounce, slide, and get back up; press F to try it or R to recover immediately.
-- **Solid contacts:** vehicles use their rotated footprints against buildings and other vehicles. People bump into vehicles and each other, and fallen limbs collide with the ground, walls, and cars.
+- **Solid contacts:** vehicle bodies collide with the ground, building walls, other cars, and fixed props: tree trunks, lamp posts, park benches/fountain, garage kiosk, and car wash frame. Contacts account for height and the full vehicle rotation, with an elastic arcade bounce. People bump into vehicles and each other, and fallen limbs collide with the ground, walls, and cars.
 - **Disco Delivery:** reach pickup, then deliver the imaginary disco ball.
 - **Checkpoint Dash:** drive through a sequence of glowing rings.
 - **Party Route:** visit the marked neighborhoods and honk at each ring.
@@ -63,7 +64,7 @@ Contract timers determine bonuses. Finishing overtime still pays the base reward
 
 The toy wheel and pocket/collection menus freeze the town and mission timer. Browse your collection anywhere, then visit **GARAGE** on the minimap to make purchases or manage rides. Biscuits cost $15, tape costs $35, and refill packs cost $30. Press I or G again, or Escape, to close the menu. Touch driving remains outside this prototype.
 
-The [gameplay design](DESIGN.md) explains the intended loops, tuning, scope, and next playtest questions. This is a small playable slice with simple traffic and patrol AI. Driving and upright movement use flat streets, while ragdolls have vertical gravity and three-dimensional joint contacts. Decorative trees, lamps, and curbs remain scenery. There are no stairs, jumps, or building interiors.
+The [gameplay design](DESIGN.md) explains the intended loops, tuning, scope, and next playtest questions. This is a small playable slice with simple traffic and patrol AI. The town uses a flat road layout, while vehicles can leave the ground and rotate in three dimensions. On-foot jumping and ragdolls have vertical gravity. Fixed street/park obstacles have collision shapes. There are no stairs, elevated road routes, or building interiors.
 
 The [story campaign design](CAMPAIGN.md) specifies **Operation Unboring**, a proposed ten-job campaign beginning with Spanner's phone call and directions to Sprinkle Garage. Its first playable milestone is the call, the drive, and the garage meeting; campaign gameplay is planned for a later build.
 
@@ -77,9 +78,9 @@ The checked-in engine bundle is ready to play. You do not need npm or a build st
 npm run check
 ```
 
-This runs JavaScript syntax checks, deterministic simulation tests, and camera and ragdoll regression tests. `tools/browser-check.cjs` adds optional Playwright checks with headless Chrome; it requires a separately available Playwright installation, using `PLAYWRIGHT_MODULE_PATH` if necessary. Run it with `node tools/browser-check.cjs`. Browser evidence is ignored by Git.
+This runs JavaScript syntax checks, deterministic simulation tests, and camera, vehicle physics, jump, and ragdoll regression tests. `tools/browser-check.cjs` adds optional Playwright checks with headless Chrome; it requires a separately available Playwright installation, using `PLAYWRIGHT_MODULE_PATH` if necessary. Run it with `node tools/browser-check.cjs`. Browser evidence is ignored by Git.
 
-If you change or upgrade the engine, recreate the locally bundled Three.js file with:
+If you change or upgrade the engine, recreate the locally bundled rendering and physics engines with:
 
 ```sh
 npm ci
@@ -89,12 +90,16 @@ npm run vendor
 | File | Responsibility |
 | --- | --- |
 | core.js | Simulation, map, traffic, police, contracts, inventory, garage, rewards, and save validation |
+| vehicle-physics.js | Cannon vehicle bodies, gravity, orientation, elastic contacts, and fixed obstacle shapes |
 | physics.js | Ragdoll joints, gravity, contacts, and automatic get-up |
 | scene3d.js | Three.js world, models, perspective camera, lighting, and visual effects |
 | game.js | Fixed-step game loop, input, audio, persistence, HUD, and minimap |
-| vendor/three.min.js | Bundled Three.js engine for offline and file-open play |
+| vendor/three.min.js | Bundled Three.js renderer for offline and file-open play |
+| vendor/cannon.min.js / vendor/cannon.cjs | Bundled Cannon physics engine for browser play and Node checks |
 | index.html / styles.css | Responsive interface and controls |
-| tests/*.test.cjs | Simulation, inventory, garage, camera, and ragdoll regression checks |
+| tests/*.test.cjs | Simulation, inventory, garage, camera, vehicle physics, jump, and ragdoll regression checks |
 | tools/serve.cjs | Optional static development server |
 
 Next priorities: playtest toy reach and the garage economy, tune chases, add touch/gamepad controls, then add route variety and cosmetic rewards.
+
+Version 0.6.0 adds on-foot jumping and three-dimensional vehicle physics with elastic impacts, airborne rotation, fixed prop collisions, and flipped-car recovery.

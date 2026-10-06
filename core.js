@@ -29,6 +29,7 @@
   const finite = (n, fallback) => typeof n === 'number' && Number.isFinite(n) ? n : fallback;
   const numeric = (n, fallback, min, max) => clamp(Math.floor(finite(n, fallback)), min, max);
   const Physics = root.MayhemPhysics || (typeof require === 'function' ? require('./physics.js') : null);
+  const VehiclePhysics = root.MayhemVehiclePhysics || (typeof require === 'function' ? require('./vehicle-physics.js') : null);
 
   // Cars keep arcade steering on the ground, with contacts matching their
   // rendered rectangular footprint rather than an undersized bounding circle.
@@ -83,13 +84,14 @@
       this.graceTimer = 2;
       this.mission = null;
       this.missionStats = { elapsed: 0, collisions: 0, style: 0, overtime: false };
-      this.player = { id: 'player', x: 884, y: 1080, angle: -Math.PI / 2, vehicleId: null, composure: 100, ragdollGrace: 0, stunned: 0, bubble: '', bubbleTimer: 0 };
+      this.player = { id: 'player', x: 884, y: 1080, angle: -Math.PI / 2, vehicleId: null, composure: 100, ragdollGrace: 0, stunned: 0, bubble: '', bubbleTimer: 0, elevation: 0, verticalVelocity: 0, grounded: true };
       this.ragdolls = new Physics.RagdollWorld();
       this.physics = this.ragdolls;
       this.cars = [];
       this.peds = [];
       this.police = [];
       this.buildings = [];
+      this.staticObjects = [];
       this.particles = [];
       this.projectiles = [];
       this.skidMarks = [];
@@ -105,6 +107,8 @@
       this._driftTime = 0;
       this._nearMisses = new Map();
       this._makeTown();
+      this._makeStreetObjects();
+      this.vehiclePhysics = new VehiclePhysics.VehicleWorld(this, CAR_TYPES);
     }
 
     get current() { return this.cars.find(car => car.id === this.player.vehicleId) || this.player; }
@@ -113,7 +117,8 @@
     get garageAvailable() {
       const garage = this.services.find(service => service.id === 'garage');
       return Boolean(garage && distance(this.current, garage) < 115 &&
-        (!this.player.vehicleId || Math.abs(this.current.speed) <= 45) && !this.ragdolls.get(this.player.id));
+        (!this.player.vehicleId || Math.abs(this.current.speed) <= 45 && this.current.upright !== false && this.current.elevation < 0.16) &&
+        this.player.elevation < 0.16 && !this.ragdolls.get(this.player.id));
     }
 
     _random() { this._seed = (Math.imul(this._seed, 1664525) + 1013904223) >>> 0; return this._seed / 4294967296; }
@@ -146,14 +151,32 @@
     }
 
     _addCar(x, y, angle, kind, color, traffic = false) {
-      const car = { id: 'car-' + this._nextId++, x, y, angle, speed: 0, health: this.maxHealth, color, kind, traffic, vx: 0, vy: 0, borrowed: false, route: [] };
+      const car = { id: 'car-' + this._nextId++, x, y, angle, speed: 0, health: this.maxHealth, color, kind, traffic, vx: 0, vy: 0, borrowed: false, route: [], elevation: 0, verticalVelocity: 0, grounded: true, upright: true };
       this.cars.push(car);
       return car;
     }
 
+    _makeStreetObjects() {
+      const add = (kind, x, y, parts, extra = {}) => {
+        const width = Math.max(...parts.map(p => Math.abs(p.offset[0]) + p.half[0])) * 40;
+        const depth = Math.max(...parts.map(p => Math.abs(p.offset[2]) + p.half[2])) * 40;
+        const height = Math.max(...parts.map(p => p.offset[1] + p.half[1]));
+        this.staticObjects.push({ id: kind + '-' + this.staticObjects.length, kind, x: x * 20, y: y * 20, elevation: 0, width, depth, height, parts, ...extra });
+      };
+      const box = (half, offset) => ({ half, offset });
+      const cylinder = (radius, halfHeight, offset) => ({ shape: 'cylinder', half: [radius, halfHeight, radius], offset });
+      add('fountain', 54, 54, [cylinder(1.65, 0.25, [0, 0.35, 0]), cylinder(0.18, 0.65, [0, 0.95, 0]), cylinder(0.78, 0.09, [0, 1.36, 0])]);
+      [[49.7,49.6],[58.2,49.6],[49.7,58.3],[58.2,58.3]].forEach(([x,y], i) => add('tree', x, y, [cylinder(0.147, 0.735, [0,0.735,0])], { scale: 1.05, variety: i }));
+      for (const [x,y] of [[50.95,49.6],[56.95,49.6],[50.95,58.3],[56.95,58.3]]) add('bench', x, y, [box([0.7,0.075,0.225],[0,0.44,0]),box([0.7,0.27,0.065],[0,0.83,0.21])]);
+      for (const x of ROAD_CENTERS) for (const y of ROAD_CENTERS) if ((Math.round(x / 360) + Math.round(y / 360)) % 2 === 0) add('lamp', x / 20 + 3.14, y / 20 + 3.2, [cylinder(0.075,1.9,[0,1.9,0]),box([0.45,0.06,0.05],[-0.4,3.65,0]),box([0.25,0.07,0.18],[-0.82,3.59,0])]);
+      add('garage', 47.1, 46.8, [box([0.95,0.9,0.65],[0,0.9,0]),box([1.05,0.09,0.75],[0,1.88,0])]);
+      add('wash',81,102.35,[box([0.13,1.25,0.13],[-2.25,1.25,0]),box([0.13,1.25,0.13],[2.25,1.25,0]),box([2.4,0.175,0.325],[0,2.55,0])]);
+    }
+
     _isFree(x, y, radius = 10) {
       if (x < radius || y < radius || x > SIZE - radius || y > SIZE - radius) return false;
-      return !this.buildings.some(b => Math.hypot(x - clamp(x, b.x, b.x + b.w), y - clamp(y, b.y, b.y + b.h)) < radius);
+      return !this.buildings.some(b => Math.hypot(x - clamp(x, b.x, b.x + b.w), y - clamp(y, b.y, b.y + b.h)) < radius) &&
+        !this._staticParts().some(part => part.bottom < 1.7 && this._circlePart({ x, y }, radius, part));
     }
 
     _vehicles() { return this.cars.concat(this.police); }
@@ -164,6 +187,7 @@
     }
 
     _vehicleContact(a, b) {
+      if (!this._heightOverlap(a, b, VehiclePhysics.height(a), VehiclePhysics.height(b))) return null;
       const ta = CAR_TYPES[a.kind] || CAR_TYPES.compact, tb = CAR_TYPES[b.kind] || CAR_TYPES.compact;
       const reach = (Math.hypot(ta.length, ta.width) + Math.hypot(tb.length, tb.width)) / 2;
       if ((a.x - b.x) ** 2 + (a.y - b.y) ** 2 > reach * reach) return null;
@@ -175,26 +199,52 @@
       const ex = Math.abs(box.axes[0].x) * box.half[0] + Math.abs(box.axes[1].x) * box.half[1];
       const ey = Math.abs(box.axes[0].y) * box.half[0] + Math.abs(box.axes[1].y) * box.half[1];
       return entity.x >= ex && entity.x <= SIZE - ex && entity.y >= ey && entity.y <= SIZE - ey &&
-        !this.buildings.some(b => boxContact(box, orientedBox({ x: b.x + b.w / 2, y: b.y + b.h / 2, angle: 0 }, b.w, b.h)));
+        !this.buildings.some(b => boxContact(box, orientedBox({ x: b.x + b.w / 2, y: b.y + b.h / 2, angle: 0 }, b.w, b.h))) &&
+        !this._staticParts().some(part => part.bottom < VehiclePhysics.height(entity) && boxContact(box, part.box));
+    }
+
+    _heightOverlap(a, b, ah = 1.7, bh = 1.7) {
+      const ay = finite(a.elevation, 0), by = finite(b.elevation, 0);
+      return ay < by + bh - 0.025 && ay + ah > by + 0.025;
+    }
+
+    _staticParts() {
+      if (this._streetParts && this._streetObjects === this.staticObjects) return this._streetParts;
+      this._streetObjects = this.staticObjects;
+      return this._streetParts = this.staticObjects.flatMap(object => object.parts.map(part => {
+        const angle = object.angle || 0, c = Math.cos(angle), s = Math.sin(angle);
+        const x = object.x + (part.offset[0] * c - part.offset[2] * s) * 20;
+        const y = object.y + (part.offset[0] * s + part.offset[2] * c) * 20;
+        return { box: orientedBox({ x, y, angle }, part.half[0] * 40, part.half[2] * 40),
+          bottom: part.offset[1] - part.half[1], top: part.offset[1] + part.half[1], cylinder: part.shape === 'cylinder' };
+      }));
+    }
+
+    _circlePart(entity, radius, part) {
+      const box = part.box, dx = entity.x - box.x, dy = entity.y - box.y;
+      let u = dx * box.axes[0].x + dy * box.axes[0].y, v = dx * box.axes[1].x + dy * box.axes[1].y;
+      if (part.cylinder) {
+        const d = Math.hypot(u, v), depth = radius + box.half[0] - d;
+        if (depth <= 0) return null;
+        return { nx: d > 0.001 ? dx / d : 1, ny: d > 0.001 ? dy / d : 0, depth };
+      }
+      const nearestU = clamp(u, -box.half[0], box.half[0]), nearestV = clamp(v, -box.half[1], box.half[1]);
+      let rx = u - nearestU, ry = v - nearestV, d = Math.hypot(rx, ry), depth = radius - d;
+      if (depth <= 0) return null;
+      if (d < 0.001) {
+        if (box.half[0] - Math.abs(u) < box.half[1] - Math.abs(v)) { rx = u < 0 ? -1 : 1; ry = 0; depth = box.half[0] - Math.abs(u) + radius; }
+        else { rx = 0; ry = v < 0 ? -1 : 1; depth = box.half[1] - Math.abs(v) + radius; }
+        d = 1;
+      }
+      return { nx: (rx * box.axes[0].x + ry * box.axes[1].x) / d, ny: (rx * box.axes[0].y + ry * box.axes[1].y) / d, depth };
     }
 
     _personVehicleContact(person, vehicle, radius = person === this.player ? 10 : 7) {
       const type = CAR_TYPES[vehicle.kind] || CAR_TYPES.compact;
       const reach = Math.hypot(type.length, type.width) / 2 + radius;
       if ((person.x - vehicle.x) ** 2 + (person.y - vehicle.y) ** 2 > reach * reach) return null;
-      const box = this._vehicleBox(vehicle), dx = person.x - box.x, dy = person.y - box.y;
-      const u = dx * box.axes[0].x + dy * box.axes[0].y, v = dx * box.axes[1].x + dy * box.axes[1].y;
-      const cu = clamp(u, -box.half[0], box.half[0]), cv = clamp(v, -box.half[1], box.half[1]);
-      const rx = u - cu, ry = v - cv, d = Math.hypot(rx, ry);
-      if (d >= radius) return null;
-      let nx, ny, depth;
-      if (d > 0.0001) { nx = rx / d; ny = ry / d; depth = radius - d; }
-      else {
-        const ex = box.half[0] - Math.abs(u), ey = box.half[1] - Math.abs(v);
-        if (ex < ey) { nx = u < 0 ? -1 : 1; ny = 0; depth = ex + radius; }
-        else { nx = 0; ny = v < 0 ? -1 : 1; depth = ey + radius; }
-      }
-      return { nx: nx * box.axes[0].x + ny * box.axes[1].x, ny: nx * box.axes[0].y + ny * box.axes[1].y, depth };
+      const entry = this.vehiclePhysics && this.vehiclePhysics.bodies.get(vehicle.id);
+      return VehiclePhysics.personContact(person, entry && entry.snapshot.angle !== vehicle.angle ? { ...vehicle, orientation: null } : vehicle, radius, type);
     }
 
     _standingPeople() {
@@ -216,10 +266,17 @@
         for (const vehicle of vehicles) {
           const hit = this._personVehicleContact(entity, vehicle, radius);
           if (!hit) continue;
+          if (hit.vertical) {
+            entity.elevation = Math.max(0, finite(entity.elevation, 0) + hit.up * hit.depth / 20);
+            if (entity.verticalVelocity * hit.up < 0) entity.verticalVelocity = 0;
+            if (hit.up > 0) entity.grounded = true;
+            changed = collision = true; continue;
+          }
           entity.x += hit.nx * (hit.depth + 0.001); entity.y += hit.ny * (hit.depth + 0.001); changed = collision = true;
         }
         for (const other of people) {
           if (other === entity) continue;
+          if (!this._heightOverlap(entity, other)) continue;
           const otherRadius = other === this.player ? 10 : 7;
           const dx = entity.x - other.x, dy = entity.y - other.y, d = Math.hypot(dx, dy), depth = radius + otherRadius - d;
           if (depth <= 0) continue;
@@ -272,11 +329,11 @@
     }
 
     _vehiclePeople(entity, velocityX, velocityY) {
-      const speed = Math.hypot(velocityX, velocityY);
+      const speed = Math.hypot(velocityX, velocityY, finite(entity.verticalVelocity, 0) * 20);
       for (const person of this._standingPeople()) {
         const hit = this._personVehicleContact(person, entity);
         if (!hit) continue;
-        person.x += hit.nx * (hit.depth + 0.002); person.y += hit.ny * (hit.depth + 0.002);
+        if (!hit.vertical) { person.x += hit.nx * (hit.depth + 0.002); person.y += hit.ny * (hit.depth + 0.002); }
         this._moveCircleBuildings(person, 0, 0, person === this.player ? 10 : 7);
         if (speed > 35 && !(person.ragdollGrace > 0) && (person !== this.player || this.graceTimer <= 0)) {
           const kick = clamp(speed / 20 * 0.58 + 1.2, 2.5, 11);
@@ -307,6 +364,7 @@
       for (let pass = 0; pass < 3; pass++) {
         let changed = false;
         for (const b of this.buildings) {
+          if (!this._heightOverlap(entity, { elevation: 0 }, 1.7, b.height)) continue;
           if (entity.x + radius <= b.x || entity.x - radius >= b.x + b.w || entity.y + radius <= b.y || entity.y - radius >= b.y + b.h) continue;
           const nx = clamp(entity.x, b.x, b.x + b.w), ny = clamp(entity.y, b.y, b.y + b.h);
           const rx = entity.x - nx, ry = entity.y - ny, d = Math.hypot(rx, ry);
@@ -317,6 +375,11 @@
             const edges = [{ amount: entity.x - b.x, x: b.x - radius, y: entity.y }, { amount: b.x + b.w - entity.x, x: b.x + b.w + radius, y: entity.y }, { amount: entity.y - b.y, x: entity.x, y: b.y - radius }, { amount: b.y + b.h - entity.y, x: entity.x, y: b.y + b.h + radius }];
             edges.sort((a, z) => a.amount - z.amount); entity.x = edges[0].x; entity.y = edges[0].y;
           }
+        }
+        for (const part of this._staticParts()) {
+          if (finite(entity.elevation, 0) >= part.top - 0.025 || finite(entity.elevation, 0) + 1.7 <= part.bottom + 0.025) continue;
+          const hit = this._circlePart(entity, radius, part);
+          if (hit) { entity.x += hit.nx * (hit.depth + 0.002); entity.y += hit.ny * (hit.depth + 0.002); changed = collision = true; }
         }
         if (!changed) break;
       }
@@ -333,7 +396,7 @@
       const road = this._roadPosition(point);
       const free = candidate => {
         if (ignore) {
-          const vehicle = { ...ignore, ...candidate };
+          const vehicle = { ...ignore, ...candidate, elevation: 0, orientation: null, upright: true };
           return this._vehicleFree(vehicle) && !this._vehicles().some(other => other !== ignore && this._vehicleContact(vehicle, other));
         }
         return this._personFree(candidate.x, candidate.y, radius);
@@ -400,14 +463,16 @@
 
     interact() {
       if (this.ragdolls.get(this.player.id)) return false;
+      if (this.player.elevation > 0.16) { this._toast('Land before hopping in or out.'); return false; }
       if (this.player.vehicleId) {
         const car = this.current;
+        if (car.upright === false || car.elevation > 0.16) { this._toast('Your ride needs its wheels on the road. Press R to recover.'); return false; }
         if (Math.abs(car.speed) > 45) { this._toast('Slow down before hopping out.'); return false; }
         const wash = this.services.find(s => s.id === 'wash' && distance(s, car) < 85);
         if (wash && (this.heat > 0 || car.health < this.maxHealth)) return this._useService(wash);
         return this._exitCar(car);
       }
-      const nearby = this.cars.filter(car => car.health > 0 && distance(car, this.player) < 75 && Math.abs(car.speed) < 110).sort((a, b) => distance(a, this.player) - distance(b, this.player));
+      const nearby = this.cars.filter(car => car.health > 0 && distance(car, this.player) < 75 && Math.abs(car.speed) < 110 && car.elevation < 0.16 && car.upright !== false).sort((a, b) => distance(a, this.player) - distance(b, this.player));
       if (nearby.length) {
         const car = nearby[0];
         this.player.vehicleId = car.id;
@@ -430,12 +495,14 @@
         const x = car.x + Math.cos(car.angle + offset) * 40, y = car.y + Math.sin(car.angle + offset) * 40;
         if (this._personFree(x, y, 10)) {
           this.player.vehicleId = null; this.player.x = x; this.player.y = y; this.player.angle = car.angle;
+          this.player.elevation = this.player.verticalVelocity = 0; this.player.grounded = true;
           car.speed = car.vx = car.vy = 0;
           this._sound('exit'); return true;
         }
       }
       if (forced) {
         const position = this._safeRoadPosition(car, 10); this.player.vehicleId = null; this.player.x = position.x; this.player.y = position.y;
+        this.player.elevation = this.player.verticalVelocity = 0; this.player.grounded = true;
         return true;
       }
       this._toast('A little more room to hop out, please.'); return false;
@@ -460,13 +527,13 @@
       const pitch = aimed ? clamp(options.pitch, -1.35, 1.35) : 0;
       const cosPitch = Math.cos(pitch), sinPitch = Math.sin(pitch);
       this.player.aimPitch = pitch;
-      const aimHeight = range => 1.15 + Math.tan(pitch) * range / 20;
+      const aimHeight = range => this.player.elevation + 1.15 + Math.tan(pitch) * range / 20;
       const inAimHeight = person => {
         if (!aimed) return true;
         const dx = person.x - this.player.x, dy = person.y - this.player.y;
         const forward = dx * Math.cos(angle) + dy * Math.sin(angle);
         const height = aimHeight(Math.hypot(dx, dy));
-        return forward >= 0 && height >= 0.1 && height <= 2.05 &&
+        return forward >= 0 && height >= finite(person.elevation, 0) + 0.1 && height <= finite(person.elevation, 0) + 2.05 &&
           !this.buildings.some(building => segmentHitsRect(this.player, person, building));
       };
       const equipped = this.inventory.equipped;
@@ -475,16 +542,16 @@
       if (equipped === 'cannon') {
         this.inventory.ammo.cannon--;
         const life = 360 / 560;
-        const projectile = { id: 'party-' + this._nextId++, x: this.player.x + Math.cos(angle) * 25 * cosPitch, y: this.player.y + Math.sin(angle) * 25 * cosPitch, angle, height: 1.15, life, maxLife: life };
-        if (aimed) Object.assign(projectile, { aimed: true, startHeight: Math.max(0.15, 1.15 + sinPitch * 1.25), horizontalSpeed: 560 * cosPitch, verticalSpeed: 28 * sinPitch });
+        const projectile = { id: 'party-' + this._nextId++, x: this.player.x + Math.cos(angle) * 25 * cosPitch, y: this.player.y + Math.sin(angle) * 25 * cosPitch, angle, height: this.player.elevation + 1.15, baseHeight: this.player.elevation, life, maxLife: life };
+        if (aimed) Object.assign(projectile, { aimed: true, startHeight: Math.max(0.15, this.player.elevation + 1.15 + sinPitch * 1.25), horizontalSpeed: 560 * cosPitch, verticalSpeed: 28 * sinPitch });
         if (aimed) projectile.height = projectile.startHeight;
         this.projectiles.push(projectile);
-        this._confetti(this.player.x, this.player.y, 8); this._sound('pop');
+        this._confetti(this.player.x, this.player.y, 8, this.player.elevation + 1.15); this._sound('pop');
         return true;
       }
       if (equipped === 'hammer') {
         const reach = 62, forwardX = Math.cos(angle), forwardY = Math.sin(angle);
-        this._confetti(this.player.x + forwardX * 35 * cosPitch, this.player.y + forwardY * 35 * cosPitch, 18, aimed ? 1.15 + sinPitch * 1.75 : undefined); this._sound('hammer');
+        this._confetti(this.player.x + forwardX * 35 * cosPitch, this.player.y + forwardY * 35 * cosPitch, 18, this.player.elevation + 1.15 + sinPitch * 1.75); this._sound('hammer');
         let hit = false;
         const inReach = person => {
           const dx = person.x - this.player.x, dy = person.y - this.player.y, range = Math.hypot(dx, dy);
@@ -499,7 +566,7 @@
         return true;
       }
       const pop = { x: this.player.x + Math.cos(angle) * 44 * cosPitch, y: this.player.y + Math.sin(angle) * 44 * cosPitch };
-      this._confetti(pop.x, pop.y, 25, aimed ? 1.15 + sinPitch * 2.2 : undefined); this._sound('pop');
+      this._confetti(pop.x, pop.y, 25, this.player.elevation + 1.15 + sinPitch * 2.2); this._sound('pop');
       let hit = false;
       for (const ped of this.peds) if (ped.stunned <= 0 && !this.ragdolls.get(ped.id) && inAimHeight(ped) && distance(ped, pop) < 60) { this._startle(ped, angle); hit = true; }
       for (const cop of this.police) if (inAimHeight(cop) && distance(cop, pop) < 65) { cop.distracted = 1.8; hit = true; this._confetti(cop.x, cop.y, 20); }
@@ -533,15 +600,10 @@
           projectile.y += Math.sin(projectile.angle) * horizontalSpeed * step;
           projectile.life = Math.max(0, projectile.life - step);
           const elapsed = projectile.maxLife - projectile.life;
-          projectile.height = projectile.aimed ? projectile.startHeight + projectile.verticalSpeed * elapsed - 2 * elapsed * elapsed : 1.15 + Math.sin(Math.PI * (1 - projectile.life / projectile.maxLife)) * 1.1;
+          projectile.height = projectile.aimed ? projectile.startHeight + projectile.verticalSpeed * elapsed - 2 * elapsed * elapsed : finite(projectile.baseHeight, 0) + 1.15 + Math.sin(Math.PI * (1 - projectile.life / projectile.maxLife)) * 1.1;
           const atHeight = height => !projectile.aimed || Math.min(before.height, projectile.height) <= height && Math.max(before.height, projectile.height) >= 0.1;
           const walls = this.buildings.some(b => atHeight(finite(b.height, 8)) && segmentHitsRect(before, projectile, { x: b.x - 3, y: b.y - 3, w: b.w + 6, h: b.h + 6 }));
-          const vehicles = this._vehicles().some(vehicle => {
-            if (!atHeight(vehicle.kind === 'van' ? 2.6 : 1.8)) return false;
-            const box = this._vehicleBox(vehicle);
-            const local = point => ({ x: (point.x - vehicle.x) * box.axes[0].x + (point.y - vehicle.y) * box.axes[0].y, y: (point.x - vehicle.x) * box.axes[1].x + (point.y - vehicle.y) * box.axes[1].y });
-            return segmentHitsRect(local(before), local(projectile), { x: -box.half[0] - 3, y: -box.half[1] - 3, w: box.half[0] * 2 + 6, h: box.half[1] * 2 + 6 });
-          });
+          const vehicles = this.vehiclePhysics.hitsSegment(before, projectile);
           const people = atHeight(2.05) && this.peds.some(ped => ped.stunned <= 0 && distance(ped, projectile) < 16);
           const ground = projectile.aimed && projectile.height <= 0.12;
           if (ground) projectile.height = 0.12;
@@ -592,8 +654,9 @@
       this.player.stunned = 0; this.player.ragdollGrace = 1.4;
       const entity = this.current, p = this._safeRoadPosition(entity, this.player.vehicleId ? 18 : 10, this.player.vehicleId ? entity : null);
       entity.x = p.x; entity.y = p.y;
-      if (this.player.vehicleId) { entity.speed = entity.vx = entity.vy = 0; entity.health = Math.max(25, entity.health); }
+      if (this.player.vehicleId) { this.vehiclePhysics.reset(entity); entity.health = Math.max(25, entity.health); }
       this.player.x = p.x; this.player.y = p.y; this.player.composure = Math.max(60, this.player.composure);
+      this.player.elevation = this.player.verticalVelocity = 0; this.player.grounded = true;
       this.graceTimer = 2; this.score = Math.max(0, this.score - 20);
       this._toast('Unstuck! Back on the road. −20 style; your cash is safe.'); this._confetti(p.x, p.y, 22);
       return true;
@@ -605,6 +668,7 @@
       const car = this.player.vehicleId ? this.current : null;
       if (car) { car.speed = car.vx = car.vy = 0; this._exitCar(car, true); }
       this.player.vehicleId = null; this.player.x = 884; this.player.y = 1080; this.player.composure = 100;
+      this.player.elevation = this.player.verticalVelocity = 0; this.player.grounded = true;
       this.money = Math.max(0, this.money - 50); this.heat = 0; this.escapeTimer = 0; this.graceTimer = 3;
       this._toast('BUSTED-ISH! $50 cleanup fee. Back to the fun—your gig is still active.', 'warning'); this._sound('busted'); this._confetti(884, 1080, 45);
     }
@@ -826,12 +890,22 @@
       this.player.ragdollGrace = Math.max(0, (this.player.ragdollGrace || 0) - dt);
       this.player.bubbleTimer = Math.max(0, this.player.bubbleTimer - dt);
       if (!this.player.bubbleTimer) this.player.bubble = '';
+      this.vehiclePhysics.sync();
       if (this.player.vehicleId) this._drive(this.current, dt, input); else this._walk(dt, input);
       for (const car of this.cars) if (car.traffic && car.health > 0 && car.id !== this.player.vehicleId) this._traffic(car, dt);
       this._pedestrians(dt);
       this._updatePolice(dt);
+      const contacts = this.vehiclePhysics.step(dt);
+      for (const contact of contacts) if (contact.entity.id === this.player.vehicleId) this._impact(contact.entity, contact.speed, contact.vehicle);
+      for (const vehicle of this._vehicles()) this._vehiclePeople(vehicle, vehicle.vx || 0, vehicle.vy || 0);
+      if (this.player.vehicleId) {
+        const car = this.current;
+        if (!contacts.some(contact => contact.entity === car || contact.other === car)) this._nearMissStyle(car);
+        this.player.x = car.x; this.player.y = car.y; this.player.angle = car.angle; this.player.elevation = car.elevation;
+        this.player.verticalVelocity = car.verticalVelocity; this.player.grounded = car.grounded;
+      }
       this._projectiles(dt);
-      const finished = this.ragdolls.step(dt, { buildings: this.buildings, cars: this.cars, police: this.police, size: SIZE });
+      const finished = this.ragdolls.step(dt, { buildings: this.buildings, staticObjects: this.staticObjects, cars: this.cars, police: this.police, size: SIZE });
       for (const body of finished) {
         const owner = body.owner;
         owner.stunned = 0; owner.ragdollGrace = 1.4;
@@ -852,6 +926,15 @@
 
     _walk(dt, input) {
       if (this.ragdolls.get(this.player.id)) return;
+      if (input.jump && !this._jumpHeld) this.jump();
+      this._jumpHeld = Boolean(input.jump);
+      const feet = this.player.elevation;
+      this.player.verticalVelocity -= 18 * dt;
+      this.player.elevation = Math.max(0, feet + this.player.verticalVelocity * dt);
+      if (this.player.verticalVelocity > 0) {
+        const ceiling = this.vehiclePhysics.ceiling(this.player.x, this.player.y, feet + 1.7, this.player.elevation + 1.7);
+        if (Number.isFinite(ceiling)) { this.player.elevation = Math.max(0, ceiling - 1.705); this.player.verticalVelocity = 0; }
+      }
       const forward = Number(Boolean(input.up)) - Number(Boolean(input.down));
       const strafe = Number(Boolean(input.right)) - Number(Boolean(input.left));
       let x = strafe, y = -forward;
@@ -860,33 +943,32 @@
         y = forward * Math.sin(input.moveAngle) + strafe * Math.sin(input.moveAngle + Math.PI / 2);
       }
       const length = Math.hypot(x, y);
-      if (length) { x /= length; y /= length; this.player.angle = Math.atan2(y, x); this._move(this.player, x * (input.boost ? 220 : 155) * dt, y * (input.boost ? 220 : 155) * dt, 10); }
+      if (length) {
+        x /= length; y /= length; this.player.angle = Math.atan2(y, x);
+        const dx = x * (input.boost ? 220 : 155) * dt, dy = y * (input.boost ? 220 : 155) * dt;
+        const landing = this.vehiclePhysics.support(this.player.x + dx, this.player.y + dy, feet + 0.045);
+        if (this.player.verticalVelocity <= 0 && feet >= landing && this.player.elevation <= landing + 0.015) {
+          this.player.elevation = landing; this.player.verticalVelocity = 0;
+        }
+        this._move(this.player, dx, dy, 10);
+      }
+      const support = this.vehiclePhysics.support(this.player.x, this.player.y, Math.max(feet, this.player.elevation) + 0.045);
+      if (this.player.verticalVelocity <= 0 && this.player.elevation <= support + 0.015) {
+        this.player.elevation = support; this.player.verticalVelocity = 0; this.player.grounded = true;
+      } else this.player.grounded = false;
+    }
+
+    jump() {
+      if (this.player.vehicleId || this.ragdolls.get(this.player.id) || !this.player.grounded || this.player.stunned > 0) return false;
+      this.player.verticalVelocity = 7.2; this.player.grounded = false; this._sound('jump'); return true;
     }
 
     _drive(car, dt, input) {
       const type = CAR_TYPES[car.kind] || CAR_TYPES.compact;
       const max = type.maxSpeed * (input.boost ? 1.2 + this.upgrades.boost * 0.075 : 1);
-      if (input.up) car.speed += type.acceleration * (input.boost ? 1.3 : 1) * dt;
-      if (input.down) car.speed -= (car.speed > 15 ? 700 : 260) * dt;
-      if (!input.up && !input.down) car.speed *= Math.exp(-1.1 * dt);
-      if (input.brake) car.speed *= Math.exp(-3.8 * dt);
-      car.speed = clamp(car.speed, -110, max);
-      if (Math.abs(car.speed) < 1) car.speed = 0;
       const steer = Number(Boolean(input.right)) - Number(Boolean(input.left));
-      if (Math.abs(car.speed) > 3) car.angle = wrapAngle(car.angle + steer * type.handling * clamp(Math.abs(car.speed) / 150, 0.2, 1) * (input.brake ? 1.5 : 1) * Math.sign(car.speed) * dt);
-      const grip = 1 - Math.exp(-(input.brake ? 3 : type.grip) * dt);
-      car.vx += (Math.cos(car.angle) * car.speed - car.vx) * grip;
-      car.vy += (Math.sin(car.angle) * car.speed - car.vy) * grip;
+      this.vehiclePhysics.control(car, { ...input, steer, maxSpeed: max });
       const impact = Math.hypot(car.vx, car.vy);
-      const contact = this._moveVehicle(car, car.vx * dt, car.vy * dt, car.vx, car.vy);
-      if (contact.collided) this._impact(car, impact, contact.vehicle);
-      for (const other of this.cars) {
-        if (other === car || other.health <= 0) continue;
-        const d = distance(car, other);
-        if (!contact.collided && d < 70 && !this._vehicleContact(car, other) && impact > 170 && this.time - (this._nearMisses.get(other.id) ?? -20) > 14) {
-          this._nearMisses.set(other.id, this.time); this._style(8, 'Close shave!');
-        }
-      }
       if (!this.player.vehicleId) return;
       this.player.x = car.x; this.player.y = car.y; this.player.angle = car.angle;
       if (input.brake && steer && impact > 75) {
@@ -898,8 +980,18 @@
       this.nearWash = Boolean(service);
     }
 
+    _nearMissStyle(car) {
+      if (Math.hypot(car.vx, car.vy) <= 170) return;
+      for (const other of this.cars) {
+        if (other === car || other.health <= 0) continue;
+        if (distance(car, other) < 70 && !this._vehicleContact(car, other) && this.time - (this._nearMisses.get(other.id) ?? -20) > 14) {
+          this._nearMisses.set(other.id, this.time); this._style(8, 'Close shave!');
+        }
+      }
+    }
+
     _impact(car, speed, traffic) {
-      car.speed *= -0.24; car.vx *= -0.2; car.vy *= -0.2;
+      // The rigid-body solver owns bounce; this handler only owns game feedback.
       if (this._impactCooldown > 0 || this.graceTimer > 0) return;
       this._impactCooldown = 0.6;
       if (speed > 65) {
@@ -921,16 +1013,13 @@
       const angle = Math.atan2(target.y - car.y, target.x - car.x), desired = distance(car, target) < 75 ? 55 : 100;
       let speed = desired;
       if (this._vehicles().some(other => other !== car && distance(other, car) < 68 && Math.abs(wrapAngle(Math.atan2(other.y - car.y, other.x - car.x) - angle)) < 0.7)) speed = 8;
-      car.speed += (speed - car.speed) * Math.min(1, dt * 4); car.angle = angle;
       for (const other of this._vehicles()) if (other !== car && distance(other, car) < 75 && Math.abs(wrapAngle(Math.atan2(other.y - car.y, other.x - car.x) - angle)) < 0.7) {
         const type = CAR_TYPES[car.kind] || CAR_TYPES.compact, otherType = CAR_TYPES[other.kind] || CAR_TYPES.compact;
         const gap = (type.length + otherType.length) / 2 + 4;
-        car.speed = Math.min(car.speed, Math.max(0, distance(other, car) - gap) / dt);
+        speed = Math.min(speed, Math.max(0, distance(other, car) - gap) / dt);
       }
-      const oldX = car.x, oldY = car.y, vx = Math.cos(angle) * car.speed, vy = Math.sin(angle) * car.speed;
-      const hit = this._moveVehicle(car, vx * dt, vy * dt, vx, vy);
-      car.vx = (car.x - oldX) / dt; car.vy = (car.y - oldY) / dt;
-      if (hit.collided) { car.speed = 0; car.blockedTime = (car.blockedTime || 0) + dt; }
+      this.vehiclePhysics.control(car, { targetSpeed: speed, heading: angle });
+      if (Math.abs(car.speed) < 8 && speed > 25) car.blockedTime = (car.blockedTime || 0) + dt;
       else car.blockedTime = Math.max(0, (car.blockedTime || 0) - dt);
       if (car.blockedTime > 2.5) { car.route = this._wanderRoute(car); car.blockedTime = 0; }
     }
@@ -972,16 +1061,12 @@
         let target = direct ? this.current : cop.route[0];
         while (!direct && target && distance(cop, target) < 18 && cop.route.length > 1) { cop.route.shift(); target = cop.route[0]; }
         if (target && distance(cop, target) > 10 && cop.distracted <= 0) {
-          cop.angle = Math.atan2(target.y - cop.y, target.x - cop.x);
+          const heading = Math.atan2(target.y - cop.y, target.x - cop.x);
           const desired = this.heat ? 160 + this.heat * 25 : 75;
-          cop.speed += (desired - cop.speed) * Math.min(1, dt * 3);
-          const oldX = cop.x, oldY = cop.y, vx = Math.cos(cop.angle) * cop.speed, vy = Math.sin(cop.angle) * cop.speed;
-          const hit = this._moveVehicle(cop, vx * dt, vy * dt, vx, vy);
-          cop.vx = (cop.x - oldX) / dt; cop.vy = (cop.y - oldY) / dt;
-          if (hit.collided) { cop.routeTimer = 0; cop.speed *= 0.3; }
-        } else { cop.speed *= Math.exp(-5 * dt); cop.vx = cop.vy = 0; }
+          this.vehiclePhysics.control(cop, { targetSpeed: desired, heading });
+        } else this.vehiclePhysics.control(cop, { targetSpeed: 0, heading: cop.angle });
         let close;
-        if (this.player.vehicleId) { const box = this._vehicleBox(this.current); box.half = box.half.map(n => n + 5); close = boxContact(this._vehicleBox(cop), box); }
+        if (this.player.vehicleId) { const box = this._vehicleBox(this.current); box.half = box.half.map(n => n + 5); close = this._heightOverlap(this.current, cop, VehiclePhysics.height(this.current), VehiclePhysics.height(cop)) && boxContact(this._vehicleBox(cop), box); }
         else close = this._personVehicleContact(this.player, cop, 14);
         if (this.heat > 0 && this.graceTimer <= 0 && cop.distracted <= 0 && close) contact = true;
       }

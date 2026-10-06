@@ -173,6 +173,35 @@ async function bodyState(page, id = 'player') {
   }, id);
 }
 
+async function vehicleState(page, id) {
+  return page.evaluate(vehicleId => {
+    const game = globalThis.__browserCheckGame, scene = globalThis.__browserCheckScene;
+    const car = vehicleId ? game.cars.find(entity => entity.id === vehicleId) : game.current;
+    const entry = game.vehiclePhysics.bodies.get(car.id), model = scene._vehicles.get(car.id);
+    const body = entry.body;
+    return {
+      id: car.id, x: car.x, y: car.y, elevation: car.elevation, speed: car.speed,
+      vx: car.vx, vy: car.vy, verticalVelocity: car.verticalVelocity,
+      health: car.health, upright: car.upright, grounded: car.grounded,
+      orientation: { ...car.orientation }, angularVelocity: { ...car.angularVelocity },
+      bodyPosition: { x: body.position.x, y: body.position.y, z: body.position.z },
+      bodyQuaternion: { x: body.quaternion.x, y: body.quaternion.y, z: body.quaternion.z, w: body.quaternion.w },
+      bodyVelocity: { x: body.velocity.x, y: body.velocity.y, z: body.velocity.z },
+      bodyAngularVelocity: { x: body.angularVelocity.x, y: body.angularVelocity.y, z: body.angularVelocity.z },
+      renderedHeight: model.group.position.y,
+      renderedQuaternion: { x: model.group.quaternion.x, y: model.group.quaternion.y, z: model.group.quaternion.z, w: model.group.quaternion.w },
+      contacts: [...(globalThis.__browserCheckContacts || [])],
+    };
+  }, id);
+}
+
+function assertRenderedVehicle(state) {
+  assert.ok([state.x, state.y, state.elevation, state.renderedHeight, ...Object.values(state.bodyPosition), ...Object.values(state.orientation)].every(Number.isFinite), 'Physical and rendered vehicle coordinates must stay finite.');
+  const dot = Math.abs(['x', 'y', 'z', 'w'].reduce((sum, key) => sum + state.renderedQuaternion[key] * state.bodyQuaternion[key], 0));
+  assert.ok(dot > 0.999, `Visible car must follow the actual physical quaternion; alignment ${dot.toFixed(4)}.`);
+  assert.ok(state.renderedHeight >= state.elevation - 0.05, 'The rendered body must rise with its physical elevation.');
+}
+
 function assertFiniteBody(body) {
   assert.ok(body, 'Expected a physical ragdoll body.');
   assert.equal(Object.keys(body.joints).length, 15, 'Every body needs fifteen simulated joints.');
@@ -350,9 +379,26 @@ async function main() {
       assert.ok((await sceneState(page)).cameraFov > shoulder.cameraFov + 5, 'Releasing aim must restore the exploration view.');
       await page.keyboard.press('c');
     });
-    await check('Space no longer fires a toy on foot', async () => {
+    await check('Space jumps on foot, moves the rendered avatar and lands without firing a toy or repeating while held', async () => {
+      // Keep this control lesson deterministic: a passing traffic car must not
+      // knock the jumper down and leave the following aim check in a ragdoll.
+      await page.evaluate(() => { const game = globalThis.__browserCheckGame; game.cars = game.cars.filter(car => !car.traffic); game.police = []; });
       const before = await page.evaluate(() => ({ actionCooldown: globalThis.__browserCheckGame._actionCooldown, projectiles: globalThis.__browserCheckGame.projectiles.length }));
-      await page.keyboard.press('Space');
+      await page.keyboard.down('Space');
+      try {
+        await page.waitForFunction(() => globalThis.__browserCheckGame.player.elevation > 1, null, { timeout: 1500 });
+        const airborne = await page.evaluate(() => {
+          const game = globalThis.__browserCheckGame, scene = globalThis.__browserCheckScene;
+          return { elevation: game.player.elevation, renderedHeight: scene._player.group.position.y, grounded: game.player.grounded };
+        });
+        assert.equal(airborne.grounded, false);
+        assert.ok(airborne.renderedHeight > 1, 'The visible avatar must rise with the jumping player.');
+        diagnostics.jump = airborne;
+        await page.screenshot({ path: path.join(evidence, 'desktop-jump.png'), fullPage: true });
+        await page.waitForFunction(() => globalThis.__browserCheckGame.player.grounded && globalThis.__browserCheckGame.player.elevation < 0.01, null, { timeout: 2000 });
+        await page.waitForTimeout(700);
+        assert.equal(await page.evaluate(() => globalThis.__browserCheckGame.player.grounded), true, 'Holding Space must not keep jumping after landing.');
+      } finally { await page.keyboard.up('Space'); }
       await waitForFreshFrames(page);
       assert.deepEqual(await page.evaluate(() => ({ actionCooldown: globalThis.__browserCheckGame._actionCooldown, projectiles: globalThis.__browserCheckGame.projectiles.length })), before);
     });
@@ -486,8 +532,10 @@ async function main() {
     });
     await check('Space still applies the driving handbrake', async () => {
       await page.evaluate(() => {
-        const car = globalThis.__browserCheckGame.current;
-        Object.assign(car, { x: 900, y: 1080, angle: -Math.PI / 2, speed: 100, vx: 0, vy: -100 });
+        const game = globalThis.__browserCheckGame, car = game.current;
+        Object.assign(car, { x: 900, y: 1080, angle: -Math.PI / 2 });
+        game.vehiclePhysics.reset(car);
+        Object.assign(car, { speed: 100, vx: 0, vy: -100 });
       });
       const before = await page.evaluate(() => Math.abs(globalThis.__browserCheckGame.current.speed));
       await page.keyboard.down('Space');
@@ -892,16 +940,21 @@ async function main() {
         await physicsPage.screenshot({ path: path.join(evidence, 'desktop-vehicle-ragdoll.png'), fullPage: true });
       });
 
-      await check('a parked car blocks the driven car at their rendered rectangular footprints', async () => {
+      await check('a driven car collides with a parked rigid body and transfers momentum without passing through it', async () => {
         await physicsPage.keyboard.press('r');
         await waitForFreshFrames(physicsPage);
         await physicsPage.evaluate(() => {
           const game = globalThis.__browserCheckGame, car = game.cars[0];
-          game.peds = []; game.police = []; game.physics.clearAll();
-          Object.assign(car, { x: 900, y: 1080, angle: 0, speed: 0, vx: 0, vy: 0, traffic: false, health: 100 });
-          const blocker = game._addCar(970, 1080, 0, 'compact', '#67d3c8', false);
-          blocker.speed = 0;
-          Object.assign(game.player, { x: 900, y: 1048, angle: 0, vehicleId: null });
+          game.cars = [car]; game.peds = []; game.police = []; game.physics.clearAll(); game.heat = 0;
+          Object.assign(car, { x: 900, y: 900, angle: 0, traffic: false, health: 100 });
+          game.vehiclePhysics.reset(car);
+          const blocker = game._addCar(970, 900, 0, 'compact', '#67d3c8', false);
+          game.vehiclePhysics.sync(); game.vehiclePhysics.reset(blocker);
+          globalThis.__browserCheckContacts = [];
+          game.vehiclePhysics.bodies.get(car.id).body.addEventListener('collide', event => {
+            if (event.body.entity) globalThis.__browserCheckContacts.push({ other: event.body.entity.id, closing: Math.abs(event.contact.getImpactVelocityAlongNormal()) });
+          });
+          Object.assign(game.player, { x: 900, y: 868, elevation: 0, grounded: true, angle: 0, vehicleId: null });
         });
         await physicsPage.keyboard.press('e');
         await waitForScene(physicsPage, 'drive');
@@ -910,13 +963,146 @@ async function main() {
         await physicsPage.keyboard.up('w');
         const contact = await physicsPage.evaluate(() => {
           const game = globalThis.__browserCheckGame, car = game.current, blocker = game.cars[1];
-          return { carX: car.x, carY: car.y, blockerX: blocker.x, blockerY: blocker.y, health: car.health };
+          return { carX: car.x, carY: car.y, blockerX: blocker.x, blockerY: blocker.y, blockerVx: blocker.vx, carElevation: car.elevation, blockerElevation: blocker.elevation, health: car.health, contacts: [...globalThis.__browserCheckContacts] };
         });
         assert.ok(contact.carX < contact.blockerX, 'Driven car must not pass through the parked car.');
-        assert.ok(contact.blockerX - contact.carX >= 45.99, 'Compact car centers must respect both 46-unit rendered lengths.');
+        assert.ok(contact.contacts.length > 0, 'The real Cannon solver must report a vehicle contact.');
+        assert.ok(contact.blockerX > 980 || contact.blockerVx > 10, 'The parked car must receive physical momentum.');
+        assert.ok(contact.blockerX - contact.carX > 35 || Math.abs(contact.carElevation - contact.blockerElevation) > 1.1, 'Cars must remain separated in space; airborne height can change their horizontal spacing.');
         assert.ok(contact.carX > 915, 'Car should reach the obstacle under real throttle input.');
-        assert.ok(Math.abs(contact.carY - contact.blockerY) < 0.1);
+        assert.ok(Math.abs(contact.carY - contact.blockerY) < 20, 'A straight bumper contact should not send cars sideways across a lane.');
         diagnostics.parkedCarContact = contact;
+      });
+
+      await check('a high-speed wall impact rebounds, launches the real car and renders its full airborne rotation', async () => {
+        await physicsPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame, car = game.cars[0];
+          game.cars = [car]; game.peds = []; game.police = []; game.physics.clearAll(); game.abandonMission(); game.heat = 0;
+          Object.assign(car, { x: 900, y: 1080, angle: Math.PI, traffic: false, health: 100 });
+          game.vehiclePhysics.reset(car);
+          // This is an approach speed, not a fabricated collision outcome.
+          // The normal fixed-step loop and Cannon wall contact produce flight.
+          Object.assign(car, { speed: 290, vx: -290, vy: 0 });
+          Object.assign(game.player, { vehicleId: car.id, x: car.x, y: car.y });
+          globalThis.__browserCheckContacts = [];
+          const startTime = game.time;
+          globalThis.__browserCheckWallTrace = { maxElevation: 0, maxTilt: 0, minVx: 0, maxVx: 0, samples: [] };
+          function sample() {
+            const trace = globalThis.__browserCheckWallTrace;
+            trace.maxElevation = Math.max(trace.maxElevation, car.elevation);
+            trace.maxTilt = Math.max(trace.maxTilt, Math.abs(car.orientation.x) + Math.abs(car.orientation.z));
+            trace.minVx = Math.min(trace.minVx, car.vx); trace.maxVx = Math.max(trace.maxVx, car.vx);
+            if (trace.samples.length < 100) trace.samples.push({ time: game.time - startTime, x: car.x, elevation: car.elevation, vx: car.vx, tilt: Math.abs(car.orientation.x) + Math.abs(car.orientation.z) });
+            if (game.time - startTime < 2.5) requestAnimationFrame(sample);
+          }
+          requestAnimationFrame(sample);
+          game.vehiclePhysics.bodies.get(car.id).body.addEventListener('collide', event => {
+            if (event.body.kind === 'building') globalThis.__browserCheckContacts.push({ kind: 'building', closing: Math.abs(event.contact.getImpactVelocityAlongNormal()) });
+          });
+        });
+        await waitForScene(physicsPage, 'drive');
+        await physicsPage.keyboard.press('c');
+        try {
+          await physicsPage.waitForFunction(() => {
+            const car = globalThis.__browserCheckGame.current;
+            return globalThis.__browserCheckContacts.length > 0 && car.elevation > 0.2 && car.vx > 10 && Math.abs(car.orientation.x) + Math.abs(car.orientation.z) > 0.015;
+          }, null, { timeout: 3000 });
+        } finally { diagnostics.airborneWallTrace = await physicsPage.evaluate(() => ({ ...globalThis.__browserCheckWallTrace, contacts: [...globalThis.__browserCheckContacts] })); }
+        const airborne = await vehicleState(physicsPage);
+        assertRenderedVehicle(airborne);
+        assert.ok(airborne.x > 842, 'The car must rebound outside the solid west wall.');
+        assert.ok(airborne.vx > 10, 'A westward collision must produce an eastward bounce.');
+        assert.ok(airborne.elevation > 0.2 && airborne.renderedHeight > 0.2, 'Physical and visible car must both leave the road.');
+        assert.ok(Math.abs(airborne.orientation.x) + Math.abs(airborne.orientation.z) > 0.015, 'The impact must create real pitch or roll, not only a yaw turn.');
+        diagnostics.airborneWallImpact = airborne;
+        await physicsPage.screenshot({ path: path.join(evidence, 'desktop-wall-rebound.png'), fullPage: true });
+        await physicsPage.waitForFunction(() => Math.abs(globalThis.__browserCheckGame.current.verticalVelocity) < 0.5 && globalThis.__browserCheckGame.current.elevation < 0.6, null, { timeout: 4000 });
+        assertRenderedVehicle(await vehicleState(physicsPage));
+      });
+
+      await check('a fast bumper collision sends real car bodies into visible three-dimensional flight and they fall back down', async () => {
+        const struckId = await physicsPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame, car = game.cars[0];
+          game.cars = [car]; game.peds = []; game.police = []; game.physics.clearAll(); game.heat = 0;
+          Object.assign(car, { x: 900, y: 900, angle: 0, traffic: false, health: 100 });
+          game.vehiclePhysics.reset(car);
+          const struck = game._addCar(1000, 900, Math.PI, 'compact', '#67d3c8', false);
+          game.vehiclePhysics.sync(); game.vehiclePhysics.reset(struck);
+          Object.assign(car, { speed: 290, vx: 290, vy: 0 });
+          Object.assign(struck, { speed: 180, vx: -180, vy: 0 });
+          Object.assign(game.player, { vehicleId: car.id, x: car.x, y: car.y });
+          globalThis.__browserCheckContacts = [];
+          game.vehiclePhysics.bodies.get(car.id).body.addEventListener('collide', event => {
+            if (event.body.entity?.id === struck.id) globalThis.__browserCheckContacts.push({ other: struck.id, closing: Math.abs(event.contact.getImpactVelocityAlongNormal()) });
+          });
+          return struck.id;
+        });
+        await physicsPage.keyboard.press('c');
+        await physicsPage.waitForFunction(() => {
+          const car = globalThis.__browserCheckGame.current;
+          return globalThis.__browserCheckContacts.length > 0 && car.elevation > 0.9 && Math.abs(car.orientation.x) + Math.abs(car.orientation.z) > 0.015;
+        }, null, { timeout: 3000 });
+        const airborne = await vehicleState(physicsPage), struck = await vehicleState(physicsPage, struckId);
+        assertRenderedVehicle(airborne); assertRenderedVehicle(struck);
+        assert.ok(airborne.elevation > 0.9, 'The actual collision must send the driven car clearly above the street.');
+        assert.ok(struck.x > 1000 || Math.hypot(struck.vx, struck.vy) > 10, 'The struck body must receive real momentum.');
+        diagnostics.airborneCarImpact = { driven: airborne, struck };
+        await physicsPage.screenshot({ path: path.join(evidence, 'desktop-airborne-impact.png'), fullPage: true });
+        await physicsPage.waitForFunction(() => {
+          const car = globalThis.__browserCheckGame.current;
+          return car.elevation < 0.7 && Math.abs(car.verticalVelocity) < 0.5;
+        }, null, { timeout: 5000 });
+        assertRenderedVehicle(await vehicleState(physicsPage));
+      });
+
+      await check('an elastic collision with a fixed fountain rebounds without moving the obstacle', async () => {
+        const fountainBefore = await physicsPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame, car = game.cars[0], fountain = game.staticObjects.find(object => object.kind === 'fountain');
+          game.cars = [car]; game.peds = []; game.police = []; game.physics.clearAll(); game.heat = 0;
+          Object.assign(car, { x: fountain.x - 115, y: fountain.y, angle: 0, traffic: false, health: 100 });
+          game.vehiclePhysics.reset(car);
+          Object.assign(car, { speed: 210, vx: 210, vy: 0 });
+          Object.assign(game.player, { vehicleId: car.id, x: car.x, y: car.y });
+          globalThis.__browserCheckContacts = [];
+          game.vehiclePhysics.bodies.get(car.id).body.addEventListener('collide', event => {
+            if (event.body.kind === 'fountain') globalThis.__browserCheckContacts.push({ kind: 'fountain', closing: Math.abs(event.contact.getImpactVelocityAlongNormal()) });
+          });
+          return { x: fountain.x, y: fountain.y };
+        });
+        await physicsPage.waitForFunction(() => globalThis.__browserCheckContacts.length > 0 && globalThis.__browserCheckGame.current.vx < -5, null, { timeout: 3000 });
+        const bounced = await vehicleState(physicsPage);
+        assertRenderedVehicle(bounced);
+        assert.ok(bounced.x < fountainBefore.x, 'The fixed fountain must stop the car on its approaching side.');
+        assert.ok(bounced.vx < -5, 'The prop must create a reverse impulse, not merely remove speed.');
+        assert.deepEqual(await physicsPage.evaluate(() => { const fountain = globalThis.__browserCheckGame.staticObjects.find(object => object.kind === 'fountain'); return { x: fountain.x, y: fountain.y }; }), fountainBefore, 'The static fountain must remain anchored.');
+        diagnostics.fixedPropBounce = bounced;
+      });
+
+      await check('R rights a flipped physical car, resets angular motion and returns usable real driving controls', async () => {
+        await physicsPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame, car = game.current;
+          Object.assign(car, { x: 900, y: 1080, elevation: 0.8, verticalVelocity: 0, vx: 0, vy: 0, speed: 0,
+            orientation: { x: 1, y: 0, z: 0, w: 0 } });
+        });
+        await waitForFreshFrames(physicsPage);
+        const flipped = await vehicleState(physicsPage);
+        assert.equal(flipped.upright, false, 'The setup must produce an actual inverted vehicle before recovery.');
+        assertRenderedVehicle(flipped);
+        await physicsPage.keyboard.press('r');
+        await waitForFreshFrames(physicsPage);
+        const recovered = await vehicleState(physicsPage);
+        assertRenderedVehicle(recovered);
+        assert.equal(recovered.upright, true);
+        assert.ok(Math.abs(recovered.elevation) < 0.05, 'Recovery must place the physical car back on the road.');
+        assert.ok(Math.hypot(...Object.values(recovered.bodyAngularVelocity)) < 0.2, 'Recovery must clear real angular velocity.');
+        const start = { x: recovered.x, y: recovered.y };
+        await physicsPage.keyboard.down('w');
+        await physicsPage.waitForTimeout(250);
+        await physicsPage.keyboard.up('w');
+        const driven = await vehicleState(physicsPage);
+        assert.ok(Math.hypot(driven.x - start.x, driven.y - start.y) > 4, 'Recovered car must respond to actual throttle input.');
+        assert.ok(driven.health > 0);
+        diagnostics.flippedCarRecovery = recovered;
       });
     } finally { await physicsContext.close(); }
     const inventoryContext = await browser.newContext({ viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
