@@ -36,11 +36,16 @@ The layout adapts to small screens, but touch controls and gamepads are not impl
 | G | Browse your garage collection; store, retrieve, or repaint at Sprinkle Garage |
 | Shift | Boost in a car; sprint on foot |
 | H | Horn; start a party at a party mission ring |
+| B / N | Previous / next vehicle radio station, including radio off |
 | F | Dramatic ragdoll flop on foot; stand up automatically |
 | R | Recover to a safe road position; right a flipped car |
 | P / Esc | Pause/resume; Esc also releases the mouse |
 
 Click the town to capture the mouse and start looking around. Your first click captures the mouse without firing a toy. Hold right mouse to aim toward the center crosshair; left-click uses the toy on foot, with or without aiming. Space jumps on foot and remains the driving handbrake. Release it before jumping again. Esc releases the mouse and pauses. Opening a menu also releases it and freezes the town; click the town again after closing the menu. Changing tabs or windows pauses the game. Sound, reduced motion, and full screen controls are in the header. Open help (?) to adjust look sensitivity or invert up/down; camera preferences stay in this browser.
+
+Music starts after Play. On foot, a gentle town soundtrack follows you; in a vehicle, the radio replaces it with **Biscuit FM** (disco/funk), **Neon Drive** (synthwave), or **Meadow Waves** (mellow dub). Press B/N or use the radio arrows to switch stations and cycle through radio off. Open help (?) for separate master, music/radio, and engines/effects volumes. The station and mix survive reloads, and old saves keep their existing mute preference. All music and effects are original Web Audio synthesis, generated locally without downloads or services.
+
+Compact, sports car, and van engines respond to speed, throttle, and boost. Nearby moving traffic and pursuing patrol sirens fade with distance and pan with the view. Grounded tires squeal under hard braking or drifting; horns, crashes, toys, footsteps, and contract jingles have distinct effects. Pause, help, inventory, and background tabs silence audio with the town. Browsers without Web Audio can still play silently.
 
 ## The toybox
 
@@ -101,7 +106,8 @@ npm run vendor
 | vehicle-physics.js | Cannon vehicle bodies, gravity, orientation, elastic contacts, and fixed obstacle shapes |
 | physics.js | Ragdoll joints, gravity, contacts, and automatic get-up |
 | scene3d.js | Three.js world, models, perspective camera, lighting, and visual effects |
-| game.js | Fixed-step game loop, input, audio, persistence, HUD, and minimap |
+| audio.js | Local music sequencer, vehicle radio, spatial engines/sirens, effects, and audio lifecycle |
+| game.js | Fixed-step game loop, input, audio controls, persistence, HUD, and minimap |
 | vendor/three.min.js | Bundled Three.js renderer for offline and file-open play |
 | vendor/cannon.min.js / vendor/cannon.cjs | Bundled Cannon physics engine for browser play and Node checks |
 | index.html / styles.css | Responsive interface and controls |

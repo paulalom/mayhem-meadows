@@ -7,7 +7,7 @@
     "start": "node tools/serve.cjs",
     "vendor": "node tools/vendor.cjs",
     "test": "node --test tests/*.test.cjs",
-    "check": "node --check world.js && node --check physics.js && node --check vehicle-physics.js && node --check core.js && node --check scene3d.js && node --check game.js && node --test tests/*.test.cjs"
+    "check": "node --check world.js && node --check physics.js && node --check vehicle-physics.js && node --check core.js && node --check scene3d.js && node --check audio.js && node --check game.js && node --test tests/*.test.cjs"
   },
   "license": "MIT",
   "devDependencies": {

@@ -4,11 +4,12 @@
   const $ = id => document.getElementById(id);
   const canvas = $('game-canvas');
   const game = new Game();
+  const { AudioDirector, STATIONS, normalizeSettings } = MayhemAudio;
   const SAVE_KEY = 'mayhem-meadows.v1';
   const keys = new Set();
   let started = false, paused = false, helpWasPaused = false;
   let muted = false, reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  let audioContext, saveBlocked = false, toastUntil = 0, hudElapsed = 0, saveElapsed = 0;
+  let audioSettings = normalizeSettings(), saveBlocked = false, toastUntil = 0, hudElapsed = 0, saveElapsed = 0;
   let width = 960, height = 650, scene = null, renderedFrames = 0, graphicsFailed = false;
   let cameraSensitivity = 1, cameraInvertY = false, aiming = false;
   let mouseLockPending = false, intentionalUnlock = false;
@@ -33,40 +34,56 @@
     if (saved && saved.version === 1) {
       game.loadSave(saved.progress);
       muted = saved.settings?.muted === true;
+      audioSettings = normalizeSettings(saved.settings?.audio);
       reducedMotion = saved.settings?.reducedMotion ?? reducedMotion;
       const savedSensitivity = saved.settings?.cameraSensitivity;
       if (typeof savedSensitivity === 'number' && Number.isFinite(savedSensitivity)) cameraSensitivity = clamp(savedSensitivity, 0.25, 2);
       cameraInvertY = saved.settings?.cameraInvertY === true;
     }
   } catch (_) { saveBlocked = true; }
+  const audio = new AudioDirector({ settings: { ...audioSettings, muted } });
   function save() {
     try {
-      localStorage.setItem(SAVE_KEY, JSON.stringify({ version: 1, progress: game.exportSave(), settings: { muted, reducedMotion, cameraSensitivity, cameraInvertY } }));
+      localStorage.setItem(SAVE_KEY, JSON.stringify({ version: 1, progress: game.exportSave(), settings: { muted, audio: audioSettings, reducedMotion, cameraSensitivity, cameraInvertY } }));
     } catch (_) {
       if (!saveBlocked) toast('Local saving is unavailable. You can still play this session.');
       saveBlocked = true;
     }
   }
   function audioStart() {
-    if (!audioContext) {
-      try { audioContext = new (window.AudioContext || window.webkitAudioContext)(); }
-      catch (_) { muted = true; }
-    }
-    audioContext?.resume().catch(() => {});
+    audio.unlock().then(() => { updateAudio(); settingsUI(); });
   }
   function sound(name) {
-    if (muted || !audioContext || audioContext.state !== 'running') return;
-    const tones = { horn: [180, 0.18, 'sawtooth'], confetti: [650, 0.1, 'triangle'], jump: [340, 0.13, 'triangle'], flop: [260, 0.22, 'triangle'], crash: [75, 0.13, 'square'], pickup: [660, 0.14, 'sine'], complete: [880, 0.32, 'triangle'], bust: [120, 0.32, 'sawtooth'], upgrade: [1040, 0.2, 'sine'] };
-    const [frequency, duration, type] = tones[name] || [420, 0.1, 'triangle'];
-    const oscillator = audioContext.createOscillator(), gain = audioContext.createGain();
-    const t = audioContext.currentTime;
-    oscillator.type = type;
-    oscillator.frequency.setValueAtTime(frequency, t);
-    oscillator.frequency.exponentialRampToValueAtTime(frequency * (name === 'crash' ? 0.3 : 1.4), t + duration);
-    gain.gain.setValueAtTime(0.035, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + duration);
-    oscillator.connect(gain); gain.connect(audioContext.destination);
-    oscillator.start(t); oscillator.stop(t + duration);
+    audio.play(name, game);
+  }
+  function movementInput() {
+    return { up: keys.has('KeyW') || keys.has('ArrowUp'), down: keys.has('KeyS') || keys.has('ArrowDown'), left: keys.has('KeyA') || keys.has('ArrowLeft'), right: keys.has('KeyD') || keys.has('ArrowRight'), boost: keys.has('ShiftLeft') || keys.has('ShiftRight'), brake: keys.has('Space') };
+  }
+  function updateAudio(dt = 0) {
+    audio.update(game, { active: playActive(), viewYaw: scene?.viewYaw ?? game.current.angle, input: movementInput(), dt });
+  }
+  function applyAudioSettings() {
+    audio.setSettings({ ...audioSettings, muted });
+    updateAudio(); settingsUI(); save();
+  }
+  function cycleRadio(direction) {
+    if (!playActive() || !game.player.vehicleId) return;
+    const choices = [...STATIONS.map(station => station.id), 'off'];
+    const index = choices.indexOf(audioSettings.radioStation);
+    audioSettings.radioStation = choices[(index + direction + choices.length) % choices.length];
+    audioStart(); applyAudioSettings();
+    sound('radio'); canvas.focus({ preventScroll: true });
+  }
+  function radioUI() {
+    const driving = Boolean(game.player.vehicleId);
+    $('radio-panel').hidden = !started || !driving || graphicsFailed;
+    $('equipped-panel').hidden = driving;
+    const station = STATIONS.find(item => item.id === audioSettings.radioStation);
+    const name = station?.name || 'Radio off';
+    const status = muted || audioSettings.masterVolume === 0 ? 'Sound muted' : audioSettings.musicVolume === 0 ? 'Music volume 0' : audio.getStatus().state === 'unavailable' ? 'Audio unavailable' : station?.genre || 'Enjoy the engine';
+    if ($('radio-status').textContent !== name) $('radio-status').textContent = name;
+    $('radio-genre').textContent = status;
+    $('radio-previous').disabled = $('radio-next').disabled = !playActive() || !driving;
   }
   function events() {
     for (const event of game.drainEvents()) {
@@ -75,7 +92,7 @@
     }
   }
   function settingsUI() {
-    $('sound-toggle').textContent = muted ? 'Sound: off' : 'Sound: on';
+    $('sound-toggle').textContent = audio.getStatus().state === 'unavailable' ? 'Sound: unavailable' : muted ? 'Sound: off' : 'Sound: on';
     $('sound-toggle').setAttribute('aria-pressed', String(!muted));
     $('motion-toggle').textContent = reducedMotion ? 'Motion: calm' : 'Motion: full';
     $('motion-toggle').setAttribute('aria-pressed', String(reducedMotion));
@@ -83,6 +100,13 @@
     $('camera-sensitivity').value = cameraSensitivity;
     $('camera-sensitivity-value').textContent = cameraSensitivity.toFixed(2) + '×';
     $('camera-invert-y').checked = cameraInvertY;
+    for (const category of ['master', 'music', 'effects']) {
+      const value = audioSettings[category + 'Volume'];
+      $('audio-' + category).value = value;
+      $('audio-' + category + '-value').textContent = Math.round(value * 100) + '%';
+    }
+    $('radio-station').value = audioSettings.radioStation;
+    radioUI();
   }
   function setAim(value) {
     aiming = Boolean(value && playActive() && mouseLocked() && !game.player.vehicleId && !game.physics?.get('player'));
@@ -119,6 +143,18 @@
     settingsUI(); save();
   });
   $('camera-invert-y').addEventListener('change', event => { cameraInvertY = event.target.checked; settingsUI(); save(); });
+  for (const category of ['master', 'music', 'effects']) {
+    $('audio-' + category).addEventListener('input', event => {
+      audioSettings = normalizeSettings({ ...audioSettings, [category + 'Volume']: Number(event.target.value) });
+      audioStart(); applyAudioSettings();
+    });
+  }
+  $('radio-station').addEventListener('change', event => {
+    audioSettings = normalizeSettings({ ...audioSettings, radioStation: event.target.value });
+    audioStart(); applyAudioSettings();
+  });
+  $('radio-previous').addEventListener('click', () => cycleRadio(-1));
+  $('radio-next').addEventListener('click', () => cycleRadio(1));
   document.addEventListener('pointerlockchange', () => {
     mouseLockPending = false;
     if (mouseLocked()) {
@@ -157,12 +193,14 @@
     wheelOpen = true; keys.clear(); releaseMouse();
     wheelIndex = toyIds.indexOf(game.inventory.equipped);
     $('toy-wheel').hidden = false; renderWheel();
+    updateAudio();
   }
   function closeWheel(equip = false, focus = true) {
     if (!wheelOpen) return;
     if (equip) { game.equipGadget(toyIds[wheelIndex]); events(); save(); }
     wheelOpen = false; $('toy-wheel').hidden = true; keys.clear();
     if (focus && started && !paused) canvas.focus({ preventScroll: true });
+    updateAudio();
   }
   function cycleWheel(direction) {
     for (let i = 0; i < toyIds.length; i++) {
@@ -174,6 +212,7 @@
   function closeInventory(focus = true) {
     inventoryView = null; $('inventory-screen').hidden = true; keys.clear();
     if (focus && started && !paused) canvas.focus({ preventScroll: true });
+    updateAudio();
   }
   function openInventory(view) {
     if (!started) start();
@@ -190,6 +229,7 @@
     $('inventory-title').textContent = view === 'pockets' ? 'Pockets full of possibilities.' : 'Your questionable collection.';
     renderInventory();
     $(view === 'pockets' ? 'pockets-tab' : 'collection-tab').focus({ preventScroll: true });
+    updateAudio();
   }
   function renderGarage() {
     const records = game.garage.cars.map(record => ({ ...record, health: game.cars.find(car => car.garageId === record.id)?.health ?? record.health }));
@@ -291,7 +331,8 @@
     paused = value;
     keys.clear(); releaseMouse();
     $('pause-screen').hidden = !paused;
-    if (!paused) canvas.focus();
+    updateAudio(); radioUI();
+    if (!paused) { audioStart(); canvas.focus(); }
   }
   function start() {
     if (!scene || graphicsFailed) { graphicsError('This browser could not start 3D. Use a WebGL 2 capable browser with hardware acceleration enabled.'); return; }
@@ -315,16 +356,17 @@
     $('fullscreen-toggle').textContent = document.fullscreenElement ? 'Exit full screen' : 'Full screen';
     $('fullscreen-toggle').setAttribute('aria-pressed', String(Boolean(document.fullscreenElement)));
   });
-  $('resume-button').addEventListener('click', () => { audioStart(); setPause(false); });
+  $('resume-button').addEventListener('click', () => setPause(false));
   $('restart-button').addEventListener('click', () => { game.recover(); setPause(false); events(); save(); });
   $('recover-button').addEventListener('click', () => { if (!started) start(); if (graphicsFailed) return; closeWheel(false, false); closeInventory(false); game.recover(); events(); canvas.focus(); });
-  $('sound-toggle').addEventListener('click', () => { muted = !muted; audioStart(); settingsUI(); save(); if (started && !paused && !inventoryBusy() && $('help-screen').hidden) canvas.focus(); });
+  $('sound-toggle').addEventListener('click', () => { muted = !muted; audioStart(); applyAudioSettings(); if (started && !paused && !inventoryBusy() && $('help-screen').hidden) canvas.focus(); });
   $('motion-toggle').addEventListener('click', () => { reducedMotion = !reducedMotion; settingsUI(); save(); if (started && !paused && !inventoryBusy() && $('help-screen').hidden) canvas.focus(); });
   $('help-toggle').addEventListener('click', () => {
     closeWheel(false, false); closeInventory(false);
     helpWasPaused = paused;
     if (started) { paused = true; keys.clear(); releaseMouse(); }
     $('help-screen').hidden = false; $('close-help').focus();
+    updateAudio();
   });
   function closeHelp() {
     $('help-screen').hidden = true;
@@ -395,16 +437,20 @@
     if (paused || graphicsFailed || document.activeElement !== canvas) return;
     if (event.code === 'Tab') { event.preventDefault(); if (!event.repeat) openWheel(); return; }
     if (event.code === 'KeyI' || event.code === 'KeyG') { event.preventDefault(); if (!event.repeat) openInventory(event.code === 'KeyI' ? 'pockets' : 'garage'); return; }
-    const controlled = ['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight','Space','KeyE','KeyH','KeyR','KeyC','KeyF'];
+    const controlled = ['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight','Space','KeyE','KeyH','KeyR','KeyC','KeyF','KeyB','KeyN'];
     if (!controlled.includes(event.code)) return;
     event.preventDefault(); keys.add(event.code);
     if (!event.repeat) {
+      audioStart();
       if (event.code === 'Space' && !game.player.vehicleId) game.jump();
       if (event.code === 'KeyE') { game.interact(); setAim(false); }
       if (event.code === 'KeyH') game.horn();
       if (event.code === 'KeyR') { game.recover(); setAim(false); scene?.recenter(); }
       if (event.code === 'KeyC') scene?.recenter();
       if (event.code === 'KeyF') { if (game.flop()) { keys.clear(); setAim(false); } }
+      if (event.code === 'KeyB') cycleRadio(-1);
+      if (event.code === 'KeyN') cycleRadio(1);
+      updateAudio(); radioUI();
       events();
     }
   });
@@ -421,6 +467,7 @@
     $('renderer-error-detail').textContent = message;
     $('play-button').disabled = true;
     $('pause-screen').hidden = true;
+    updateAudio();
   }
   try {
     scene = new MayhemScene(canvas, game, { reducedMotion });
@@ -483,6 +530,7 @@
     if (scene && !graphicsFailed) { scene.update(dt, { reducedMotion, paused: paused || inventoryBusy() || !started }); renderedFrames++; }
   }
   function hud() {
+    radioUI();
     drawMinimap();
     const district = game.districtAt(game.current);
     $('district-name').textContent = district.name.toUpperCase();
@@ -569,7 +617,7 @@
     const dt = Math.min((now - last) / 1000, 0.12); last = now;
     if (started && !paused && !inventoryBusy() && !graphicsFailed && $('help-screen').hidden && !document.hidden) {
       accumulator += dt;
-      const input = { up: keys.has('KeyW') || keys.has('ArrowUp'), down: keys.has('KeyS') || keys.has('ArrowDown'), left: keys.has('KeyA') || keys.has('ArrowLeft'), right: keys.has('KeyD') || keys.has('ArrowRight'), boost: keys.has('ShiftLeft') || keys.has('ShiftRight'), brake: keys.has('Space') };
+      const input = movementInput();
       if (!game.player.vehicleId) input.moveAngle = scene?.viewYaw ?? -Math.PI / 2;
       let count = 0;
       while (accumulator >= 1 / 60 && count++ < 8) {
@@ -583,6 +631,7 @@
       if (saveElapsed > 5) { save(); saveElapsed = 0; }
       events();
     } else accumulator = 0;
+    updateAudio(dt);
     render(dt);
     hudElapsed += dt;
     if (hudElapsed > 0.1) { hud(); hudElapsed = 0; }

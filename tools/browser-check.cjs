@@ -230,7 +230,7 @@ async function captureNetworkOverview(page) {
 // renderer, controls and fixed-step loop in charge of every tested outcome.
 async function installEngineInspection(context) {
   await context.addInitScript(() => {
-    let core, Scene;
+    let core, Scene, audio;
     Object.defineProperty(globalThis, 'MayhemCore', {
       configurable: true,
       get() { return core; },
@@ -247,6 +247,15 @@ async function installEngineInspection(context) {
         Scene = class extends value {
           constructor(...args) { super(...args); globalThis.__browserCheckScene = this; }
         };
+      },
+    });
+    Object.defineProperty(globalThis, 'MayhemAudio', {
+      configurable: true,
+      get() { return audio; },
+      set(value) {
+        audio = { ...value, AudioDirector: class extends value.AudioDirector {
+          constructor(...args) { super(...args); globalThis.__browserCheckAudioDirector = this; }
+        } };
       },
     });
     // Isolated scenario poses are derived from the live road graph. The real
@@ -288,6 +297,250 @@ async function installEngineInspection(context) {
         player: game.network.pointOnRoad(road.roadId, road.s + direction * 18), road, direction };
     };
   });
+}
+
+async function installAudioInspection(context) {
+  await context.addInitScript(() => {
+    const connect = AudioNode.prototype.connect, taps = new Map();
+    // Measure the samples Chrome actually sends to its destination. The real
+    // context, oscillators, effects, gains and output stay in the signal path.
+    AudioNode.prototype.connect = function (destination, ...args) {
+      if (destination !== this.context.destination) return connect.call(this, destination, ...args);
+      let tap = taps.get(this.context);
+      if (!tap) {
+        const analyser = this.context.createAnalyser();
+        analyser.fftSize = 2048;
+        analyser.smoothingTimeConstant = 0;
+        connect.call(analyser, destination);
+        tap = { analyser, samples: new Float32Array(analyser.fftSize) };
+        taps.set(this.context, tap);
+      }
+      connect.call(this, tap.analyser, ...args);
+      return destination;
+    };
+    globalThis.__browserCheckAudioOutput = {
+      read() {
+        let sum = 0, count = 0;
+        for (const [context, tap] of taps) {
+          if (context.state !== 'running') continue;
+          tap.analyser.getFloatTimeDomainData(tap.samples);
+          for (const sample of tap.samples) { sum += sample * sample; count++; }
+        }
+        return { rms: count ? Math.sqrt(sum / count) : 0, contexts: taps.size,
+          states: Array.from(taps.keys(), context => context.state) };
+      },
+    };
+  });
+}
+
+async function audioState(page) {
+  return page.evaluate(() => globalThis.__browserCheckAudioDirector.getStatus());
+}
+
+async function measureAudio(page, milliseconds = 280) {
+  return page.evaluate(async duration => {
+    const samples = [], end = performance.now() + duration;
+    do {
+      samples.push(globalThis.__browserCheckAudioOutput.read().rms);
+      await new Promise(resolve => setTimeout(resolve, 20));
+    } while (performance.now() < end);
+    return { ...globalThis.__browserCheckAudioOutput.read(),
+      rms: samples.reduce((sum, value) => sum + value, 0) / samples.length,
+      peakRms: Math.max(...samples), samples: samples.length };
+  }, milliseconds);
+}
+
+async function setAudioRange(page, id, value) {
+  await page.locator(`#${id}`).evaluate((input, level) => {
+    input.value = String(level);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }, value);
+}
+
+async function checkAudio(browser, externalRequests) {
+  const context = await createTestContext(browser, { viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
+  try {
+    await installEngineInspection(context);
+    await installAudioInspection(context);
+    await context.route('**/*', route => {
+      if (/^(file|data|blob):/.test(route.request().url())) return route.continue();
+      externalRequests.push(route.request().url()); return route.abort();
+    });
+    const page = await context.newPage();
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+    await page.goto(url);
+    assert.equal((await audioState(page)).state, 'locked', 'Music must wait for the Play gesture.');
+    assert.equal((await measureAudio(page, 80)).contexts, 0, 'The welcome screen must not create an audio context.');
+    // Remove nearby ambient engines and residents from this isolated listening
+    // scenario; the real simulation, input and WebAudio synthesis stay active.
+    await page.evaluate(() => {
+      const game = globalThis.__browserCheckGame;
+      game.cars = [game.cars[0]]; game.cars[0].traffic = false; game.peds = []; game.heat = 0; game.graceTimer = 60;
+      for (const cop of game.police) { cop.x = 100; cop.y = 100; cop.route = []; cop.distracted = 60; }
+    });
+    await page.locator('#play-button').click();
+    await waitForScene(page, 'foot');
+    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().state === 'running' && globalThis.__browserCheckAudioDirector.getStatus().active);
+    const foot = await audioState(page), footOutput = await measureAudio(page);
+    assert.equal(foot.mode, 'foot'); assert.equal(foot.station, 'foot');
+    assert.ok(footOutput.rms > 0.00001, 'Foot music must produce real nonzero Chrome audio samples.');
+    await page.keyboard.press('e');
+    await waitForScene(page, 'drive');
+    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().mode === 'vehicle' && globalThis.__browserCheckAudioDirector.getStatus().engineCount > 0);
+    assert.equal((await audioState(page)).station, 'biscuit');
+    assert.ok((await measureAudio(page)).rms > 0.00001, 'The vehicle engine and radio must reach the audio destination.');
+    await page.keyboard.press('n');
+    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().station === 'neon');
+    await page.keyboard.press('b');
+    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().station === 'biscuit');
+    await page.locator('#radio-next').click();
+    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().station === 'neon');
+    await page.locator('#radio-previous').click();
+    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().station === 'biscuit');
+    assert.ok((await page.locator('#radio-status').textContent()).trim().length > 0, 'The radio must identify the selected station.');
+    for (let change = 0; change < 12; change++) await page.keyboard.press('n');
+    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().station === 'biscuit');
+    await page.waitForTimeout(350);
+    const vehicle = await audioState(page);
+    assert.ok(vehicle.voiceCount <= 80, 'Repeated station changes must keep audio voices bounded.');
+    assert.equal((await measureAudio(page, 80)).contexts, 1, 'Station changes must reuse the original audio context.');
+    await page.screenshot({ path: path.join(evidence, 'audio-radio.png'), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+    for (const id of ['radio-panel', 'radio-previous', 'radio-next']) assert.equal(await page.locator(`#${id}`).isVisible(), true);
+    await page.screenshot({ path: path.join(evidence, 'audio-radio-mobile.png'), fullPage: true });
+    await page.setViewportSize({ width: 1365, height: 900 });
+    await page.locator('#game-canvas').focus();
+    for (let step = 0; step < 3; step++) await page.keyboard.press('n');
+    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().station === 'off' && globalThis.__browserCheckAudioDirector.getStatus().musicVoiceCount === 0);
+    assert.ok((await audioState(page)).engineCount > 0, 'Radio off must retain the player engine without substituting foot music.');
+    const engineOutput = await measureAudio(page);
+    assert.ok(engineOutput.rms > 0.00001, 'Radio off must leave the real vehicle engine audible.');
+    await page.keyboard.press('n');
+    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().station === 'biscuit');
+
+    await page.locator('#sound-toggle').click();
+    await page.waitForTimeout(240);
+    const muted = await measureAudio(page);
+    assert.ok(muted.peakRms < 0.000001, `Mute must silence existing sources, measured ${muted.peakRms}.`);
+    await page.locator('#sound-toggle').click();
+    await page.waitForTimeout(180);
+    assert.ok((await measureAudio(page)).rms > 0.00001, 'Unmuting must restore playback.');
+    await page.keyboard.press('p');
+    await page.locator('#pause-screen').waitFor({ state: 'visible' });
+    await page.waitForTimeout(240);
+    const paused = await audioState(page), pausedOutput = await measureAudio(page);
+    assert.equal(paused.active, false);
+    assert.equal(paused.voiceCount, 0, 'Pausing must stop and release scheduled audio voices.');
+    assert.ok(pausedOutput.peakRms < 0.000001, 'Pausing must silence the engine and radio.');
+    await page.locator('#resume-button').click();
+    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().active);
+    for (let restart = 0; restart < 3; restart++) {
+      await page.keyboard.press('p');
+      await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().voiceCount === 0);
+      await page.locator('#resume-button').click();
+      await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().active);
+    }
+
+    await page.evaluate(() => {
+      const game = globalThis.__browserCheckGame, car = game.current, cop = game.police[0];
+      game.heat = 2; game.escapeTimer = 0; game.graceTimer = 60;
+      Object.assign(cop, { x: car.x + Math.cos(car.angle) * 110, y: car.y + Math.sin(car.angle) * 110,
+        angle: car.angle, speed: 0, vx: 0, vy: 0, distracted: 60, route: [], routeTimer: 5, lastSeen: { x: car.x, y: car.y } });
+      game.vehiclePhysics.reset(cop);
+    });
+    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().sirenCount > 0);
+    const chase = await audioState(page), chaseOutput = await measureAudio(page);
+    assert.ok(chase.sirenCount <= 3 && chase.engineCount <= 5, 'Nearby audio voices must remain bounded.');
+    assert.ok(chaseOutput.rms > 0.00001, 'Active sirens must produce destination audio.');
+    await page.evaluate(() => {
+      const game = globalThis.__browserCheckGame; game.heat = 0;
+      for (const cop of game.police) { cop.x = 100; cop.y = 100; game.vehiclePhysics.reset(cop); }
+      game.current.speed = game.current.vx = game.current.vy = 0; game.vehiclePhysics.reset(game.current);
+    });
+    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().sirenCount === 0);
+    await page.locator('#game-canvas').focus();
+    await page.keyboard.press('e');
+    await waitForScene(page, 'foot');
+    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().mode === 'foot' && globalThis.__browserCheckAudioDirector.getStatus().station === 'foot');
+
+    await page.locator('#help-toggle').click();
+    await page.locator('#help-screen').waitFor({ state: 'visible' });
+    await setAudioRange(page, 'audio-music', 0);
+    await setAudioRange(page, 'audio-effects', 1);
+    await page.locator('#close-help').click();
+    await page.waitForTimeout(450);
+    assert.ok((await measureAudio(page, 80)).peakRms < 0.000001, 'Music level zero must silence the isolated on-foot scene.');
+    await page.locator('#game-canvas').focus();
+    await page.keyboard.press('Space');
+    const effect = await measureAudio(page, 120);
+    assert.ok(effect.peakRms > 0.00001, 'Jump effects must produce real audio when music is disabled.');
+
+    await page.locator('#help-toggle').click();
+    await page.locator('#help-screen').waitFor({ state: 'visible' });
+    await setAudioRange(page, 'audio-master', 0.75);
+    await setAudioRange(page, 'audio-music', 0.45);
+    await setAudioRange(page, 'audio-effects', 0.65);
+    await page.locator('#radio-station').selectOption('meadow');
+    for (const [id, level] of [['audio-master-value', 75], ['audio-music-value', 45], ['audio-effects-value', 65]])
+      assert.match(await page.locator(`#${id}`).textContent(), new RegExp(String(level)));
+    const saved = await page.evaluate(key => JSON.parse(localStorage.getItem(key)).settings, saveKey);
+    assert.equal(saved.muted, false);
+    for (const [key, value] of Object.entries({ masterVolume: 0.75, musicVolume: 0.45, effectsVolume: 0.65, radioStation: 'meadow' }))
+      assert.equal(saved.audio[key], value);
+    await page.locator('.audio-settings').scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(evidence, 'audio-settings.png'), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator('#radio-station').scrollIntoViewIfNeeded();
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+    for (const id of ['audio-master', 'audio-music', 'audio-effects', 'radio-station']) assert.equal(await page.locator(`#${id}`).isVisible(), true);
+    await page.screenshot({ path: path.join(evidence, 'audio-settings-mobile.png'), fullPage: true });
+    await page.setViewportSize({ width: 1365, height: 900 });
+    await page.reload();
+    assert.equal((await audioState(page)).state, 'locked', 'Reload must preserve the user-gesture playback gate.');
+    for (const [id, level] of [['audio-master', '0.75'], ['audio-music', '0.45'], ['audio-effects', '0.65']])
+      assert.equal(await page.locator(`#${id}`).inputValue(), level);
+    assert.equal(await page.locator('#radio-station').inputValue(), 'meadow');
+    await page.locator('#play-button').click();
+    await waitForScene(page, 'foot');
+    await page.keyboard.press('e');
+    await waitForScene(page, 'drive');
+    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().station === 'meadow');
+    diagnostics.audio = { foot, footOutput, vehicle, engineOutput, muted, paused, pausedOutput, chase, chaseOutput, effect, saved, reloaded: await audioState(page) };
+  } finally { await closeTestContext(context); }
+}
+
+async function checkUnavailableAudio(browser, externalRequests) {
+  const context = await createTestContext(browser, { viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
+  try {
+    await installEngineInspection(context);
+    await context.addInitScript(() => {
+      for (const name of ['AudioContext', 'webkitAudioContext']) Object.defineProperty(globalThis, name, { value: undefined, configurable: true });
+    });
+    await context.route('**/*', route => {
+      if (/^(file|data|blob):/.test(route.request().url())) return route.continue();
+      externalRequests.push(route.request().url()); return route.abort();
+    });
+    const page = await context.newPage();
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+    await page.goto(url);
+    await page.locator('#play-button').click();
+    await waitForScene(page, 'foot');
+    assert.equal((await audioState(page)).state, 'unavailable');
+    assert.match(await page.locator('#sound-toggle').textContent(), /unavailable/i);
+    await page.keyboard.press('e');
+    await waitForScene(page, 'drive');
+    await page.locator('#help-toggle').click();
+    await page.locator('#help-screen').waitFor({ state: 'visible' });
+    await setAudioRange(page, 'audio-master', 0.5);
+    assert.equal(await page.locator('#audio-master').inputValue(), '0.5');
+    await page.locator('#close-help').click();
+    assert.equal(await page.locator('#game-canvas').evaluate(element => element === document.activeElement), true);
+    assert.equal((await audioState(page)).voiceCount, 0, 'Unavailable audio must leave gameplay usable without audio voices.');
+  } finally { await closeTestContext(context); }
 }
 
 async function bodyState(page, id = 'player') {
@@ -2047,6 +2300,8 @@ async function main() {
       } finally { await closeTestContext(legacyContext); }
     });
 
+    await check('audio produces real music, vehicle radios, engines, sirens and effects; mute, pause and saved levels work', async () => checkAudio(browser, externalRequests));
+    await check('unavailable audio leaves Play, vehicle entry and sound settings usable', async () => checkUnavailableAudio(browser, externalRequests));
     await check('no external network requests', async () => assert.deepEqual(externalRequests, []));
     await check('no page or console errors', async () => assert.deepEqual(errors, []));
     fs.writeFileSync(path.join(evidence, 'browser-check.json'), JSON.stringify({ url, inputMode: 'virtual-pointer-lock', inputDetails: { relativeMovement: 'DOM PointerEvent', keyboardAndButtons: 'Playwright Chrome input' }, filter: checkFilter?.source || null, checks, diagnostics, errors, externalRequests }, null, 2) + '\n');

@@ -133,6 +133,10 @@ No blood, graphic injuries, realistic firearms, or grim death screens. Startled 
 
 Crashes get a bassy cartoon thump; pickups get a rising jingle; a perfect drift gets a tiny celebratory accent. Audio starts after a player gesture and has an obvious mute button. Camera shake is restrained and can be disabled alongside extra particles. Confetti is capped and pooled so a big celebration does not overwhelm the browser.
 
+The town has an original synthesized soundtrack on foot. Vehicle radios offer Biscuit FM (disco/funk), Neon Drive (synthwave), Meadow Waves (mellow dub), and off; B/N and radio arrows change the station. Each station has its own multi-bar bass, chord, melody, and percussion patterns. Master, music/radio, and effects levels are adjustable in help and saved locally.
+
+Vehicle audio follows the simulation: engine character differs between compact, sports, and van; throttle, speed, and boost change its pitch and texture. Nearby traffic and pursuing patrol sirens fade with distance and pan relative to the camera. Parked civilian cars stay quiet. Grounded tires squeal during braking or lateral sliding, and footsteps follow actual movement. A bounded audio scheduler and voice limits keep playback manageable. Pausing, opening menus, muting, or hiding the tab cancels playback, including queued music; resuming starts a fresh phrase. Web Audio failures leave gameplay available.
+
 ## First playable slice
 
 Build a complete small loop before adding a larger city:
@@ -161,6 +165,7 @@ No multiplayer, huge procedural city, interiors, stairs, elevated road routes, c
 - Do airborne cars retain height and full rotation, collide with walls and fixed props, bounce without explosive energy gain, and land safely? Can a flipped car recover without leaving its collision body behind?
 - Does Space jump only on foot, require a fresh press after landing, and leave left-click as the toy action? Do jumps pause and recover cleanly?
 - Do pause, tab switching, retry, save reload, mute, and reduced motion behave predictably?
+- Can players distinguish the three radio stations and vehicle engines, hear nearby pursuing sirens, and balance music against effects? Does radio off keep the engine audible, and do menus and mute silence queued notes without leaking audio nodes after repeated resumes?
 - Does the game stay smooth with maximum patrols and confetti active?
 - Can players turn a corner, borrow a car, and aim confetti without fighting the camera? Does looking right turn the view right, and does holding aim slow it comfortably?
 - Does the first capture click avoid firing? Do Esc, menus, full screen, and tab changes release the mouse safely, clear held input, and show how to resume looking?
