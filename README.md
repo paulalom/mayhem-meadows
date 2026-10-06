@@ -64,6 +64,8 @@ The toy wheel and pocket/collection menus freeze the town and mission timer. Bro
 
 The [gameplay design](DESIGN.md) explains the intended loops, tuning, scope, and next playtest questions. This is a small playable slice with simple traffic and patrol AI. Driving and upright movement use flat streets, while ragdolls have vertical gravity and three-dimensional joint contacts. Decorative trees, lamps, and curbs remain scenery. There are no stairs, jumps, or building interiors.
 
+The [story campaign design](CAMPAIGN.md) specifies **Operation Unboring**, a proposed ten-job campaign beginning with Spanner's phone call and directions to Sprinkle Garage. Its first playable milestone is the call, the drive, and the garage meeting; campaign gameplay is planned for a later build.
+
 ## Development
 
 The checked-in engine bundle is ready to play. You do not need npm or a build step to open the game.

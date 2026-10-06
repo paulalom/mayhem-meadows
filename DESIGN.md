@@ -20,6 +20,10 @@ The guiding rule: **a mistake should produce a funny situation before it produce
 
 The player can ignore contracts and play freely. There is no mandatory story sequence.
 
+## Story campaign expansion
+
+[Operation Unboring](CAMPAIGN.md) adds an optional ten-job story about rescuing the cancelled Meadows street party. Its opening phone call sends the player from the yellow Pocket Rocket to Sprinkle Garage. Each stage names the destination, shows the route and distance, and changes to the correct interaction prompt on arrival. The campaign design covers the opening script, mission progression, rewards, checkpoints, phone log, and recovery rules for the next playable milestone.
+
 ## Driving and walking
 
 - **Arcade steering:** forward/reverse acceleration, speed-sensitive turning, generous braking, predictable grip, and a handbrake that makes drifting easy to discover.
