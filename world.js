@@ -11,6 +11,7 @@
     orchard: Object.freeze({ id: 'orchard', name: 'Orchard Park', color: '#d2d6ac', mapColor: '#d2d6ac', suburban: true })
   });
   const COLORS = ['#ffd15b', '#fb8097', '#67d3c8', '#a6a0fa', '#90c66b', '#6fb5eb'];
+  const PROP_HEALTH = Object.freeze({ fence: 25, wayfinding: 20, lamp: 35, bench: 45, tree: 90, fountain: 160, wash: 100 });
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   const heading = (a, b) => Math.atan2(b.y - a.y, b.x - a.x);
@@ -372,7 +373,12 @@
     const decorationClear=box=>roadClear(box,SIDEWALK_WIDTH+8)&&!buildings.some(building=>boxesOverlap(box,building,8));
     const propClear = box => decorationClear(box) &&
       !reserved.some(point => distance(point,{x:box.x+box.w/2,y:box.y+box.h/2}) < point.radius + Math.hypot(box.w,box.h)/2);
-    const addProp = object => { object.id = 'prop-' + staticObjects.length; staticObjects.push(object); return object; };
+    const addProp = object => {
+      object.id = 'prop-' + staticObjects.length;
+      object.destructible = object.kind !== 'garage';
+      if (object.destructible) object.health = object.maxHealth = PROP_HEALTH[object.kind] || 45;
+      staticObjects.push(object); return object;
+    };
     for (const block of blocks) {
       const building = block.buildings[0], cx=building.x+building.w/2,cy=building.y+building.h/2,angle=building.angle;
       const front={x:-Math.sin(angle),y:Math.cos(angle)};
@@ -495,7 +501,7 @@
     return {size:SIZE,sidewalkWidth:SIDEWALK_WIDTH,districts:DISTRICTS,roads,nodes,network,buildings,blocks,lots:blocks,areas,staticObjects,services,start,spawn:start,pedPaths,vehicleSpawns,parkingBays,missionAnchors,landscape};
   }
 
-  const api={SIZE,SIDEWALK_WIDTH,DISTRICTS,districtAt,footprintCorners,boxesOverlap,segmentHitsBox,segmentBoxDistance,RoadNetwork,createWorld};
+  const api={SIZE,SIDEWALK_WIDTH,DISTRICTS,PROP_HEALTH,districtAt,footprintCorners,boxesOverlap,segmentHitsBox,segmentBoxDistance,RoadNetwork,createWorld};
   root.MayhemWorld=api;
   if(typeof module!=='undefined'&&module.exports) module.exports=api;
 })(globalThis);

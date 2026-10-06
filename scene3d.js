@@ -57,6 +57,9 @@
       this._dummy = new T.Object3D();
       this._color = new T.Color();
       this._staticParts = new Map();
+      this._destructibleParts = new Map();
+      this._propRenderStates = new Map();
+      this._propInstances = [];
       this._materials = new Map();
       this._geometries = [];
       this._textures = [];
@@ -137,6 +140,13 @@
       object.scale.set(sx, sy, sz);
       if (rotation) object.rotation.set(rotation[0], rotation[1], rotation[2]);
       object.updateMatrix();
+      if (this._activePropObject) {
+        const key = geometry.uuid + ':' + material.uuid + ':' + shadow;
+        this._destructibleParts ??= new Map();
+        if (!this._destructibleParts.has(key)) this._destructibleParts.set(key, { geometry, material, shadow, parts: [] });
+        this._destructibleParts.get(key).parts.push({ object: this._activePropObject, matrix: object.matrix.clone() });
+        return;
+      }
       const key = material.uuid + ':' + shadow;
       if (!this._staticParts.has(key)) this._staticParts.set(key, { material, shadow, parts: [] });
       this._staticParts.get(key).parts.push({ geometry, matrix: object.matrix.clone() });
@@ -183,6 +193,48 @@
         this.scene.add(mesh);
       }
       this._staticParts.clear();
+      // Props share a small set of instance batches. Removing a tree, including
+      // its canopy, changes only its own slots rather than rebuilding the town.
+      this._propInstances ??= [];
+      for (const batch of this._destructibleParts?.values() || []) {
+        const mesh = new T.InstancedMesh(batch.geometry, batch.material, batch.parts.length);
+        mesh.instanceMatrix.setUsage(T.DynamicDrawUsage);
+        mesh.castShadow = batch.shadow; mesh.receiveShadow = true;
+        for (let i = 0; i < batch.parts.length; i++) {
+          const part = batch.parts[i];
+          mesh.setMatrixAt(i, part.matrix);
+          this._propRenderState(part.object).slots.push({ mesh, index: i, matrix: part.matrix });
+        }
+        this.scene.add(mesh); this._propInstances.push(mesh);
+      }
+      this._destructibleParts?.clear();
+      this._syncDestructibleProps();
+    }
+
+    _propRenderState(object) {
+      this._propRenderStates ??= new Map();
+      if (!this._propRenderStates.has(object)) this._propRenderStates.set(object, { slots: [], signs: [], hidden: false });
+      return this._propRenderStates.get(object);
+    }
+
+    _syncDestructibleProps() {
+      const hiddenMatrix = this._hiddenPropMatrix ??= new this.T.Matrix4().makeScale(0, 0, 0);
+      for (const [object, state] of this._propRenderStates || []) {
+        const hidden = Boolean(object.destroyed);
+        if (hidden === state.hidden) continue;
+        state.hidden = hidden;
+        for (const slot of state.slots) {
+          slot.mesh.setMatrixAt(slot.index, hidden ? hiddenMatrix : slot.matrix);
+          slot.mesh.instanceMatrix.needsUpdate = true;
+        }
+        for (const sign of state.signs) sign.visible = !hidden;
+      }
+      if (this.canvas?.dataset) {
+        const objects = this.game.staticObjects || [];
+        const destroyed = objects.reduce((count, object) => count + Boolean(object.destroyed), 0);
+        this.canvas.dataset.liveProps = String(objects.length - destroyed);
+        this.canvas.dataset.destroyedProps = String(destroyed);
+      }
     }
 
     _lights() {
@@ -593,6 +645,7 @@
       const sign = new T.Mesh(geometry, material);
       sign.position.set(x, y, z); sign.rotation.y = yaw;
       this.scene.add(sign);
+      if (this._activePropObject) this._propRenderState(this._activePropObject).signs.push(sign);
       return sign;
     }
 
@@ -637,6 +690,8 @@
         bollard: ['#5c7781'], wayfinding: ['#687d74', '#f1ddae'], fence: ['#e7ddbd'], hedge: ['#78a578']
       };
       for (const object of this.game.staticObjects || []) {
+        this._activePropObject = object.kind !== 'garage' && object.destructible !== false ? object : null;
+        if (this._activePropObject) this._propRenderState(object);
         const x = object.x / UNIT, z = object.y / UNIT, elevation = object.elevation || 0;
         const yaw = -(object.angle || 0), cosine = Math.cos(yaw), sine = Math.sin(yaw);
         const sign = (text, offset, height, facing, background, ink, width, signHeight) => {
@@ -660,11 +715,12 @@
             // its visible twin is baked into the static material batches.
             const aimMesh = new this.T.Mesh(geometry, material);
             aimMesh.position.set(px, py, pz); aimMesh.scale.set(sx, sy, sz); aimMesh.rotation.y = yaw;
+            aimMesh.propObject = object;
             aimMesh.updateMatrixWorld(true); this._propAimMeshes.push(aimMesh);
           }
           const extentX = Math.abs(cosine) * half[0] + Math.abs(sine) * half[2];
           const extentZ = Math.abs(sine) * half[0] + Math.abs(cosine) * half[2];
-          this._propVolumes.push({ minX: px - extentX, maxX: px + extentX, minY: py - half[1], maxY: py + half[1], minZ: pz - extentZ, maxZ: pz + extentZ });
+          this._propVolumes.push({ object, minX: px - extentX, maxX: px + extentX, minY: py - half[1], maxY: py + half[1], minZ: pz - extentZ, maxZ: pz + extentZ });
         }
         if (object.kind === 'tree') this._tree(x, z, object.scale || 1.05, object.variety || 0, false, elevation);
         if (object.kind === 'fountain') {
@@ -679,6 +735,7 @@
           for (const side of [-1, 1]) this._static(this._sphere, this._material('#e8b393'), x + side * 0.27, elevation + 0.76, z, 0.08, 0.09, 0.08, null, false);
         }
       }
+      this._activePropObject = null;
     }
 
     _services() {
@@ -942,6 +999,7 @@
       // camera clearance. People and vehicles use their actual rendered meshes
       // so the shoulder shot converges on the crosshair's subject.
       for (const box of this._buildingVolumes) {
+        if (box.object?.destroyed) continue;
         const cx = box.cx ?? (box.minX + box.maxX) / 2, cz = box.cz ?? (box.minZ + box.maxZ) / 2;
         const cosine = box.cosine ?? 1, sine = box.sine ?? 0;
         const halfX = box.physicalHalfX ?? box.halfX ?? (box.maxX - box.minX) / 2, halfZ = box.physicalHalfZ ?? box.halfZ ?? (box.maxZ - box.minZ) / 2;
@@ -958,7 +1016,7 @@
           saveHit(this._aimHit);
         }
       }
-      const subjects = [...(this._propAimMeshes || [])];
+      const subjects = (this._propAimMeshes || []).filter(mesh => !mesh.propObject?.destroyed);
       for (const model of this._residents?.values() || []) if (model.group.visible) subjects.push(model.group);
       for (const [id, model] of this._vehicles || []) if (model.group.visible && id !== this.game.player.vehicleId) subjects.push(model.group);
       for (const group of subjects) group.updateWorldMatrix(true, true);
@@ -1127,6 +1185,7 @@
       let nearest = 1;
       const dx = endX - x, dy = endY - y, dz = endZ - z, margin = 0.22;
       for (const box of this._buildingVolumes) {
+        if (box.object?.destroyed) continue;
         const cx = box.cx ?? (box.minX + box.maxX) / 2, cz = box.cz ?? (box.minZ + box.maxZ) / 2;
         const cosine = box.cosine ?? 1, sine = box.sine ?? 0;
         const halfX = box.halfX ?? (box.maxX - box.minX) / 2, halfZ = box.halfZ ?? (box.maxZ - box.minZ) / 2;
@@ -1153,6 +1212,7 @@
 
     _insideBuilding(x, y, z) {
       return this._buildingVolumes.some(box => {
+        if (box.object?.destroyed) return false;
         const cx = box.cx ?? (box.minX + box.maxX) / 2, cz = box.cz ?? (box.minZ + box.maxZ) / 2;
         const cosine = box.cosine ?? 1, sine = box.sine ?? 0;
         const halfX = box.halfX ?? (box.maxX - box.minX) / 2, halfZ = box.halfZ ?? (box.maxZ - box.minZ) / 2;
@@ -1174,6 +1234,7 @@
         // including bodies resting on roofs, to avoid a zero-length camera.
         const margin = 0.27;
         for (const box of this._buildingVolumes) {
+          if (box.object?.destroyed) continue;
           const cx = box.cx ?? (box.minX + box.maxX) / 2, cz = box.cz ?? (box.minZ + box.maxZ) / 2;
           const cosine = box.cosine ?? 1, sine = box.sine ?? 0;
           const halfX = box.halfX ?? (box.maxX - box.minX) / 2, halfZ = box.halfZ ?? (box.maxZ - box.minZ) / 2;
@@ -1404,9 +1465,42 @@
       if (this._toyShots.instanceColor) this._toyShots.instanceColor.needsUpdate = true;
     }
 
+    _debrisEffects() {
+      const debris = this.game.debris || [];
+      if (!this._debris && debris.length) {
+        this._debris = new this.T.InstancedMesh(this._cube, this._material('#ffffff'), 120);
+        this._debris.instanceMatrix.setUsage(this.T.DynamicDrawUsage);
+        this._debris.frustumCulled = false;
+        this._debris.castShadow = true; this._debris.receiveShadow = true;
+        this.scene.add(this._debris);
+      }
+      let count = 0;
+      for (const piece of debris) {
+        if (count === 120) break;
+        const size = piece.size;
+        if (piece.life <= 0 || !size || size.length !== 3 || !size.every(value => Number.isFinite(value) && value > 0) || !Number.isFinite(piece.x + piece.y + piece.elevation + piece.angle + piece.spin)) continue;
+        const age = Math.max(0, (piece.maxLife || piece.life) - piece.life);
+        const fade = clamp(piece.life / .45, 0, 1);
+        this._dummy.position.set(piece.x / UNIT, piece.elevation, piece.y / UNIT);
+        this._dummy.rotation.set(age * piece.spin, -piece.angle, age * piece.spin * .7);
+        this._dummy.scale.set(size[0] * fade, size[1] * fade, size[2] * fade);
+        this._dummy.updateMatrix();
+        this._debris.setMatrixAt(count, this._dummy.matrix);
+        this._color.set(piece.color || '#c6af8b'); this._debris.setColorAt(count, this._color);
+        count++;
+      }
+      if (this._debris) {
+        this._debris.count = count; this._debris.visible = count > 0;
+        this._debris.instanceMatrix.needsUpdate = true;
+        if (this._debris.instanceColor) this._debris.instanceColor.needsUpdate = true;
+      }
+      if (this.canvas?.dataset) this.canvas.dataset.debrisCount = String(count);
+    }
+
     _effects() {
       const game = this.game;
       this._projectileEffects();
+      this._debrisEffects();
       this._confetti.count = Math.min(360, game.particles.length);
       for (let i = 0; i < this._confetti.count; i++) {
         const particle = game.particles[i], age = particle.maxLife - particle.life;
@@ -1444,6 +1538,7 @@
     update(dt, options = {}) {
       const step = Number.isFinite(dt) ? clamp(dt, 0, 0.1) : 0;
       if (options.reducedMotion !== undefined) this.reducedMotion = Boolean(options.reducedMotion);
+      this._syncDestructibleProps();
       this._people(step);
       this._cars(options.paused ? 0 : step);
       this._effects();
@@ -1456,6 +1551,8 @@
       this._ragdollCubes?.dispose();
       this._ragdollHeads?.dispose();
       this._toyShots?.dispose();
+      this._debris?.dispose();
+      for (const mesh of this._propInstances || []) mesh.dispose();
       this._riverFlow?.dispose();
       for (const geometry of this._geometries) geometry.dispose();
       for (const material of this._materials.values()) material.dispose();

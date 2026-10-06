@@ -56,6 +56,7 @@ Compact, sports car, and van engines respond to speed, throttle, and boost. Near
 - **Navigation:** glowing 3D mission markers, an objective direction/distance indicator, and a separate overhead minimap.
 - **Ragdolls:** car impacts and confetti send residents tumbling. The player can take a tumble too. Jointed bodies fall, bounce, slide, and get back up; press F to try it or R to recover immediately.
 - **Solid contacts:** vehicle bodies collide with the ground, building walls, other cars, and fixed props: tree trunks, lamp posts, park benches/fountain, garage kiosk, and car wash frame. Contacts account for height and the full vehicle rotation, with an elastic arcade bounce. People bump into vehicles and each other, and fallen limbs collide with the ground, walls, and cars.
+- **Destructible scenery:** smash fences, trees, lamp posts, benches, fountains, signs, and the car wash frame with toys or hard vehicle impacts. The popper chips away, the hammer breaks light props, and cannon blasts clear a wider area. Broken scenery scatters temporary debris and stops blocking people, cars, ragdolls, and shots. Player-caused destruction attracts the Fun Police. Buildings and the garage kiosk remain solid; service markers keep working. Scenery resets when you reload the town.
 - **Disco Delivery:** reach pickup, then deliver the imaginary disco ball.
 - **Checkpoint Dash:** drive through a sequence of glowing rings.
 - **Party Route:** visit the marked neighborhoods and honk at each ring.

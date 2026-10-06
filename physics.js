@@ -273,7 +273,7 @@
         boxes.push(prepareBox({ x: (building.x + building.w / 2) / UNIT, z: (building.y + building.h / 2) / UNIT, y: height / 2, hx: building.w / UNIT / 2, hy: height / 2, hz: building.h / UNIT / 2, angle: finite(building.angle), dynamic: false }));
       });
       (environment.staticObjects || []).forEach(object => {
-        if (!object || !Number.isFinite(object.x) || !Number.isFinite(object.y)) return;
+        if (!object || object.destroyed || !Number.isFinite(object.x) || !Number.isFinite(object.y)) return;
         // Trunks, benches, and lamp posts use the same compound solid volumes
         // as the car world. Offsets and half-extents are already in metres.
         const parts = Array.isArray(object.parts) ? object.parts : [{

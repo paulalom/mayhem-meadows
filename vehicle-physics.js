@@ -54,10 +54,11 @@
       this.world.addBody(this.floor);
       this._townBodies = [];
       for (const building of game.buildings) this._building(building);
-      for (const object of game.staticObjects) this._fixed(object.kind, object.x, object.y, object.parts, object);
+      for (const object of game.staticObjects) if (!object.destroyed) this._fixed(object.kind, object.x, object.y, object.parts, object);
       this._boundaries();
       this._launchAt = new Map();
       this._buildings = game.buildings; this._objects = game.staticObjects;
+      this._environmentVersion = game._environmentVersion;
       this.sync();
     }
 
@@ -123,8 +124,12 @@
       if (this._buildings !== this.game.buildings || this._objects !== this.game.staticObjects) {
         for (const body of this.world.bodies.slice()) if (body.mass === 0 && body !== this.floor && body.kind !== 'boundary') this.world.removeBody(body);
         for (const building of this.game.buildings) this._building(building);
-        for (const object of this.game.staticObjects) this._fixed(object.kind, object.x, object.y, object.parts, object);
+        for (const object of this.game.staticObjects) if (!object.destroyed) this._fixed(object.kind, object.x, object.y, object.parts, object);
         this._buildings = this.game.buildings; this._objects = this.game.staticObjects;
+      }
+      if (this._environmentVersion !== this.game._environmentVersion) {
+        for (const body of this.world.bodies.slice()) if (body.source?.destroyed) this.world.removeBody(body);
+        this._environmentVersion = this.game._environmentVersion;
       }
       const alive = new Set();
       for (const entity of this.game.cars.concat(this.game.police)) {
@@ -185,7 +190,7 @@
       if (Math.abs(contact.ni.y) > 0.65) { contact.restitution = 0.08; return; }
       const closing = Math.abs(contact.getImpactVelocityAlongNormal());
       if (closing < 1.5) return;
-      this.impacts.push({ entity: body.entity, other: other.entity || null, speed: closing * SCALE, vehicle: Boolean(other.entity) });
+      this.impacts.push({ entity: body.entity, other: other.entity || null, prop: other.source || null, speed: closing * SCALE, vehicle: Boolean(other.entity) });
       const pair = other.entity ? [body.entity.id, other.entity.id].sort().join(':') : body.entity.id + ':' + other.id;
       if (closing < (other.entity ? 6.5 : 9) || this.world.time - (this._launchAt.get(pair) ?? -10) < 0.8) return;
       this._launchAt.set(pair, this.world.time);
@@ -242,8 +247,22 @@
     }
 
     hitsSegment(from, to) {
+      return Boolean(this.firstHit(from, to));
+    }
+
+    firstHit(from, to, ignoreVehicleId, ignoreProps) {
       const result = new C.RaycastResult();
-      return this.world.raycastClosest(new C.Vec3(from.x / SCALE, from.height, from.y / SCALE), new C.Vec3(to.x / SCALE, to.height, to.y / SCALE), { skipBackfaces: false }, result);
+      const start = new C.Vec3(from.x / SCALE, from.height, from.y / SCALE), end = new C.Vec3(to.x / SCALE, to.height, to.y / SCALE);
+      if (ignoreVehicleId || ignoreProps?.size) {
+        let nearest = null;
+        this.world.raycastAll(start, end, { skipBackfaces: false }, hit => {
+          if (ignoreVehicleId && hit.body.entity?.id === ignoreVehicleId || ignoreProps?.has(hit.body.source) || nearest && nearest.distance <= hit.distance) return;
+          nearest = { body: hit.body, source: hit.body.source, distance: hit.distance, x: hit.hitPointWorld.x * SCALE, y: hit.hitPointWorld.z * SCALE, height: hit.hitPointWorld.y };
+        });
+        return nearest;
+      }
+      const hit = this.world.raycastClosest(start, end, { skipBackfaces: false }, result);
+      return hit ? { body: result.body, source: result.body.source, x: result.hitPointWorld.x * SCALE, y: result.hitPointWorld.z * SCALE, height: result.hitPointWorld.y } : null;
     }
 
     ceiling(x, z, fromHeight, toHeight) {

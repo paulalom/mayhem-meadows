@@ -105,6 +105,8 @@
       this.buildings = [];
       this.blocks = [];
       this.staticObjects = [];
+      this._environmentVersion = 0;
+      this.debris = [];
       this.particles = [];
       this.projectiles = [];
       this.skidMarks = [];
@@ -236,14 +238,15 @@
     }
 
     _staticParts() {
-      if (this._streetParts && this._streetObjects === this.staticObjects) return this._streetParts;
+      if (this._streetParts && this._streetObjects === this.staticObjects && this._streetVersion === this._environmentVersion) return this._streetParts;
       this._streetObjects = this.staticObjects;
-      return this._streetParts = this.staticObjects.flatMap(object => object.parts.map(part => {
+      this._streetVersion = this._environmentVersion;
+      return this._streetParts = this.staticObjects.filter(object => !object.destroyed).flatMap(object => object.parts.map(part => {
         const angle = object.angle || 0, c = Math.cos(angle), s = Math.sin(angle);
         const x = object.x + (part.offset[0] * c - part.offset[2] * s) * 20;
         const y = object.y + (part.offset[0] * s + part.offset[2] * c) * 20;
         return { box: orientedBox({ x, y, angle }, part.half[0] * 40, part.half[2] * 40),
-          bottom: part.offset[1] - part.half[1], top: part.offset[1] + part.half[1], cylinder: part.shape === 'cylinder' };
+          bottom: finite(object.elevation, 0) + part.offset[1] - part.half[1], top: finite(object.elevation, 0) + part.offset[1] + part.half[1], cylinder: part.shape === 'cylinder' };
       }));
     }
 
@@ -497,6 +500,100 @@
       }
     }
 
+    _propPoints(object, origin, pitch) {
+      const angle = object.angle || 0, c = Math.cos(angle), s = Math.sin(angle);
+      return object.parts.map(part => {
+        const cx = object.x + (part.offset[0] * c - part.offset[2] * s) * 20;
+        const cy = object.y + (part.offset[0] * s + part.offset[2] * c) * 20;
+        const dx = origin.x - cx, dy = origin.y - cy;
+        const u = clamp(dx * c + dy * s, -part.half[0] * 20, part.half[0] * 20);
+        const v = clamp(-dx * s + dy * c, -part.half[2] * 20, part.half[2] * 20);
+        const x = cx + u * c - v * s, y = cy + u * s + v * c;
+        const aimHeight = origin.height + (Number.isFinite(pitch) ? Math.tan(pitch) * Math.hypot(x - origin.x, y - origin.y) / 20 : 0);
+        const height = clamp(aimHeight, finite(object.elevation, 0) + part.offset[1] - part.half[1], finite(object.elevation, 0) + part.offset[1] + part.half[1]);
+        return { x, y, height };
+      });
+    }
+
+    _propVisible(origin, point, object) {
+      const hit = this.vehiclePhysics.firstHit(origin, point, origin.ignoreVehicleId, origin.ignoreProps);
+      return !hit || hit.source === object;
+    }
+
+    _damageProp(object, amount, origin, playerCaused = true) {
+      if (!object || object.destroyed || object.destructible === false || object.kind === 'garage' ||
+        !this.staticObjects.includes(object) || !Number.isFinite(amount) || amount <= 0) return false;
+      const maxHealth = finite(object.maxHealth, World.PROP_HEALTH[object.kind] || 45);
+      object.maxHealth = maxHealth;
+      object.health = Math.max(0, finite(object.health, maxHealth) - amount);
+      if (object.health > 0) return true;
+      object.destroyed = true; object.destroyedAt = this.time;
+      this._environmentVersion++;
+      // Debris is temporary scenery, with a fixed budget and no solid contacts.
+      const colors = { tree: '#a88462', fence: '#e7ddbd', lamp: '#536d74', bench: '#cf9771', fountain: '#eee7d3', wash: '#89d7d1', wayfinding: '#687d74' };
+      const angle = object.angle || 0, c = Math.cos(angle), s = Math.sin(angle);
+      const parts = object.parts.concat(object.kind === 'tree' ? [{ offset: [0, 2.3 * (object.scale || 1), 0], half: [.8, .8, .8], color: '#80bf8e' }] : []);
+      for (const part of parts) for (let i = 0; i < 3; i++) {
+        const spread = this._random() * Math.PI * 2, speed = 25 + this._random() * 60;
+        const life = 3 + this._random() * 1.5;
+        const away = origin ? Math.atan2(object.y - origin.y, object.x - origin.x) : spread;
+        this.debris.push({ x: object.x + (part.offset[0] * c - part.offset[2] * s) * 20,
+          y: object.y + (part.offset[0] * s + part.offset[2] * c) * 20, elevation: finite(object.elevation, 0) + part.offset[1],
+          vx: Math.cos(spread) * speed + Math.cos(away) * 35, vy: Math.sin(spread) * speed + Math.sin(away) * 35,
+          verticalVelocity: 2 + this._random() * 3, angle: spread, spin: (this._random() - .5) * 8,
+          size: part.half.map(half => clamp(half * (0.6 + this._random() * .5), .08, .65)), color: part.color || colors[object.kind] || '#b8a1e0', life, maxLife: life });
+      }
+      this.debris = this.debris.slice(-120);
+      this._confetti(object.x, object.y, 12); this._sound('crash');
+      this.vehiclePhysics.sync();
+      if (playerCaused) this._raiseHeat(1, 'Scenery smashed! The Fun Police noticed the mess.');
+      return true;
+    }
+
+    _damagePropsNear(origin, radius, amount, playerCaused = true) {
+      // A burst can start inside the prop it hit. That source must not shield
+      // its neighbours, and all visibility is resolved before removing bodies.
+      const ignoreProps = new Set(this.staticObjects.filter(object => !object.destroyed && object.destructible !== false && object.kind !== 'garage' &&
+        this._propPoints(object, origin).some(point => Math.hypot(point.x - origin.x, point.y - origin.y, (point.height - origin.height) * 20) < .001)));
+      origin = { ...origin, ignoreProps };
+      const targets = [];
+      let hit = false;
+      for (const object of this.staticObjects) {
+        if (object.destroyed || object.destructible === false || object.kind === 'garage') continue;
+        const point = this._propPoints(object, origin).find(point =>
+          Math.hypot(point.x - origin.x, point.y - origin.y, (point.height - origin.height) * 20) < radius && this._propVisible(origin, point, object));
+        if (point) targets.push(object);
+      }
+      for (const object of targets) hit = this._damageProp(object, amount, origin, playerCaused) || hit;
+      return hit;
+    }
+
+    _strikeProps(angle, pitch, reach, amount, spread) {
+      const origin = { x: this.player.x, y: this.player.y, height: this.player.elevation + MUZZLE_HEIGHT };
+      let hit = false;
+      for (const object of this.staticObjects) {
+        if (object.destroyed || object.destructible === false || object.kind === 'garage') continue;
+        const point = this._propPoints(object, origin, pitch).find(point => {
+          const dx = point.x - origin.x, dy = point.y - origin.y, range = Math.hypot(dx, dy);
+          const forward = dx * Math.cos(angle) + dy * Math.sin(angle);
+          const height = origin.height + Math.tan(pitch) * range / 20;
+          return Math.hypot(range, (point.height - origin.height) * 20) < reach && (range < 1 || forward / range > spread) &&
+            Math.abs(height - point.height) < .55 && this._propVisible(origin, point, object);
+        });
+        if (point) hit = this._damageProp(object, amount, origin) || hit;
+      }
+      return hit;
+    }
+
+    _propExplosions() {
+      for (const car of this._vehicles()) {
+        if (!car.exploded || !Number.isFinite(car.explosionTime) || car._sceneryBlastAt === car.explosionTime) continue;
+        car._sceneryBlastAt = car.explosionTime;
+        this._damagePropsNear({ x: car.x, y: car.y, height: finite(car.elevation, 0) + .7, ignoreVehicleId: car.id }, 160, 140,
+          car.id === this.player.vehicleId || car.borrowed === true);
+      }
+    }
+
     _raiseHeat(amount = 1, reason = 'The Fun Police noticed!') {
       this.escapeTimer = 0;
       if (this._troubleCooldown > 0) return;
@@ -598,7 +695,7 @@
       if (equipped === 'hammer') {
         const reach = 62, forwardX = Math.cos(angle), forwardY = Math.sin(angle);
         this._confetti(this.player.x + forwardX * 35 * cosPitch, this.player.y + forwardY * 35 * cosPitch, 18, this.player.elevation + MUZZLE_HEIGHT + sinPitch * 1.75); this._sound('hammer');
-        let hit = false;
+        let hit = this._strikeProps(angle, pitch, reach, 45, .5);
         const inReach = person => {
           const dx = person.x - this.player.x, dy = person.y - this.player.y, range = Math.hypot(dx, dy);
           return range < reach && inAimHeight(person) && (range < 1 || (dx * forwardX + dy * forwardY) / range > 0.5) &&
@@ -613,7 +710,7 @@
       }
       const pop = { x: this.player.x + Math.cos(angle) * 44 * cosPitch, y: this.player.y + Math.sin(angle) * 44 * cosPitch };
       this._confetti(pop.x, pop.y, 25, this.player.elevation + MUZZLE_HEIGHT + sinPitch * 2.2); this._sound('pop');
-      let hit = false;
+      let hit = this._strikeProps(angle, pitch, 100, 10, .65);
       for (const ped of this.peds) if (ped.stunned <= 0 && !this.ragdolls.get(ped.id) && inAimHeight(ped) && distance(ped, pop) < 60) { this._startle(ped, angle); hit = true; }
       for (const cop of this.police) if (inAimHeight(cop) && distance(cop, pop) < 65) { cop.distracted = 1.8; hit = true; this._confetti(cop.x, cop.y, 20); }
       if (hit) this._raiseHeat(1, 'Confetti disturbance! Find a corner to hide.');
@@ -622,6 +719,7 @@
 
     _burstParty(projectile) {
       this._confetti(projectile.x, projectile.y, 85, projectile.aimed ? projectile.height : undefined); this._sound('party');
+      this._damagePropsNear({ x: projectile.x, y: projectile.y, height: finite(projectile.height, MUZZLE_HEIGHT) }, 85, 110);
       if (projectile.aimed && projectile.height > 2.6) return;
       let hit = false;
       for (const ped of this.peds) if (ped.stunned <= 0 && distance(ped, projectile) < 85 &&
@@ -944,6 +1042,10 @@
       this._pedestrians(dt);
       this._updatePolice(dt);
       const contacts = this.vehiclePhysics.step(dt);
+      for (const contact of contacts) if (contact.prop && contact.speed > 75 && this.time - (contact.prop._lastImpactAt ?? -10) > .35) {
+        contact.prop._lastImpactAt = this.time;
+        this._damageProp(contact.prop, (contact.speed - 55) * .9, contact.entity, contact.entity.id === this.player.vehicleId);
+      }
       for (const contact of contacts) if (contact.entity.id === this.player.vehicleId) this._impact(contact.entity, contact.speed, contact.vehicle);
       for (const vehicle of this._vehicles()) this._vehiclePeople(vehicle, vehicle.vx || 0, vehicle.vy || 0);
       if (this.player.vehicleId) {
@@ -953,6 +1055,7 @@
         this.player.verticalVelocity = car.verticalVelocity; this.player.grounded = car.grounded;
       }
       this._projectiles(dt);
+      this._propExplosions();
       const finished = this.ragdolls.step(dt, { buildings: this.buildings, staticObjects: this.staticObjects, cars: this.cars, police: this.police, size: SIZE });
       for (const body of finished) {
         const owner = body.owner;
@@ -969,6 +1072,17 @@
       }
       for (const p of this.particles) { p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= Math.exp(-2 * dt); p.vy = p.vy * Math.exp(-2 * dt) + 18 * dt; }
       this.particles = this.particles.filter(p => p.life > 0);
+      for (const piece of this.debris) {
+        piece.life -= dt; piece.x += piece.vx * dt; piece.y += piece.vy * dt;
+        piece.verticalVelocity -= 18 * dt; piece.elevation += piece.verticalVelocity * dt;
+        const floor = piece.size[1] / 2;
+        if (piece.elevation < floor) {
+          piece.elevation = floor;
+          piece.verticalVelocity = Math.abs(piece.verticalVelocity) > 1 ? -piece.verticalVelocity * .25 : 0;
+          piece.vx *= Math.exp(-7 * dt); piece.vy *= Math.exp(-7 * dt);
+        }
+      }
+      this.debris = this.debris.filter(piece => piece.life > 0);
       this.skidMarks.forEach(mark => { mark.life -= dt; }); this.skidMarks = this.skidMarks.filter(mark => mark.life > 0).slice(-250);
     }
 
