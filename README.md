@@ -6,7 +6,7 @@ A for-fun, original, GTA-inspired third-person 3D driving sandbox. Borrow a car,
 
 ## Play
 
-Open **index.html** in a desktop browser with WebGL 2 support. The game uses local HTML, CSS, JavaScript, procedurally modeled art, and synthesized sound. Its Three.js renderer and Cannon physics engine are bundled locally under **vendor/**. No installation, backend, account, or network connection is required to play.
+Open **index.html** in a desktop browser with WebGL 2 support. The game uses local HTML, CSS, JavaScript, procedurally modeled art, generated sound effects, and synthesized music. Its Three.js renderer and Cannon physics engine are bundled locally under **vendor/**. No installation, backend, account, or network connection is required to play.
 
 Use a desktop keyboard and mouse with a WebGL 2 capable browser. If the game cannot create its 3D view, it shows a reload prompt; check that browser hardware acceleration is enabled.
 
@@ -43,9 +43,9 @@ The layout adapts to small screens, but touch controls and gamepads are not impl
 
 Click the town to capture the mouse and start looking around. Your first click captures the mouse without firing a toy. Hold right mouse to aim toward the center crosshair; left-click uses the toy on foot, with or without aiming. Space jumps on foot and remains the driving handbrake. Release it before jumping again. Esc releases the mouse and pauses. Opening a menu also releases it and freezes the town; click the town again after closing the menu. Changing tabs or windows pauses the game. Sound, reduced motion, and full screen controls are in the header. Open help (?) to adjust look sensitivity or invert up/down; camera preferences stay in this browser.
 
-Music starts after Play. On foot, a gentle town soundtrack follows you; in a vehicle, the radio replaces it with **Biscuit FM** (disco/funk), **Neon Drive** (synthwave), or **Meadow Waves** (mellow dub). Press B/N or use the radio arrows to switch stations and cycle through radio off. Open help (?) for separate master, music/radio, and engines/effects volumes. The station and mix survive reloads, and old saves keep their existing mute preference. All music and effects are original Web Audio synthesis, generated locally without downloads or services.
+Music starts after Play. On foot, a gentle town soundtrack follows you; in a vehicle, the radio replaces it with **Biscuit FM** (disco/funk), **Neon Drive** (synthwave), or **Meadow Waves** (mellow dub). Press B/N or use the radio arrows to switch stations and cycle through radio off. Open help (?) for separate master, music/radio, and engines/effects volumes. The station and mix survive reloads, and old saves keep their existing mute preference. The original radio arrangements are synthesized locally with Web Audio.
 
-Compact, sports car, and van engines respond to speed, throttle, and boost. Nearby moving traffic and pursuing patrol sirens fade with distance and pan with the view. Grounded tires squeal under hard braking or drifting; horns, crashes, toys, footsteps, and contract jingles have distinct effects. Pause, help, inventory, and background tabs silence audio with the town. Browsers without Web Audio can still play silently.
+Compact, sports car, and van engines respond to speed, throttle, and boost. Nearby moving traffic and pursuing patrol sirens fade with distance and pan with the view. The [local sound library](assets/audio/README.md) supplies seven Runway-generated effects: three engine loops, a police siren, a horn, a cartoon crash, and a confetti pop. Embedded MP3 bytes preserve offline and direct file-open play; synthesis covers loading or unavailable samples. Grounded tires squeal under hard braking or drifting; toys, footsteps, and contract jingles have distinct effects. Pause, help, inventory, and background tabs silence audio with the town. Browsers without Web Audio can still play silently.
 
 ## The toybox
 
@@ -109,6 +109,8 @@ npm run vendor
 | physics.js | Ragdoll joints, gravity, contacts, and automatic get-up |
 | scene3d.js | Three.js world, models, perspective camera, lighting, and visual effects |
 | audio.js | Local music sequencer, vehicle radio, spatial engines/sirens, effects, and audio lifecycle |
+| assets/audio/ | Generated source sounds, provenance manifest, and embedded offline audio bundle |
+| tools/build-audio-assets.cjs | Rebuilds and verifies the audio bundle with `npm run audio-assets` |
 | game.js | Fixed-step game loop, input, audio controls, persistence, HUD, and minimap |
 | vendor/three.min.js | Bundled Three.js renderer for offline and file-open play |
 | vendor/cannon.min.js / vendor/cannon.cjs | Bundled Cannon physics engine for browser play and Node checks |

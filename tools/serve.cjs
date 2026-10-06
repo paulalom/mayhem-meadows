@@ -6,7 +6,12 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 const port = Number(process.env.PORT) || 4173;
 const allowed = new Set(['/index.html', '/styles.css', '/world.js', '/core.js', '/physics.js', '/vehicle-stats.js', '/vehicle-physics.js', '/audio.js', '/game.js', '/scene3d.js', '/vendor/three.min.js', '/vendor/cannon.min.js']);
-const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
+allowed.add('/assets/audio/samples.js');
+allowed.add('/assets/audio/manifest.json');
+for (const sample of require('../assets/audio/manifest.json').samples) {
+  if (/^[a-z0-9-]+\.mp3$/.test(sample.file)) allowed.add('/assets/audio/' + sample.file);
+}
+const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mp3': 'audio/mpeg', '.json': 'application/json; charset=utf-8' };
 const server = http.createServer((req, res) => {
   let pathname;
   try { pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname); }

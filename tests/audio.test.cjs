@@ -22,7 +22,7 @@ class Node {
   disconnect() { this.disconnected = true; }
 }
 class Source extends Node {
-  constructor(context) { super(context); this.frequency = new Param(440); this.detune = new Param(); context.sources.push(this); this.ended = false; }
+  constructor(context) { super(context); this.frequency = new Param(440); this.detune = new Param(); this.playbackRate = new Param(1); context.sources.push(this); this.ended = false; }
   start(time = this.context.currentTime) { assert.ok(time >= 0 && Number.isFinite(time)); this.startTime = time; }
   stop(time = this.context.currentTime) { assert.ok(time >= 0 && Number.isFinite(time)); this.stopTime = time; }
 }
@@ -37,6 +37,7 @@ class Context {
     const node = new Node(this); for (const key of ['threshold', 'knee', 'ratio', 'attack', 'release']) node[key] = new Param(); return node;
   }
   createBuffer(channels, length) { return { getChannelData: () => new Float32Array(length) }; }
+  async decodeAudioData(bytes) { assert.ok(bytes instanceof ArrayBuffer); this.decodeCalls = (this.decodeCalls || 0) + 1; return decodedBuffer(); }
   async resume() { this.state = 'running'; }
   async close() { this.state = 'closed'; this.advance(1); }
   advance(seconds) {
@@ -51,6 +52,12 @@ async function director(settings) {
   assert.equal(await audio.unlock(), true); return { audio, context };
 }
 const tick = (audio, context, world, options = {}) => { context.advance(1 / 60); audio.update(world, { active: true, dt: 1 / 60, ...options }); };
+const decodedBuffer = () => {
+  const channels = [Float32Array.from({ length: 4800 }, (_, i) => Math.cos(i / 13) * 1.4), Float32Array.from({ length: 4800 }, (_, i) => Math.sin(i / 7) * 1.1)];
+  return { duration: 0.6, numberOfChannels: 2, sampleRate: 8000, getChannelData: channel => channels[channel] };
+};
+const samples = (...keys) => Object.fromEntries(keys.map(key => [key, { data: 'AQID', loop: key.startsWith('engine-') || key === 'siren', gain: 1, baseFrequency: 80 }]));
+const settleSamples = () => new Promise(resolve => setImmediate(resolve));
 
 test('saved audio settings validate volumes, station and mute without mutating defaults', () => {
   assert.deepEqual(normalizeSettings(null), DEFAULT_SETTINGS);
@@ -87,6 +94,16 @@ test('vehicle types and throttle change engine pitch while skid requires motion 
   ride.speed = NaN; ride.x = Infinity; ride.vx = NaN;
   frame = deriveAudioFrame(world, { viewYaw: NaN });
   for (const engine of frame.engines) for (const field of ['frequency', 'gain', 'pan', 'cutoff', 'speed']) assert.ok(Number.isFinite(engine[field]));
+});
+
+test('audio model uses live model speed limits and silences failed or exploded engines', () => {
+  const world = game(), ride = car('ride', 'sports'); world.cars = [ride]; world.player.vehicleId = ride.id; ride.speed = 230;
+  ride.modelId = 'glitterline-sprinkle-gt'; const gt = deriveAudioFrame(world).engines[0].frequency;
+  ride.modelId = 'fable-comet-rs'; const rs = deriveAudioFrame(world).engines[0].frequency;
+  assert.notEqual(gt, rs);
+  ride.engineHealth = 0; assert.equal(deriveAudioFrame(world).engines.length, 0);
+  ride.engineHealth = 100; ride.exploded = true; assert.equal(deriveAudioFrame(world).engines.length, 0);
+  ride.exploded = false; assert.equal(deriveAudioFrame(world).engines.length, 1);
 });
 
 test('unlock is gesture driven, unsupported contexts and denied resume cannot throw', async () => {
@@ -211,4 +228,92 @@ test('pause, mute, effects zero, heat reset, and disposal stop existing layers b
   assert.equal(audio.getStatus().engineCount, 0); assert.equal(audio.getStatus().sirenCount, 0); assert.ok(audio.getStatus().musicVoiceCount > 0);
   audio.dispose(); assert.equal(audio.getStatus().state, 'disposed'); assert.equal(audio.getStatus().voiceCount, 0);
   assert.equal(await audio.unlock(), false);
+});
+
+test('embedded generated samples decode once, normalize peaks and loop edges without starting playback', async () => {
+  const context = new Context(), data = samples('engine-compact', 'engine-sports', 'engine-van', 'siren', 'horn', 'crash', 'pop');
+  global.MayhemAudioSamples = data;
+  const audio = new AudioDirector({ contextFactory: () => context });
+  delete global.MayhemAudioSamples;
+  assert.equal(await audio.unlock(), true); await settleSamples();
+  assert.equal(audio.getStatus().sampleCount, 7); assert.equal(audio.getStatus().loadingSamples, 0); assert.equal(audio.getStatus().failedSamples, 0);
+  assert.equal(audio.getStatus().generatedVoiceCount, 0); assert.equal(context.sources.length, 0);
+  const loop = audio._samples.get('engine-compact').buffer;
+  for (let channel = 0; channel < loop.numberOfChannels; channel++) {
+    const values = loop.getChannelData(channel);
+    assert.ok([...values].every(value => Math.abs(value) <= 0.900001));
+    assert.equal(values[0], 0); assert.equal(Math.abs(values.at(-1)), 0);
+  }
+  assert.equal(await audio.unlock(), true); await settleSamples(); assert.equal(context.decodeCalls, 7);
+  audio.dispose(); assert.equal(audio.getStatus().sampleCount, 0);
+});
+
+test('corrupt sample bytes and decoder rejection preserve synthesized gameplay without retry storms', async () => {
+  const context = new Context(); context.decodeAudioData = async () => { context.decodeCalls = (context.decodeCalls || 0) + 1; throw new Error('Invalid MP3'); };
+  const audio = new AudioDirector({ contextFactory: () => context, settings: { musicVolume: 0 },
+    sampleData: { ...samples('engine-compact', 'pop'), crash: { data: '!!! invalid !!!' } } });
+  assert.equal(await audio.unlock(), true); await settleSamples();
+  assert.equal(audio.getStatus().sampleCount, 0); assert.equal(audio.getStatus().failedSamples, 3); assert.equal(audio.getStatus().state, 'running');
+  const world = game(); world.cars = [car('ride')]; world.player.vehicleId = 'ride'; tick(audio, context, world);
+  assert.equal(audio.getStatus().engineCount, 1); assert.equal(audio.getStatus().engineSampleCount, 0); assert.equal(audio.play('pop'), true);
+  assert.equal(audio.getStatus().generatedVoiceCount, 0);
+  for (let i = 0; i < 10; i++) { await audio.unlock(); tick(audio, context, world); }
+  assert.equal(context.decodeCalls, 2); audio.dispose();
+});
+
+test('late sample completion during pause or mute only caches data and never revives sources', async () => {
+  for (const state of ['pause', 'mute', 'dispose']) {
+    const context = new Context(), completions = [];
+    context.decodeAudioData = () => new Promise(resolve => completions.push(resolve));
+    const audio = new AudioDirector({ contextFactory: () => context, settings: { musicVolume: 0 }, sampleData: samples('engine-compact', 'siren') });
+    await audio.unlock(); await settleSamples(); assert.equal(audio.getStatus().loadingSamples, 2);
+    const world = game(); world.cars = [car('ride')]; world.player.vehicleId = 'ride'; world.police = [car('cop', 'compact', 40)]; world.heat = 1;
+    tick(audio, context, world); assert.equal(audio.getStatus().engineSampleCount, 0);
+    if (state === 'pause') audio.update(world, { active: false });
+    else if (state === 'mute') audio.setSettings({ muted: true });
+    else audio.dispose();
+    context.advance(0.04); const sourceCount = context.sources.length;
+    completions.forEach(resolve => resolve(decodedBuffer())); await settleSamples();
+    assert.equal(audio.getStatus().voiceCount, 0); assert.equal(context.sources.length, sourceCount);
+    assert.equal(audio.getStatus().loadingSamples, 0);
+    if (state === 'dispose') { assert.equal(audio.getStatus().sampleCount, 0); continue; }
+    assert.equal(audio.getStatus().sampleCount, 2);
+    if (state === 'mute') audio.setSettings({ muted: false });
+    tick(audio, context, world); assert.equal(audio.getStatus().engineSampleCount, 2); assert.equal(audio.getStatus().sirenSampleCount, 1);
+    audio.dispose();
+  }
+});
+
+test('ready loops replace synthesized layers on update and engine playback rates follow throttle smoothly', async () => {
+  const context = new Context(); let complete;
+  context.decodeAudioData = () => new Promise(resolve => { complete = resolve; });
+  const audio = new AudioDirector({ contextFactory: () => context, settings: { musicVolume: 0 }, sampleData: samples('engine-compact') });
+  await audio.unlock(); await settleSamples();
+  const world = game(); world.cars = [car('ride')]; world.player.vehicleId = 'ride'; tick(audio, context, world);
+  const fallbackSources = [...context.sources]; assert.equal(audio.getStatus().engineSampleCount, 0);
+  complete(decodedBuffer()); await settleSamples(); assert.equal(audio.getStatus().engineSampleCount, 0);
+  tick(audio, context, world); assert.equal(audio.getStatus().engineSampleCount, 1);
+  const engine = audio._engines.get('ride'); assert.equal(engine.main.loop, true);
+  const idle = engine.main.playbackRate.value;
+  tick(audio, context, world, { input: { up: true, boost: true } }); assert.ok(engine.main.playbackRate.value > idle);
+  assert.ok(engine.main.playbackRate.events.some(event => event.type === 'linear'));
+  assert.ok(engine.main.playbackRate.value >= 0.5 && engine.main.playbackRate.value <= 2.5);
+  context.advance(0.04); assert.ok(fallbackSources.every(source => source.ended && source.disconnected));
+  for (let i = 0; i < 30; i++) {
+    audio.update(world, { active: false }); context.advance(0.04); tick(audio, context, world);
+    assert.equal(audio.getStatus().generatedVoiceCount, 1); assert.equal(audio.getStatus().engineSampleCount, 1);
+  }
+  audio.dispose(); context.advance(0.04); assert.ok(context.sources.every(source => source.ended && source.disconnected));
+});
+
+test('generated horn crash and pop events use bounded one-shot voices and retain other synthesized effects', async () => {
+  const context = new Context(), audio = new AudioDirector({ contextFactory: () => context, settings: { musicVolume: 0 }, sampleData: samples('horn', 'crash', 'pop') });
+  await audio.unlock(); await settleSamples(); tick(audio, context, game());
+  for (const name of ['horn', 'crash', 'pop']) { context.advance(0.05); assert.equal(audio.play(name, game()), true); }
+  assert.equal(audio.getStatus().generatedVoiceCount, 3); assert.equal(audio.getStatus().voiceCount, 3);
+  assert.equal(audio.play('jump'), true); assert.equal(audio.getStatus().voiceCount, 4);
+  assert.equal(audio.getStatus().generatedVoiceCount, 3);
+  for (let i = 0; i < 150; i++) { context.advance(0.05); audio.play('pop'); assert.ok(audio.getStatus().voiceCount <= 80); }
+  context.advance(2); audio.update(game(), { active: true }); assert.equal(audio.getStatus().voiceCount, 0);
+  assert.ok(context.sources.every(source => source.ended && source.disconnected)); audio.dispose();
 });

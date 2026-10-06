@@ -1,8 +1,8 @@
 (function (root) {
   'use strict';
 
-  // Every sound, including these original eight-bar radio arrangements, is
-  // synthesized locally. No network, audio files, or autoplay permission needed.
+  // Original radio arrangements and fallback effects are synthesized locally.
+  // Optional generated effects decode from embedded bytes without a network.
   const STATIONS = Object.freeze([
     Object.freeze({ id: 'biscuit', name: 'Biscuit FM', genre: 'Disco funk' }),
     Object.freeze({ id: 'neon', name: 'Neon Drive', genre: 'Synthwave arcade' }),
@@ -12,6 +12,8 @@
   const finite = (value, fallback = 0) => typeof value === 'number' && Number.isFinite(value) ? value : fallback;
   const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
   const midi = note => 440 * 2 ** ((note - 69) / 12);
+  const VehicleStats = root.MayhemVehicleStats || (typeof require === 'function' ? require('./vehicle-stats.js') : null);
+  const SAMPLE_KEYS = ['engine-compact', 'engine-sports', 'engine-van', 'siren', 'horn', 'crash', 'pop'];
   const ENGINE_TYPES = {
     compact: { limit: 300, idle: 42, range: 100, cutoff: 700, wave: 'sawtooth' },
     sports: { limit: 370, idle: 58, range: 150, cutoff: 1100, wave: 'sawtooth' },
@@ -35,6 +37,7 @@
     const vehicle = player.vehicleId ? cars.find(car => car.id === player.vehicleId) : null;
     const listener = vehicle || player, input = options.input || {};
     const yaw = finite(options.viewYaw, finite(listener.angle));
+    const hasEngine = car => car && finite(car.health, 100) > 0 && finite(car.engineHealth, 100) > 0 && !car.exploded;
     const spatial = entity => {
       const dx = finite(entity.x) - finite(listener.x), dy = finite(entity.y) - finite(listener.y);
       const distance = Math.hypot(dx, dy);
@@ -43,7 +46,9 @@
     };
     const engine = (car, controlled, location) => {
       const kind = ENGINE_TYPES[car.kind] ? car.kind : 'compact', type = ENGINE_TYPES[kind];
-      const speed = clamp(Math.abs(finite(car.speed)), 0, type.limit * 1.7), ratio = speed / type.limit;
+      const model = VehicleStats?.getModel ? VehicleStats.getModel(car) : root.MayhemCore?.CAR_TYPES?.[kind];
+      const limit = clamp(finite(model?.maxSpeed, type.limit), 1, 1000);
+      const speed = clamp(Math.abs(finite(car.speed)), 0, limit * 1.7), ratio = speed / limit;
       const throttle = controlled ? (input.up || input.down && finite(car.speed) < 15 ? 1 : 0.18) : clamp(ratio * 1.3 + 0.18, 0.18, 0.85);
       const gear = Math.min(3, Math.floor(ratio * 4));
       const rev = clamp((ratio * 4 - gear) * 0.6 + throttle * 0.3 + (controlled && input.boost ? 0.16 : 0), 0, 1.2);
@@ -51,11 +56,11 @@
         cutoff: type.cutoff + 1500 * rev, gain: (controlled ? 0.13 : 0.075 * location.attenuation) * (0.65 + throttle * 0.35),
         pan: controlled ? 0 : location.pan, distance: controlled ? 0 : location.distance };
     };
-    const nearby = cars.filter(car => car && car.id !== vehicle?.id && car.traffic && finite(car.health, 100) > 0)
-      .concat(police.filter(Boolean)).map(car => ({ car, location: spatial(car) }))
+    const nearby = cars.filter(car => hasEngine(car) && car.id !== vehicle?.id && car.traffic)
+      .concat(police.filter(hasEngine)).map(car => ({ car, location: spatial(car) }))
       .filter(item => item.location.attenuation > 0.004).sort((a, b) => a.location.distance - b.location.distance).slice(0, 4);
     const engines = nearby.map(item => engine(item.car, false, item.location));
-    if (vehicle && finite(vehicle.health, 100) > 0) engines.unshift(engine(vehicle, true, {}));
+    if (hasEngine(vehicle)) engines.unshift(engine(vehicle, true, {}));
     const heat = clamp(finite(game?.heat), 0, 3);
     const sirens = heat > 0 ? police.filter(Boolean).map(cop => ({ id: String(cop.id), ...spatial(cop) }))
       .filter(cop => cop.attenuation > 0.004).sort((a, b) => a.distance - b.distance).slice(0, 3)
@@ -86,6 +91,8 @@
       this._musicKey = null; this._step = 0; this._nextNote = 0; this._footstep = 0; this._mode = 'idle';
       this._noise = null; this._lastEvent = new Map(); this._error = null;
       this._failed = false; this._ready = false; this._pendingNodes = new Set(); this._lastFootPosition = null;
+      this._sampleData = options.sampleData === undefined ? root.MayhemAudioSamples || {} : options.sampleData || {};
+      this._samples = new Map(); this._loadingSamples = new Set(); this._failedSamples = new Set(); this._requestedSamples = new Set();
     }
 
     async unlock() {
@@ -118,6 +125,7 @@
         this._state = this._context.state || 'running';
         this._failed = false; this._error = null;
         this._applyVolumes();
+        this._loadSamples();
         return this._state === 'running';
       } catch (error) { this._fail(error); return false; }
     }
@@ -159,9 +167,72 @@
       return { state: this._disposed ? 'disposed' : this._state, active: this._active, mode: this._mode,
         station: this._musicKey || 'off', engineCount: this._engines.size, sirenCount: this._sirens.size,
         voiceCount: this._voices.size, musicVoiceCount: [...this._voices].filter(voice => voice.bus === 'music').length,
+        sampleCount: this._samples.size, loadingSamples: this._loadingSamples.size, failedSamples: this._failedSamples.size,
+        generatedVoiceCount: [...this._voices].filter(voice => voice.generated).length,
+        engineSampleCount: [...this._engines.values()].filter(voice => voice.generated).length,
+        sirenSampleCount: [...this._sirens.values()].filter(voice => voice.generated).length,
         muted: this.settings.muted, error: this._error };
     }
     getStatus() { return this.diagnostics; }
+
+    _loadSamples() {
+      const context = this._context;
+      for (const key of SAMPLE_KEYS) {
+        if (!Object.prototype.hasOwnProperty.call(this._sampleData, key) || this._requestedSamples.has(key)) continue;
+        this._requestedSamples.add(key); this._loadingSamples.add(key);
+        // Decode completion only fills the cache. It cannot revive a paused,
+        // muted, disposed, or otherwise changed game state.
+        Promise.resolve().then(() => {
+          const asset = this._sampleData[key];
+          if (!asset || typeof asset.data !== 'string' || !asset.data.length || asset.data.length > 8 * 1024 * 1024) throw new Error('Invalid embedded audio');
+          const binary = root.atob(asset.data), bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+          return context.decodeAudioData(bytes.buffer);
+        }).then(buffer => {
+          if (this._disposed || this._context !== context) return;
+          if (!buffer || !Number.isFinite(buffer.duration) || buffer.duration <= 0 || buffer.duration > 60 || !buffer.numberOfChannels) throw new Error('Invalid decoded audio');
+          const asset = this._sampleData[key], loop = asset.loop === true;
+          let peak = 0;
+          for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+            const data = buffer.getChannelData(channel);
+            for (let i = 0; i < data.length; i++) { if (!Number.isFinite(data[i])) data[i] = 0; peak = Math.max(peak, Math.abs(data[i])); }
+          }
+          if (peak < 0.00001) throw new Error('Silent decoded audio');
+          const scale = peak > 0.9 ? 0.9 / peak : 1;
+          for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+            const data = buffer.getChannelData(channel), fade = Math.min(Math.floor(buffer.sampleRate * 0.005), Math.floor(data.length / 4));
+            for (let i = 0; i < data.length; i++) data[i] *= scale;
+            if (loop) for (let i = 0; i < fade; i++) { data[i] *= i / fade; data[data.length - 1 - i] *= i / fade; }
+          }
+          this._samples.set(key, { buffer, loop, gain: clamp(finite(asset.gain, 1), 0, 1), baseFrequency: clamp(finite(asset.baseFrequency, 80), 20, 1000) });
+        }).catch(() => { if (!this._disposed) this._failedSamples.add(key); })
+          .finally(() => this._loadingSamples.delete(key));
+      }
+    }
+
+    _sampleVoice(key, options = {}) {
+      const sample = this._samples.get(key);
+      if (!sample || this._voices.size >= 80) return null;
+      const now = this._context.currentTime, loop = options.loop === true;
+      if (loop && !sample.loop) return null;
+      const source = this._node('createBufferSource'); source.buffer = sample.buffer; source.loop = loop;
+      const rate = clamp(finite(options.rate, 1), 0.5, 2.5); source.playbackRate.value = rate;
+      const gain = this._node('createGain'); gain.gain.value = 0;
+      source.connect(gain);
+      const pan = this._output(gain, options.pan, this._effects);
+      const duration = Math.min(sample.buffer.duration / rate, clamp(finite(options.duration, sample.buffer.duration), 0.02, 3));
+      const end = loop ? Infinity : now + duration + 0.01;
+      const record = this._record([source], [source, gain, ...(pan ? [pan] : [])], gain, 'effects', end);
+      record.generated = true; record.sampleKey = key; record.sample = sample; record.main = source; record.pan = pan;
+      if (!loop) {
+        const level = clamp(finite(options.level, 0.15), 0, 0.3) * sample.gain;
+        gain.gain.setValueAtTime(0, now); gain.gain.linearRampToValueAtTime(level, now + Math.min(0.008, duration / 4));
+        gain.gain.setValueAtTime(level, now + Math.max(duration / 2, duration - 0.045));
+        gain.gain.linearRampToValueAtTime(0, now + duration);
+      }
+      source.start(now); if (!loop) source.stop(end);
+      return record;
+    }
 
     _ramp(param, value, duration = 0.035) {
       if (!param || !this._context) return;
@@ -257,10 +328,19 @@
       for (const [id, record] of this._engines) if (!wanted.has(id)) { this._stop(record); this._engines.delete(id); }
       for (const item of descriptions) {
         let record = this._engines.get(item.id);
-        if (record && record.kind !== item.kind) { this._stop(record); record = null; }
-        if (!record) { record = this._engine(item); this._engines.set(item.id, record); }
-        this._ramp(record.gain.gain, item.gain, 0.06); this._ramp(record.main.frequency, item.frequency, 0.08);
-        this._ramp(record.sub.frequency, item.frequency * 0.5, 0.08); this._ramp(record.filter.frequency, item.cutoff, 0.08);
+        const key = 'engine-' + item.kind, sample = this._samples.get(key), generated = !!sample?.loop;
+        if (record && (record.kind !== item.kind || !!record.generated !== generated)) { this._stop(record); record = null; }
+        if (!record) {
+          record = generated ? this._sampleVoice(key, { loop: true, pan: item.pan, rate: item.frequency / sample.baseFrequency }) : this._engine(item);
+          if (!record) { this._engines.delete(item.id); continue; }
+          record.kind = item.kind; this._engines.set(item.id, record);
+        }
+        this._ramp(record.gain.gain, item.gain * (record.sample?.gain ?? 1), 0.06);
+        if (record.generated) this._ramp(record.main.playbackRate, clamp(item.frequency / record.sample.baseFrequency, 0.5, 2.5), 0.08);
+        else {
+          this._ramp(record.main.frequency, item.frequency, 0.08);
+          this._ramp(record.sub.frequency, item.frequency * 0.5, 0.08); this._ramp(record.filter.frequency, item.cutoff, 0.08);
+        }
         if (record.pan) this._ramp(record.pan.pan, item.pan, 0.06);
       }
     }
@@ -284,8 +364,16 @@
       for (const [id, record] of this._sirens) if (!wanted.has(id)) { this._stop(record); this._sirens.delete(id); }
       for (const item of descriptions) {
         let record = this._sirens.get(item.id);
-        if (!record) { record = this._siren(item); this._sirens.set(item.id, record); }
-        this._ramp(record.gain.gain, item.gain, 0.05); this._ramp(record.lfo.frequency, item.rate, 0.08);
+        const generated = !!this._samples.get('siren')?.loop;
+        if (record && !!record.generated !== generated) { this._stop(record); record = null; }
+        if (!record) {
+          record = generated ? this._sampleVoice('siren', { loop: true, pan: item.pan, rate: 0.88 + item.rate * 0.2 }) : this._siren(item);
+          if (!record) { this._sirens.delete(item.id); continue; }
+          this._sirens.set(item.id, record);
+        }
+        this._ramp(record.gain.gain, item.gain * (record.sample?.gain ?? 1), 0.05);
+        if (record.generated) this._ramp(record.main.playbackRate, clamp(0.88 + item.rate * 0.2, 0.5, 2.5), 0.08);
+        else this._ramp(record.lfo.frequency, item.rate, 0.08);
         if (record.pan) this._ramp(record.pan.pan, item.pan, 0.06);
       }
     }
@@ -426,6 +514,12 @@
         const now = this._context.currentTime;
         if (now - (this._lastEvent.get(name) ?? -10) < (name === 'horn' ? 0.12 : 0.04)) return false;
         this._lastEvent.set(name, now);
+        if (name === 'horn' || name === 'crash' || name === 'pop') {
+          const kind = game?.current?.kind;
+          const rate = name === 'horn' ? kind === 'van' ? 0.75 : kind === 'sports' ? 1.18 : 1 : 1;
+          const duration = { horn: 0.65, crash: 1.5, pop: 0.7 }[name];
+          if (this._sampleVoice(name, { rate, duration, level: name === 'crash' ? 0.22 : 0.18 })) return true;
+        }
         const tone = (hz, offset, duration, level, wave = 'sine', options = {}) => this._tone(hz, now + offset, duration, level, wave, 'effects', options);
         const hit = (duration, level, hz, type = 'highpass') => this._noiseHit(now, duration, level, hz, type, 'effects');
         const notes = (pitches, duration = 0.13, wave = 'triangle', level = 0.12) => pitches.forEach((note, i) => tone(midi(note), i * duration * 0.72, duration, level, wave));
@@ -462,6 +556,7 @@
     dispose() {
       if (this._disposed) return;
       this._silence(); this._disposed = true; this._state = 'disposed';
+      this._samples.clear(); this._loadingSamples.clear();
       if (this._context) {
         for (const node of [this._master, this._music, this._effects, this._limiter]) { try { node?.disconnect(); } catch (_) {} }
         try { const close = this._context.close(); if (close?.catch) close.catch(() => {}); } catch (_) {}

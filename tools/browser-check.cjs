@@ -383,12 +383,17 @@ async function checkAudio(browser, externalRequests) {
     await page.locator('#play-button').click();
     await waitForScene(page, 'foot');
     await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().state === 'running' && globalThis.__browserCheckAudioDirector.getStatus().active);
+    await page.waitForFunction(() => {
+      const audio = globalThis.__browserCheckAudioDirector.getStatus();
+      return audio.sampleCount === 7 && audio.loadingSamples === 0;
+    }, null, { timeout: 15000 });
     const foot = await audioState(page), footOutput = await measureAudio(page);
+    assert.equal(foot.failedSamples, 0, 'All seven locally embedded generated samples must decode in Chrome.');
     assert.equal(foot.mode, 'foot'); assert.equal(foot.station, 'foot');
     assert.ok(footOutput.rms > 0.00001, 'Foot music must produce real nonzero Chrome audio samples.');
     await page.keyboard.press('e');
     await waitForScene(page, 'drive');
-    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().mode === 'vehicle' && globalThis.__browserCheckAudioDirector.getStatus().engineCount > 0);
+    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().mode === 'vehicle' && globalThis.__browserCheckAudioDirector.getStatus().engineSampleCount > 0);
     assert.equal((await audioState(page)).station, 'biscuit');
     assert.ok((await measureAudio(page)).rms > 0.00001, 'The vehicle engine and radio must reach the audio destination.');
     await page.keyboard.press('n');
@@ -404,6 +409,7 @@ async function checkAudio(browser, externalRequests) {
     await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().station === 'biscuit');
     await page.waitForTimeout(350);
     const vehicle = await audioState(page);
+    assert.ok(vehicle.generatedVoiceCount > 0, 'The vehicle must use decoded generated engine audio.');
     assert.ok(vehicle.voiceCount <= 80, 'Repeated station changes must keep audio voices bounded.');
     assert.equal((await measureAudio(page, 80)).contexts, 1, 'Station changes must reuse the original audio context.');
     await page.screenshot({ path: path.join(evidence, 'audio-radio.png'), fullPage: true });
@@ -418,6 +424,29 @@ async function checkAudio(browser, externalRequests) {
     assert.ok((await audioState(page)).engineCount > 0, 'Radio off must retain the player engine without substituting foot music.');
     const engineOutput = await measureAudio(page);
     assert.ok(engineOutput.rms > 0.00001, 'Radio off must leave the real vehicle engine audible.');
+    await page.keyboard.press('h');
+    await page.waitForFunction(() => {
+      const audio = globalThis.__browserCheckAudioDirector.getStatus();
+      return audio.generatedVoiceCount > audio.engineSampleCount + audio.sirenSampleCount;
+    }, null, { timeout: 2000 });
+    const horn = await audioState(page), hornOutput = await measureAudio(page, 140);
+    assert.ok(hornOutput.peakRms > 0.00001, 'The generated horn must reach Chrome audio output through the real horn action.');
+    await page.waitForFunction(() => {
+      const audio = globalThis.__browserCheckAudioDirector.getStatus();
+      return audio.generatedVoiceCount === audio.engineSampleCount + audio.sirenSampleCount;
+    }, null, { timeout: 2000 });
+    // Exercise the real crash feedback/event path independently of the physical
+    // contact regressions elsewhere in this suite, then observe native output.
+    await page.evaluate(() => {
+      const game = globalThis.__browserCheckGame;
+      game.graceTimer = 0; game._impactCooldown = 0; game._impact(game.current, 100, false);
+    });
+    await page.waitForFunction(() => {
+      const audio = globalThis.__browserCheckAudioDirector.getStatus();
+      return audio.generatedVoiceCount > audio.engineSampleCount + audio.sirenSampleCount;
+    }, null, { timeout: 2000 });
+    const crashOutput = await measureAudio(page, 140);
+    assert.ok(crashOutput.peakRms > 0.00001, 'The generated crash must reach native output when core crash feedback is drained.');
     await page.keyboard.press('n');
     await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().station === 'biscuit');
 
@@ -425,6 +454,7 @@ async function checkAudio(browser, externalRequests) {
     await page.waitForTimeout(240);
     const muted = await measureAudio(page);
     assert.ok(muted.peakRms < 0.000001, `Mute must silence existing sources, measured ${muted.peakRms}.`);
+    assert.equal((await audioState(page)).generatedVoiceCount, 0, 'Mute must release generated samples as well as synthesized voices.');
     await page.locator('#sound-toggle').click();
     await page.waitForTimeout(180);
     assert.ok((await measureAudio(page)).rms > 0.00001, 'Unmuting must restore playback.');
@@ -434,6 +464,7 @@ async function checkAudio(browser, externalRequests) {
     const paused = await audioState(page), pausedOutput = await measureAudio(page);
     assert.equal(paused.active, false);
     assert.equal(paused.voiceCount, 0, 'Pausing must stop and release scheduled audio voices.');
+    assert.equal(paused.generatedVoiceCount, 0);
     assert.ok(pausedOutput.peakRms < 0.000001, 'Pausing must silence the engine and radio.');
     await page.locator('#resume-button').click();
     await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().active);
@@ -451,9 +482,10 @@ async function checkAudio(browser, externalRequests) {
         angle: car.angle, speed: 0, vx: 0, vy: 0, distracted: 60, route: [], routeTimer: 5, lastSeen: { x: car.x, y: car.y } });
       game.vehiclePhysics.reset(cop);
     });
-    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().sirenCount > 0);
+    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().sirenSampleCount > 0);
     const chase = await audioState(page), chaseOutput = await measureAudio(page);
     assert.ok(chase.sirenCount <= 3 && chase.engineCount <= 5, 'Nearby audio voices must remain bounded.');
+    assert.ok(chase.generatedVoiceCount >= chase.engineSampleCount + chase.sirenSampleCount, 'Nearby engine and siren loops must use decoded generated samples.');
     assert.ok(chaseOutput.rms > 0.00001, 'Active sirens must produce destination audio.');
     await page.evaluate(() => {
       const game = globalThis.__browserCheckGame; game.heat = 0;
@@ -477,6 +509,11 @@ async function checkAudio(browser, externalRequests) {
     await page.keyboard.press('Space');
     const effect = await measureAudio(page, 120);
     assert.ok(effect.peakRms > 0.00001, 'Jump effects must produce real audio when music is disabled.');
+    await captureMouse(page);
+    await fireToy(page);
+    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().generatedVoiceCount > 0, null, { timeout: 2000 });
+    const pop = await audioState(page), popOutput = await measureAudio(page, 140);
+    assert.ok(popOutput.peakRms > 0.00001, 'The generated pop sample must reach native output through the real toy action.');
 
     await page.locator('#help-toggle').click();
     await page.locator('#help-screen').waitFor({ state: 'visible' });
@@ -508,7 +545,8 @@ async function checkAudio(browser, externalRequests) {
     await page.keyboard.press('e');
     await waitForScene(page, 'drive');
     await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().station === 'meadow');
-    diagnostics.audio = { foot, footOutput, vehicle, engineOutput, muted, paused, pausedOutput, chase, chaseOutput, effect, saved, reloaded: await audioState(page) };
+    diagnostics.audio = { foot, footOutput, vehicle, engineOutput, horn, hornOutput, crashOutput, muted, paused, pausedOutput,
+      chase, chaseOutput, effect, pop, popOutput, saved, reloaded: await audioState(page) };
   } finally { await closeTestContext(context); }
 }
 
@@ -541,6 +579,79 @@ async function checkUnavailableAudio(browser, externalRequests) {
     assert.equal(await page.locator('#game-canvas').evaluate(element => element === document.activeElement), true);
     assert.equal((await audioState(page)).voiceCount, 0, 'Unavailable audio must leave gameplay usable without audio voices.');
   } finally { await closeTestContext(context); }
+}
+
+async function checkSampleFallback(browser, externalRequests) {
+  const results = {};
+  for (const scenario of ['missing', 'corrupt']) {
+    const context = await createTestContext(browser, { viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
+    try {
+      await installEngineInspection(context);
+      await installAudioInspection(context);
+      // Override only this isolated page's embedded data. Its locally loaded
+      // script, real audio decoder and synthesized fallback run normally.
+      await context.addInitScript(mode => {
+        let samples;
+        Object.defineProperty(globalThis, 'MayhemAudioSamples', { configurable: true,
+          get() { return samples; },
+          set(value) {
+            samples = mode === 'missing' ? undefined : Object.fromEntries(Object.entries(value).map(([id, entry]) =>
+              [id, { ...entry, data: 'AAAA' }]));
+          },
+        });
+      }, scenario);
+      await context.route('**/*', route => {
+        if (/^(file|data|blob):/.test(route.request().url())) return route.continue();
+        externalRequests.push(route.request().url()); return route.abort();
+      });
+      const page = await context.newPage();
+      page.on('pageerror', error => errors.push(error.message));
+      page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+      await page.goto(url);
+      await page.evaluate(() => {
+        const game = globalThis.__browserCheckGame;
+        game.cars = [game.cars[0]]; game.cars[0].traffic = false; game.peds = []; game.heat = 0; game.graceTimer = 60;
+        for (const cop of game.police) { cop.x = 100; cop.y = 100; cop.route = []; cop.distracted = 60; }
+      });
+      await page.locator('#play-button').click();
+      await waitForScene(page, 'foot');
+      await page.waitForFunction(expected => {
+        const audio = globalThis.__browserCheckAudioDirector.getStatus();
+        return audio.state === 'running' && audio.active && audio.loadingSamples === 0 && audio.failedSamples === expected;
+      }, scenario === 'corrupt' ? 7 : 0, { timeout: 15000 });
+      const foot = await audioState(page), footOutput = await measureAudio(page);
+      assert.equal(foot.sampleCount, 0);
+      assert.equal(foot.generatedVoiceCount, 0);
+      assert.ok(footOutput.rms > 0.00001, `${scenario} samples must retain audible local synthesized music.`);
+      await page.keyboard.press('e');
+      await waitForScene(page, 'drive');
+      await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().engineCount > 0);
+      const vehicle = await audioState(page);
+      assert.equal(vehicle.engineSampleCount, 0);
+      assert.equal(vehicle.generatedVoiceCount, 0);
+      await page.evaluate(() => {
+        const game = globalThis.__browserCheckGame, car = game.current, cop = game.police[0];
+        game.heat = 1; game.escapeTimer = 0; game.graceTimer = 60;
+        Object.assign(cop, { x: car.x + Math.cos(car.angle) * 110, y: car.y + Math.sin(car.angle) * 110,
+          angle: car.angle, speed: 0, vx: 0, vy: 0, distracted: 60, route: [], routeTimer: 5, lastSeen: { x: car.x, y: car.y } });
+        game.vehiclePhysics.reset(cop);
+      });
+      await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().sirenCount > 0);
+      const chase = await audioState(page), chaseOutput = await measureAudio(page);
+      assert.equal(chase.sirenSampleCount, 0);
+      assert.equal(chase.generatedVoiceCount, 0);
+      assert.ok(chaseOutput.rms > 0.00001, `${scenario} samples must retain audible engine and siren fallback.`);
+      await page.keyboard.press('p');
+      await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().voiceCount === 0);
+      // Voices are removed immediately, while gain ramps and the analyser's
+      // recent sample window still include the brief native output tail.
+      await page.waitForTimeout(240);
+      const pausedOutput = await measureAudio(page);
+      assert.ok(pausedOutput.peakRms < 0.000001, `${scenario} fallback pause must settle to silence, measured RMS ${pausedOutput.peakRms}.`);
+      results[scenario] = { foot, footOutput, vehicle, chase, chaseOutput, pausedOutput };
+    } finally { await closeTestContext(context); }
+  }
+  diagnostics.audioFallback = results;
 }
 
 async function bodyState(page, id = 'player') {
@@ -2301,6 +2412,7 @@ async function main() {
     });
 
     await check('audio produces real music, vehicle radios, engines, sirens and effects; mute, pause and saved levels work', async () => checkAudio(browser, externalRequests));
+    await check('audio falls back to local synthesis when embedded generated samples are missing or corrupt', async () => checkSampleFallback(browser, externalRequests));
     await check('unavailable audio leaves Play, vehicle entry and sound settings usable', async () => checkUnavailableAudio(browser, externalRequests));
     await check('no external network requests', async () => assert.deepEqual(externalRequests, []));
     await check('no page or console errors', async () => assert.deepEqual(errors, []));

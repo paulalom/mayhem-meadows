@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "generatedOn": "2026-10-06",
+  "description": "Original generated effects for Mayhem Meadows. Music remains the locally synthesized radio arrangements.",
+  "samples": [
+    {
+      "id": "engine-sports",
+      "file": "sports-engine.mp3",
+      "loop": true,
+      "gain": 1,
+      "baseFrequency": 105,
+      "duration": 4,
+      "source": "Runway",
+      "taskId": "9abe3a03-bedc-440e-bbdc-0ed8286ad7e7",
+      "prompt": "Small sporty petrol car engine at a steady medium RPM, dry close recorded mechanical hum with crisp exhaust pulses and subtle intake hiss. Continuous even speed, seamless loop, clean isolated sound, no gear shifts, no acceleration sweeps, no traffic, voices, music, sirens, or reverberation. Suitable for pitch-shifted engine audio in a playful driving game.",
+      "byteLength": 65245,
+      "sha256": "b99d3e62c6967dab78214a7ed8665ac7fc0c418f87f611b86e2389895c975b85"
+    },
+    {
+      "id": "engine-compact",
+      "file": "compact-engine.mp3",
+      "loop": true,
+      "gain": 1,
+      "baseFrequency": 80,
+      "duration": 4,
+      "source": "Runway",
+      "taskId": "5c5f22c9-a84a-412e-a813-71829533c46a",
+      "prompt": "Small compact petrol car engine at a steady medium idle, soft low mechanical hum, gentle exhaust pulses and subtle metallic texture. Dry isolated close recording, no traffic or other sounds. Even sustained RPM and volume, clean seamless loop, no start or shutdown, no music or voices. For a friendly cartoon driving game.",
+      "byteLength": 65245,
+      "sha256": "084d6bf6dcf223f36d9e889852ea0e482e67b0e1dc23c2c06d4625e412d8e26f"
+    },
+    {
+      "id": "engine-van",
+      "file": "van-engine.mp3",
+      "loop": true,
+      "gain": 1,
+      "baseFrequency": 58,
+      "duration": 4,
+      "source": "Runway",
+      "taskId": "3b779527-d46b-4a09-a865-bf6777a5d4fc",
+      "prompt": "Older delivery van diesel engine steadily idling, deep rounded rumble with light mechanical ticking and restrained exhaust chug. Dry isolated close recording, constant RPM and loudness, clean seamless loop. No startup, shutdown, traffic, music, sirens or voices. Playful driving game vehicle audio.",
+      "byteLength": 65245,
+      "sha256": "6171b7e15b70368e3a7ffc8806a87636ce7dca94188c49463034db4cdd64e6be"
+    },
+    {
+      "id": "siren",
+      "file": "police-siren.mp3",
+      "loop": true,
+      "gain": 1,
+      "duration": 4,
+      "source": "Runway",
+      "taskId": "941b5153-e94d-4298-95e0-5053b92527b0",
+      "prompt": "Police vehicle electronic wail siren cycling smoothly between low and high pitch, a clean two-tone rising and falling warning. Dry isolated close recording, steady loudness, seamless repeated cycle, no engine, traffic, speech, radio static or music. Clear recognizable siren for a cartoon driving game.",
+      "byteLength": 65245,
+      "sha256": "92efab0b9a49d5e8f07464642ed9939c115d3a43fa8bbdc2e84d133c2da6345b"
+    },
+    {
+      "id": "horn",
+      "file": "car-horn.mp3",
+      "loop": false,
+      "gain": 1,
+      "duration": 1,
+      "source": "Runway",
+      "taskId": "dcaf4e51-30d7-4de4-ae84-9f158d527cc8",
+      "prompt": "One short friendly dual-tone car horn honk, rounded brassy electric automobile horn, immediate attack and natural brief release, dry isolated sound. No engine, background ambience, music or speech. Playful small-town driving game.",
+      "byteLength": 17180,
+      "sha256": "5b2d803d72c487c3e6472b1e238c2fba96320884bd6849e3799e8641770c4055"
+    },
+    {
+      "id": "crash",
+      "file": "cartoon-crash.mp3",
+      "loop": false,
+      "gain": 1,
+      "duration": 1.48,
+      "source": "Runway",
+      "taskId": "87f33780-9cda-4d8a-9f4e-10db68fd3858",
+      "prompt": "Single cartoon car collision: punchy low bumper thump, short crunchy metal rattle, rubber squeak and a tiny comic spring boing tail. Dry isolated arcade impact, lively and harmless sounding. No voices, sirens, music or background ambience.",
+      "byteLength": 24703,
+      "sha256": "ae628ae1389d0b9f8f21a603cbfae89b2459b3879d41a5f0f966d0b743341195"
+    },
+    {
+      "id": "pop",
+      "file": "confetti-pop.mp3",
+      "loop": false,
+      "gain": 1,
+      "duration": 1,
+      "source": "Runway",
+      "taskId": "fc066106-b4a3-407b-bed6-16f9ee5f20f4",
+      "prompt": "One cheerful confetti party popper burst: crisp compressed-air pop, fizzy paper flutter and a short sparkling falling tail. Dry isolated playful toy sound, clean quick attack with a brief decay. No voices, background noise or music.",
+      "byteLength": 17180,
+      "sha256": "0dd05012afe57e2d3b56afc279380a1f398463929b284d4155172d94c4556cd8"
+    }
+  ]
+}
