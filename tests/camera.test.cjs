@@ -7,7 +7,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const core = require('../core.js');
 
-const context = vm.createContext({ MayhemCore: core, console, AbortController });
+const context = vm.createContext({ MayhemCore: core, MayhemPhysics: require('../physics.js'), console, AbortController });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../vendor/three.min.js'), 'utf8'), context);
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../scene3d.js'), 'utf8'), context);
 const { THREE: T, MayhemScene: Scene3D } = context;
@@ -27,12 +27,12 @@ function makeScene() {
     _ray: new T.Raycaster(), _pointer: new T.Vector2(),
     _ground: new T.Plane(new T.Vector3(0, 1, 0), 0), _aimPoint: new T.Vector3(),
     _aimBox: new T.Box3(), _aimHit: new T.Vector3(), _residents: new Map(), _vehicles: new Map(),
-    _sun: new T.DirectionalLight(), _buildingVolumes: [], _propVolumes: [], _cameraInfo: {}
+    _sun: new T.DirectionalLight(), _geometries: [], _buildingVolumes: [], _propVolumes: [], _cameraInfo: {}
   });
   scene.camera.position.set(game.current.x / 20, 3.4, game.current.y / 20 + 5.7);
   // Use the real town geometry to obtain collision envelopes. Only decoration
   // drawing is suppressed; vectors, camera transforms, and camera methods run.
-  for (const name of ['_staticBox', '_static', '_material', '_sign', '_park', '_services', '_lamp', '_tree']) scene[name] = () => {};
+  for (const name of ['_staticBox', '_static', '_material', '_sign', '_park', '_services', '_lamp', '_tree', '_landscape']) scene[name] = () => {};
   scene._town();
   return scene;
 }
@@ -86,7 +86,7 @@ test('camera stays finite and outside buildings across sampled streets, corners,
   const points = [];
   for (const building of foot.game.buildings) {
     for (const x of [building.x - 20, building.x + building.w + 20]) {
-      for (const y of [building.y - 20, building.y + building.h + 20]) points.push({ x, y });
+      for (const y of [building.y - 20, building.y + building.h + 20]) if (foot.game._isFree(x, y, 18)) points.push({ x, y });
     }
   }
   let seed = 719;
@@ -258,11 +258,11 @@ test('jump and rooftop elevation raise the camera pivot and muzzle origin togeth
   scene.orbit(0, -100); frames(scene, 180);
   const originalY = scene.cameraInfo.y, originalPitch = scene.aimDirection().pitch;
   scene.game.player.elevation = 1.4; frames(scene, 180);
-  assert.ok(Math.abs(scene.cameraInfo.targetY - 2.43) < 0.000001);
+  assert.ok(Math.abs(scene.cameraInfo.targetY - (1.4 + 1.03 * 0.86)) < 0.000001);
   assert.ok(Math.abs(scene.cameraInfo.y - originalY - 1.4) < 0.0001);
   assert.ok(Math.abs(scene.aimDirection().pitch - originalPitch) < 0.0001, 'shot pitch is relative to the elevated muzzle');
   scene.game.player.elevation = 8.0; frames(scene, 180);
-  assert.ok(Math.abs(scene.cameraInfo.targetY - 9.03) < 0.000001);
+  assert.ok(Math.abs(scene.cameraInfo.targetY - (8 + 1.03 * 0.86)) < 0.000001);
   assert.ok(Math.abs(scene.aimDirection().pitch - originalPitch) < 0.0001);
 });
 

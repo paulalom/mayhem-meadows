@@ -2,7 +2,7 @@
 
 **A tiny town. Terrible errands. Excellent bad decisions.**
 
-A for-fun, original, GTA-inspired third-person 3D driving sandbox. Borrow a car, run silly errands, scatter confetti, and lose the overenthusiastic Fun Police. Residents yell fake curses and recover from cartoon tumbles. The same little town now has chunky buildings, modeled cars and residents, and a camera that follows you through the streets.
+A for-fun, original, GTA-inspired third-person 3D driving sandbox. Borrow a car, run silly errands, scatter confetti, and lose the overenthusiastic Fun Police. Residents yell fake curses and recover from cartoon tumbles. Explore garden neighborhoods, busy shop rows, warehouse yards and a relaxed riverfront, with hills and countryside beyond town.
 
 ## Play
 
@@ -44,6 +44,7 @@ Click the town to capture the mouse and start looking around. Your first click c
 
 ## The toybox
 
+- **Neighborhoods:** Biscuit Heights, Waffle Works, Market Mile and Riverfront have different building density, rooflines and open spaces. Wider sidewalks give walking more room, and characters are 14% smaller with matching physical bodies. The HUD names your district; the minimap shows district colors and building footprints.
 - **Driving:** compact, sports car, and van handling; traffic; drifting and near-miss style points. Cars are three-dimensional rigid bodies with gravity: impacts can bounce, lift, roll, or flip them before they land. Press R to right your ride and return to a safe road position.
 - **Jumping:** press Space on foot for a jump with gravity and a landing, including onto low solid surfaces. Holding Space does not repeatedly jump; left-click remains the toy action.
 - **Third-person camera:** mouse movement looks around on foot, with a closer shoulder view and slower sensitivity while aiming. The driving camera follows smoothly and gives you time to look around before returning behind the car. Buildings shorten the camera distance to keep the view clear. Press C whenever you want to recenter.
@@ -64,7 +65,7 @@ Contract timers determine bonuses. Finishing overtime still pays the base reward
 
 The toy wheel and pocket/collection menus freeze the town and mission timer. Browse your collection anywhere, then visit **GARAGE** on the minimap to make purchases or manage rides. Biscuits cost $15, tape costs $35, and refill packs cost $30. Press I or G again, or Escape, to close the menu. Touch driving remains outside this prototype.
 
-The [gameplay design](DESIGN.md) explains the intended loops, tuning, scope, and next playtest questions. This is a small playable slice with simple traffic and patrol AI. The town uses a flat road layout, while vehicles can leave the ground and rotate in three dimensions. On-foot jumping and ragdolls have vertical gravity. Fixed street/park obstacles have collision shapes. There are no stairs, elevated road routes, or building interiors.
+The [gameplay design](DESIGN.md) explains the intended loops, neighborhood layouts, tuning, scope, and next playtest questions. This is a small playable slice with simple traffic and patrol AI. The town uses a flat road layout, surrounded by scenic terrain, hills and a river. Vehicles can leave the ground and rotate in three dimensions. On-foot jumping and ragdolls have vertical gravity. Fixed street/park obstacles have collision shapes. Exterior terrain is scenery; there are no stairs, elevated road routes, or building interiors.
 
 The [story campaign design](CAMPAIGN.md) specifies **Operation Unboring**, a proposed ten-job campaign beginning with Spanner's phone call and directions to Sprinkle Garage. Its first playable milestone is the call, the drive, and the garage meeting; campaign gameplay is planned for a later build.
 
@@ -104,4 +105,4 @@ npm run vendor
 
 Next priorities: playtest toy reach and the garage economy, tune chases, add touch/gamepad controls, then add route variety and cosmetic rewards.
 
-Version 0.6.0 adds on-foot jumping and three-dimensional vehicle physics with elastic impacts, airborne rotation, fixed prop collisions, and flipped-car recovery.
+Version 0.7.0 adds varied neighborhoods, wider sidewalks, smaller characters with matching physics, district navigation and countryside scenery. Automated Chrome mouse-look checks now keep the desktop cursor free.

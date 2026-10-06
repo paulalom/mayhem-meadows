@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const { Game, SIZE, ROAD_CENTERS, ROAD_WIDTH, CAR_TYPES, GADGETS, POCKET_ITEMS, PAINT_COLORS } = MayhemCore;
+  const { Game, SIZE, ROAD_CENTERS, ROAD_WIDTH, CAR_TYPES, GADGETS, POCKET_ITEMS, PAINT_COLORS, DISTRICTS } = MayhemCore;
   const $ = id => document.getElementById(id);
   const canvas = $('game-canvas');
   const game = new Game();
@@ -449,8 +449,14 @@
   function drawMinimap() {
     const r = minimap.getBoundingClientRect(), w = r.width, h = r.height, scale = w / SIZE;
     mini.clearRect(0, 0, w, h); mini.fillStyle = '#608d76'; mini.fillRect(0, 0, w, h);
+    for (const block of game.blocks || []) {
+      mini.fillStyle = DISTRICTS[block.district]?.mapColor || '#7e9f83';
+      mini.fillRect(block.x * scale, block.y * scale, block.w * scale, block.h * scale);
+    }
     mini.fillStyle = '#3b4655';
     for (const road of ROAD_CENTERS) { mini.fillRect((road - ROAD_WIDTH / 2) * scale, 0, ROAD_WIDTH * scale, h); mini.fillRect(0, (road - ROAD_WIDTH / 2) * scale, w, ROAD_WIDTH * scale); }
+    mini.fillStyle = '#b3b7a0';
+    for (const building of game.buildings) mini.fillRect(building.x * scale, building.y * scale, building.w * scale, building.h * scale);
     for (const service of game.services) { mini.fillStyle = service.id === 'wash' ? '#70e6db' : '#e6f77c'; mini.fillRect(service.x * scale - 2, service.y * scale - 2, 4, 4); }
     const t = target();
     if (t) { mini.strokeStyle = '#effa88'; mini.lineWidth = 2; mini.beginPath(); mini.arc(t.x * scale, t.y * scale, 5, 0, Math.PI * 2); mini.stroke(); }
@@ -464,6 +470,9 @@
   }
   function hud() {
     drawMinimap();
+    const district = game.districtAt(game.current);
+    $('district-name').textContent = district.name.toUpperCase();
+    canvas.dataset.district = district.id;
     $('equipped-toy').textContent = GADGETS[game.inventory.equipped].name + (game.inventory.equipped === 'cannon' ? ' · ' + game.inventory.ammo.cannon + ' charges' : '') + ' · TAB';
     canvas.dataset.equippedToy = game.inventory.equipped;
     canvas.dataset.inventoryMode = wheelOpen ? 'wheel' : inventoryView || 'none';

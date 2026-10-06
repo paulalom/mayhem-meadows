@@ -4,6 +4,21 @@
   const SIZE = 2160;
   const ROAD_CENTERS = [180, 540, 900, 1260, 1620, 1980];
   const ROAD_WIDTH = 104;
+  const SIDEWALK_WIDTH = 32;
+  const BUILDING_SETBACK = ROAD_WIDTH / 2 + SIDEWALK_WIDTH;
+  const DISTRICTS = Object.freeze({
+    heights: Object.freeze({ id: 'heights', name: 'Biscuit Heights', color: '#bcd2ae', mapColor: '#bcd2ae' }),
+    works: Object.freeze({ id: 'works', name: 'Waffle Works', color: '#b8c7cd', mapColor: '#b8c7cd' }),
+    market: Object.freeze({ id: 'market', name: 'Market Mile', color: '#d9c6b6', mapColor: '#d9c6b6' }),
+    riverfront: Object.freeze({ id: 'riverfront', name: 'Riverfront', color: '#b7d5c7', mapColor: '#b7d5c7' })
+  });
+  function districtAt(point, y) {
+    const x = typeof point === 'number' ? point : point.x;
+    y = typeof point === 'number' ? y : point.y;
+    const col = Math.max(0, Math.min(4, Math.floor((x - ROAD_CENTERS[0]) / 360)));
+    const row = Math.max(0, Math.min(4, Math.floor((y - ROAD_CENTERS[0]) / 360)));
+    return DISTRICTS[row >= 3 ? 'riverfront' : row === 2 || col === 2 ? 'market' : col < 2 ? 'heights' : 'works'];
+  }
   const CAR_TYPES = {
     compact: { name: 'Pocket Rocket', maxSpeed: 300, acceleration: 430, handling: 2.7, grip: 9, mass: 1, width: 27, length: 46 },
     sports: { name: 'Sprinkle GT', maxSpeed: 370, acceleration: 490, handling: 2.5, grip: 6, mass: 0.9, width: 28, length: 49 },
@@ -29,6 +44,7 @@
   const finite = (n, fallback) => typeof n === 'number' && Number.isFinite(n) ? n : fallback;
   const numeric = (n, fallback, min, max) => clamp(Math.floor(finite(n, fallback)), min, max);
   const Physics = root.MayhemPhysics || (typeof require === 'function' ? require('./physics.js') : null);
+  const { CHARACTER_SCALE, PERSON_HEIGHT, MUZZLE_HEIGHT, PLAYER_RADIUS, NPC_RADIUS } = Physics;
   const VehiclePhysics = root.MayhemVehiclePhysics || (typeof require === 'function' ? require('./vehicle-physics.js') : null);
 
   // Cars keep arcade steering on the ground, with contacts matching their
@@ -91,6 +107,7 @@
       this.peds = [];
       this.police = [];
       this.buildings = [];
+      this.blocks = [];
       this.staticObjects = [];
       this.particles = [];
       this.projectiles = [];
@@ -108,10 +125,12 @@
       this._nearMisses = new Map();
       this._makeTown();
       this._makeStreetObjects();
+      this._makePedestrians();
       this.vehiclePhysics = new VehiclePhysics.VehicleWorld(this, CAR_TYPES);
     }
 
     get current() { return this.cars.find(car => car.id === this.player.vehicleId) || this.player; }
+    districtAt(point = this.current) { return districtAt(point); }
     get escapeGoal() { return this.heat > 0 ? 8 + this.heat * 6 : 0; }
     get maxHealth() { return 100 + this.upgrades.armor * 25; }
     get garageAvailable() {
@@ -128,12 +147,7 @@
     drainEvents() { return this._events.splice(0); }
 
     _makeTown() {
-      const names = ['Biscuit Bank', 'Waffle Works', 'Disco Depot', 'Sprinkle Shop', 'Crumb Café', 'The Noodle Hut', 'Bean Palace', 'Fudge Factory'];
-      for (let row = 0; row < 5; row++) for (let col = 0; col < 5; col++) {
-        const x = ROAD_CENTERS[col] + 60, y = ROAD_CENTERS[row] + 60;
-        if (x === 960 && y === 960) continue;
-        this.buildings.push({ x, y, w: 240, h: 240, height: [5.3, 7, 4.5, 6.2, 8.2][this.buildings.length % 5], color: COLORS[(row + col * 2) % COLORS.length], name: names[(row * 5 + col) % names.length] });
-      }
+      this._makeBlocks();
       this._addCar(916, 1080, -Math.PI / 2, 'compact', '#ffd15b');
       const parked = [[540, 730], [1260, 370], [1620, 1080], [180, 1520], [1980, 720], [1260, 1770], [540, 1910], [1980, 1730]];
       parked.forEach(([x, y], i) => this._addCar(x + (i % 2 ? -22 : 22), y, -Math.PI / 2, ['compact', 'sports', 'van'][i % 3], COLORS[i % COLORS.length]));
@@ -142,12 +156,75 @@
         const car = this._addCar(ROAD_CENTERS[col], ROAD_CENTERS[row], i % 2 ? 0 : Math.PI / 2, ['compact', 'van', 'sports'][i % 3], COLORS[(i + 2) % COLORS.length], true);
         car.route = this._wanderRoute(car);
       }
-      for (let i = 0; i < 36; i++) {
-        const vertical = i % 2 === 0, road = ROAD_CENTERS[i % 6];
-        const along = 280 + Math.floor(i / 6) * 280;
-        this.peds.push({ id: 'ped-' + i, x: vertical ? road + (i % 4 ? -54 : 54) : along, y: vertical ? along : road + (i % 4 ? 54 : -54), angle: vertical ? Math.PI / 2 : 0, stunned: 0, bubble: '', bubbleTimer: 0, homeX: vertical ? road + (i % 4 ? -54 : 54) : along, homeY: vertical ? along : road + (i % 4 ? 54 : -54), color: COLORS[i % COLORS.length], pace: 15 + this._random() * 12 });
-      }
       this.police.push({ id: 'police-' + this._nextId++, x: 1260, y: 180, angle: Math.PI / 2, speed: 0, route: [{ x: 1260, y: 540 }], routeTimer: 4, lastSeen: { x: 900, y: 1080 } });
+    }
+
+    _makeBlocks() {
+      const names = ['Biscuit Bank', 'Waffle Works', 'Disco Depot', 'Sprinkle Shop', 'Crumb Café', 'The Noodle Hut', 'Bean Palace', 'Fudge Factory'];
+      for (let row = 0; row < 5; row++) for (let col = 0; col < 5; col++) {
+        const x = ROAD_CENTERS[col], y = ROAD_CENTERS[row], district = districtAt({ x: x + 180, y: y + 180 }).id;
+        const block = { id: 'block-' + row + '-' + col, row, col, x, y, w: 360, h: 360, district,
+          mapColor: DISTRICTS[district].mapColor, pavement: { x: x + 52, y: y + 52, w: 256, h: 256 },
+          buildable: { x: x + BUILDING_SETBACK, y: y + BUILDING_SETBACK, w: 192, h: 192 }, buildings: [] };
+        this.blocks.push(block);
+        const add = (dx, dy, w, h, height, style) => {
+          const building = { id: block.id + '-building-' + block.buildings.length, blockId: block.id, district, style,
+            x: x + dx, y: y + dy, w, h, height, color: COLORS[(row + col * 2 + block.buildings.length) % COLORS.length],
+            name: names[(row * 5 + col + block.buildings.length) % names.length] };
+          block.buildings.push(building); this.buildings.push(building);
+        };
+        if (row === 2 && col === 2) {
+          block.kind = block.landUse = 'park'; block.courtyard = { x: x + 84, y: y + 84, w: 192, h: 192 };
+        } else if (district === 'heights') {
+          block.kind = block.landUse = 'garden';
+          add(96 + col * 10, 96 + row * 8, 108 + col * 12, 116 - row * 14, 3.7 + (row + col) * 0.45, 'cottage');
+          block.courtyard = { x: x + 92, y: y + 232, w: 180, h: 40 };
+        } else if (district === 'works') {
+          block.kind = block.landUse = 'yard';
+          add(92, 92, 152 + row * 12, 100 - col * 2, 5.1 + row * 0.6 + (col - 3) * 0.7, 'warehouse');
+          add(92, 226, 68 + row * 6, 44, 3.0 + row * 0.4, 'warehouse');
+          block.courtyard = { x: x + 178, y: y + 212, w: 88, h: 58 };
+        } else if (district === 'market') {
+          block.kind = block.landUse = 'shops';
+          for (let i = 0; i < 3; i++) add(84 + i * 70, 84, 52, 76 + (i === 1 ? 8 : 0),
+            row === 1 && col === 2 && i === 1 ? 13.4 : 4.4 + ((row + col + i) % 4) * 1.1,
+            row === 1 && col === 2 && i === 1 ? 'tower' : 'shop');
+          for (let i = 0; i < 2; i++) add(84 + i * 112, 212, 80, 64, 4.8 + ((row + i) % 3) * 0.9, 'shop');
+          block.courtyard = { x: x + 84, y: y + 176, w: 192, h: 24 };
+        } else if (col % 2) {
+          block.kind = block.landUse = 'court';
+          add(212, 216, 58, 54, 3.1 + (row - 3) * 0.4, 'cafe');
+          block.courtyard = { x: x + 90, y: y + 94, w: 114, h: 174 };
+        } else {
+          block.kind = block.landUse = 'cafe';
+          add(96, 100, 66 + col * 3, 74, 3.6 + (row - 3) * 0.45, 'cafe');
+          add(186, 208, 82, 62, 3.0 + col * 0.15, 'cafe');
+          block.courtyard = { x: x + 96, y: y + 188, w: 174, h: 16 };
+        }
+        block.density = block.buildings.reduce((area, building) => area + building.w * building.h, 0) / (192 * 192);
+      }
+    }
+
+    _makePedestrians() {
+      const counts = { heights: 6, works: 5, market: 19, riverfront: 6 };
+      for (const [district, count] of Object.entries(counts)) {
+        const blocks = this.blocks.filter(block => block.district === district);
+        for (let n = 0; n < count; n++) {
+          const block = blocks[n % blocks.length], edge = Math.floor(n / blocks.length) % 4;
+          const vertical = edge < 2, across = edge % 2 ? 290 : 70;
+          let point = null;
+          for (const along of [118, 190, 252, 154, 220, 100]) {
+            const candidate = { x: block.x + (vertical ? across : along), y: block.y + (vertical ? along : across) };
+            if (this._personFree(candidate.x, candidate.y, Physics.NPC_RADIUS) && this.peds.every(ped => distance(ped, candidate) > Physics.NPC_RADIUS * 3)) { point = candidate; break; }
+          }
+          if (!point) point = this._safeRoadPosition({ x: block.x, y: block.y }, Physics.NPC_RADIUS);
+          const index = this.peds.length;
+          this.peds.push({ id: 'ped-' + index, ...point, angle: vertical ? Math.PI / 2 : 0, stunned: 0, bubble: '', bubbleTimer: 0,
+            homeX: point.x, homeY: point.y, district, walkAxis: vertical ? 'y' : 'x',
+            walkMin: (vertical ? block.y : block.x) + 96, walkMax: (vertical ? block.y : block.x) + 270,
+            color: COLORS[index % COLORS.length], pace: 15 + this._random() * 12 });
+        }
+      }
     }
 
     _addCar(x, y, angle, kind, color, traffic = false) {
@@ -169,14 +246,35 @@
       [[49.7,49.6],[58.2,49.6],[49.7,58.3],[58.2,58.3]].forEach(([x,y], i) => add('tree', x, y, [cylinder(0.147, 0.735, [0,0.735,0])], { scale: 1.05, variety: i }));
       for (const [x,y] of [[50.95,49.6],[56.95,49.6],[50.95,58.3],[56.95,58.3]]) add('bench', x, y, [box([0.7,0.075,0.225],[0,0.44,0]),box([0.7,0.27,0.065],[0,0.83,0.21])]);
       for (const x of ROAD_CENTERS) for (const y of ROAD_CENTERS) if ((Math.round(x / 360) + Math.round(y / 360)) % 2 === 0) add('lamp', x / 20 + 3.14, y / 20 + 3.2, [cylinder(0.075,1.9,[0,1.9,0]),box([0.45,0.06,0.05],[-0.4,3.65,0]),box([0.25,0.07,0.18],[-0.82,3.59,0])]);
-      add('garage', 47.1, 46.8, [box([0.95,0.9,0.65],[0,0.9,0]),box([1.05,0.09,0.75],[0,1.88,0])]);
+      add('garage', 48.9, 48.6, [box([0.95,0.9,0.65],[0,0.9,0]),box([1.05,0.09,0.75],[0,1.88,0])]);
       add('wash',81,102.35,[box([0.13,1.25,0.13],[-2.25,1.25,0]),box([0.13,1.25,0.13],[2.25,1.25,0]),box([2.4,0.175,0.325],[0,2.55,0])]);
+      for (const block of this.blocks) {
+        const worldX = block.x / 20, worldY = block.y / 20, identity = { district: block.district, blockId: block.id };
+        if (block.kind === 'garden') {
+          add('tree', worldX + 12.5, worldY + 7.2, [cylinder(0.14,0.75,[0,0.75,0])], { ...identity, scale: 1.0, variety: block.row + block.col });
+          add('bench', worldX + 6.5, worldY + 12.5, [box([0.7,0.075,0.225],[0,0.44,0]),box([0.7,0.27,0.065],[0,0.83,0.21])], identity);
+        } else if (block.kind === 'shops') {
+          add('planter', worldX + 5.0, worldY + 9.4, [box([0.5,0.28,0.3],[0,0.28,0])], identity);
+          if (block.col % 2 === 0) add('bollard', worldX + 13.7, worldY + 3.55, [cylinder(0.1,0.36,[0,0.36,0])], identity);
+        } else if (block.kind === 'court') {
+          add('bench', worldX + 12.4, worldY + 6.8, [box([0.7,0.075,0.225],[0,0.44,0]),box([0.7,0.27,0.065],[0,0.83,0.21])], identity);
+          add('tree', worldX + 4.6, worldY + 13.7, [cylinder(0.14,0.75,[0,0.75,0])], { ...identity, scale: 0.9, variety: block.col });
+        } else if (block.kind === 'cafe') {
+          add('planter', worldX + 12.2, worldY + 5.4, [box([0.55,0.28,0.35],[0,0.28,0])], identity);
+        }
+      }
+      for (const district of Object.keys(DISTRICTS)) {
+        const block = this.blocks.find(candidate => candidate.district === district && candidate.kind !== 'park');
+        add('wayfinding', (block.x + 70) / 20, (block.y + 70) / 20,
+          [cylinder(0.055,0.68,[0,0.68,0]),box([0.48,0.19,0.04],[0,1.3,0])],
+          { district, label: DISTRICTS[district].name, blockId: block.id });
+      }
     }
 
-    _isFree(x, y, radius = 10) {
+    _isFree(x, y, radius = PLAYER_RADIUS) {
       if (x < radius || y < radius || x > SIZE - radius || y > SIZE - radius) return false;
       return !this.buildings.some(b => Math.hypot(x - clamp(x, b.x, b.x + b.w), y - clamp(y, b.y, b.y + b.h)) < radius) &&
-        !this._staticParts().some(part => part.bottom < 1.7 && this._circlePart({ x, y }, radius, part));
+        !this._staticParts().some(part => part.bottom < PERSON_HEIGHT && this._circlePart({ x, y }, radius, part));
     }
 
     _vehicles() { return this.cars.concat(this.police); }
@@ -203,7 +301,7 @@
         !this._staticParts().some(part => part.bottom < VehiclePhysics.height(entity) && boxContact(box, part.box));
     }
 
-    _heightOverlap(a, b, ah = 1.7, bh = 1.7) {
+    _heightOverlap(a, b, ah = PERSON_HEIGHT, bh = PERSON_HEIGHT) {
       const ay = finite(a.elevation, 0), by = finite(b.elevation, 0);
       return ay < by + bh - 0.025 && ay + ah > by + 0.025;
     }
@@ -239,7 +337,7 @@
       return { nx: (rx * box.axes[0].x + ry * box.axes[1].x) / d, ny: (rx * box.axes[0].y + ry * box.axes[1].y) / d, depth };
     }
 
-    _personVehicleContact(person, vehicle, radius = person === this.player ? 10 : 7) {
+    _personVehicleContact(person, vehicle, radius = person === this.player ? PLAYER_RADIUS : NPC_RADIUS) {
       const type = CAR_TYPES[vehicle.kind] || CAR_TYPES.compact;
       const reach = Math.hypot(type.length, type.width) / 2 + radius;
       if ((person.x - vehicle.x) ** 2 + (person.y - vehicle.y) ** 2 > reach * reach) return null;
@@ -252,7 +350,7 @@
       return people.filter(person => !this.ragdolls.get(person.id));
     }
 
-    _personFree(x, y, radius = 10, ignore = null) {
+    _personFree(x, y, radius = PLAYER_RADIUS, ignore = null) {
       const point = { x, y };
       return this._isFree(x, y, radius) && !this._vehicles().some(car => car !== ignore && this._personVehicleContact(point, car, radius));
     }
@@ -277,7 +375,7 @@
         for (const other of people) {
           if (other === entity) continue;
           if (!this._heightOverlap(entity, other)) continue;
-          const otherRadius = other === this.player ? 10 : 7;
+          const otherRadius = other === this.player ? PLAYER_RADIUS : NPC_RADIUS;
           const dx = entity.x - other.x, dy = entity.y - other.y, d = Math.hypot(dx, dy), depth = radius + otherRadius - d;
           if (depth <= 0) continue;
           const nx = d > 0.001 ? dx / d : Math.cos(entity.angle + Math.PI / 2), ny = d > 0.001 ? dy / d : Math.sin(entity.angle + Math.PI / 2);
@@ -334,7 +432,7 @@
         const hit = this._personVehicleContact(person, entity);
         if (!hit) continue;
         if (!hit.vertical) { person.x += hit.nx * (hit.depth + 0.002); person.y += hit.ny * (hit.depth + 0.002); }
-        this._moveCircleBuildings(person, 0, 0, person === this.player ? 10 : 7);
+        this._moveCircleBuildings(person, 0, 0, person === this.player ? PLAYER_RADIUS : NPC_RADIUS);
         if (speed > 35 && !(person.ragdollGrace > 0) && (person !== this.player || this.graceTimer <= 0)) {
           const kick = clamp(speed / 20 * 0.58 + 1.2, 2.5, 11);
           this._knockDown(person, { x: velocityX / speed * kick, y: clamp(2.1 + speed / 200, 2.1, 4.5), z: velocityY / speed * kick });
@@ -364,7 +462,7 @@
       for (let pass = 0; pass < 3; pass++) {
         let changed = false;
         for (const b of this.buildings) {
-          if (!this._heightOverlap(entity, { elevation: 0 }, 1.7, b.height)) continue;
+          if (!this._heightOverlap(entity, { elevation: 0 }, PERSON_HEIGHT, b.height)) continue;
           if (entity.x + radius <= b.x || entity.x - radius >= b.x + b.w || entity.y + radius <= b.y || entity.y - radius >= b.y + b.h) continue;
           const nx = clamp(entity.x, b.x, b.x + b.w), ny = clamp(entity.y, b.y, b.y + b.h);
           const rx = entity.x - nx, ry = entity.y - ny, d = Math.hypot(rx, ry);
@@ -377,7 +475,7 @@
           }
         }
         for (const part of this._staticParts()) {
-          if (finite(entity.elevation, 0) >= part.top - 0.025 || finite(entity.elevation, 0) + 1.7 <= part.bottom + 0.025) continue;
+          if (finite(entity.elevation, 0) >= part.top - 0.025 || finite(entity.elevation, 0) + PERSON_HEIGHT <= part.bottom + 0.025) continue;
           const hit = this._circlePart(entity, radius, part);
           if (hit) { entity.x += hit.nx * (hit.depth + 0.002); entity.y += hit.ny * (hit.depth + 0.002); changed = collision = true; }
         }
@@ -493,7 +591,7 @@
       const offsets = [Math.PI / 2, -Math.PI / 2, Math.PI, 0];
       for (const offset of offsets) {
         const x = car.x + Math.cos(car.angle + offset) * 40, y = car.y + Math.sin(car.angle + offset) * 40;
-        if (this._personFree(x, y, 10)) {
+        if (this._personFree(x, y, PLAYER_RADIUS)) {
           this.player.vehicleId = null; this.player.x = x; this.player.y = y; this.player.angle = car.angle;
           this.player.elevation = this.player.verticalVelocity = 0; this.player.grounded = true;
           car.speed = car.vx = car.vy = 0;
@@ -501,7 +599,7 @@
         }
       }
       if (forced) {
-        const position = this._safeRoadPosition(car, 10); this.player.vehicleId = null; this.player.x = position.x; this.player.y = position.y;
+        const position = this._safeRoadPosition(car, PLAYER_RADIUS); this.player.vehicleId = null; this.player.x = position.x; this.player.y = position.y;
         this.player.elevation = this.player.verticalVelocity = 0; this.player.grounded = true;
         return true;
       }
@@ -527,13 +625,13 @@
       const pitch = aimed ? clamp(options.pitch, -1.35, 1.35) : 0;
       const cosPitch = Math.cos(pitch), sinPitch = Math.sin(pitch);
       this.player.aimPitch = pitch;
-      const aimHeight = range => this.player.elevation + 1.15 + Math.tan(pitch) * range / 20;
+      const aimHeight = range => this.player.elevation + MUZZLE_HEIGHT + Math.tan(pitch) * range / 20;
       const inAimHeight = person => {
         if (!aimed) return true;
         const dx = person.x - this.player.x, dy = person.y - this.player.y;
         const forward = dx * Math.cos(angle) + dy * Math.sin(angle);
         const height = aimHeight(Math.hypot(dx, dy));
-        return forward >= 0 && height >= finite(person.elevation, 0) + 0.1 && height <= finite(person.elevation, 0) + 2.05 &&
+        return forward >= 0 && height >= finite(person.elevation, 0) + 0.1 * CHARACTER_SCALE && height <= finite(person.elevation, 0) + PERSON_HEIGHT + 0.35 * CHARACTER_SCALE &&
           !this.buildings.some(building => segmentHitsRect(this.player, person, building));
       };
       const equipped = this.inventory.equipped;
@@ -542,16 +640,16 @@
       if (equipped === 'cannon') {
         this.inventory.ammo.cannon--;
         const life = 360 / 560;
-        const projectile = { id: 'party-' + this._nextId++, x: this.player.x + Math.cos(angle) * 25 * cosPitch, y: this.player.y + Math.sin(angle) * 25 * cosPitch, angle, height: this.player.elevation + 1.15, baseHeight: this.player.elevation, life, maxLife: life };
-        if (aimed) Object.assign(projectile, { aimed: true, startHeight: Math.max(0.15, this.player.elevation + 1.15 + sinPitch * 1.25), horizontalSpeed: 560 * cosPitch, verticalSpeed: 28 * sinPitch });
+        const projectile = { id: 'party-' + this._nextId++, x: this.player.x + Math.cos(angle) * 25 * cosPitch, y: this.player.y + Math.sin(angle) * 25 * cosPitch, angle, height: this.player.elevation + MUZZLE_HEIGHT, baseHeight: this.player.elevation, life, maxLife: life };
+        if (aimed) Object.assign(projectile, { aimed: true, startHeight: Math.max(0.15, this.player.elevation + MUZZLE_HEIGHT + sinPitch * 1.25), horizontalSpeed: 560 * cosPitch, verticalSpeed: 28 * sinPitch });
         if (aimed) projectile.height = projectile.startHeight;
         this.projectiles.push(projectile);
-        this._confetti(this.player.x, this.player.y, 8, this.player.elevation + 1.15); this._sound('pop');
+        this._confetti(this.player.x, this.player.y, 8, this.player.elevation + MUZZLE_HEIGHT); this._sound('pop');
         return true;
       }
       if (equipped === 'hammer') {
         const reach = 62, forwardX = Math.cos(angle), forwardY = Math.sin(angle);
-        this._confetti(this.player.x + forwardX * 35 * cosPitch, this.player.y + forwardY * 35 * cosPitch, 18, this.player.elevation + 1.15 + sinPitch * 1.75); this._sound('hammer');
+        this._confetti(this.player.x + forwardX * 35 * cosPitch, this.player.y + forwardY * 35 * cosPitch, 18, this.player.elevation + MUZZLE_HEIGHT + sinPitch * 1.75); this._sound('hammer');
         let hit = false;
         const inReach = person => {
           const dx = person.x - this.player.x, dy = person.y - this.player.y, range = Math.hypot(dx, dy);
@@ -566,7 +664,7 @@
         return true;
       }
       const pop = { x: this.player.x + Math.cos(angle) * 44 * cosPitch, y: this.player.y + Math.sin(angle) * 44 * cosPitch };
-      this._confetti(pop.x, pop.y, 25, this.player.elevation + 1.15 + sinPitch * 2.2); this._sound('pop');
+      this._confetti(pop.x, pop.y, 25, this.player.elevation + MUZZLE_HEIGHT + sinPitch * 2.2); this._sound('pop');
       let hit = false;
       for (const ped of this.peds) if (ped.stunned <= 0 && !this.ragdolls.get(ped.id) && inAimHeight(ped) && distance(ped, pop) < 60) { this._startle(ped, angle); hit = true; }
       for (const cop of this.police) if (inAimHeight(cop) && distance(cop, pop) < 65) { cop.distracted = 1.8; hit = true; this._confetti(cop.x, cop.y, 20); }
@@ -600,11 +698,11 @@
           projectile.y += Math.sin(projectile.angle) * horizontalSpeed * step;
           projectile.life = Math.max(0, projectile.life - step);
           const elapsed = projectile.maxLife - projectile.life;
-          projectile.height = projectile.aimed ? projectile.startHeight + projectile.verticalSpeed * elapsed - 2 * elapsed * elapsed : finite(projectile.baseHeight, 0) + 1.15 + Math.sin(Math.PI * (1 - projectile.life / projectile.maxLife)) * 1.1;
+          projectile.height = projectile.aimed ? projectile.startHeight + projectile.verticalSpeed * elapsed - 2 * elapsed * elapsed : finite(projectile.baseHeight, 0) + MUZZLE_HEIGHT + Math.sin(Math.PI * (1 - projectile.life / projectile.maxLife)) * 1.1;
           const atHeight = height => !projectile.aimed || Math.min(before.height, projectile.height) <= height && Math.max(before.height, projectile.height) >= 0.1;
           const walls = this.buildings.some(b => atHeight(finite(b.height, 8)) && segmentHitsRect(before, projectile, { x: b.x - 3, y: b.y - 3, w: b.w + 6, h: b.h + 6 }));
           const vehicles = this.vehiclePhysics.hitsSegment(before, projectile);
-          const people = atHeight(2.05) && this.peds.some(ped => ped.stunned <= 0 && distance(ped, projectile) < 16);
+          const people = atHeight(PERSON_HEIGHT + 0.35 * CHARACTER_SCALE) && this.peds.some(ped => ped.stunned <= 0 && distance(ped, projectile) < 16 * CHARACTER_SCALE);
           const ground = projectile.aimed && projectile.height <= 0.12;
           if (ground) projectile.height = 0.12;
           burst = walls || vehicles || people || ground || projectile.life <= 0.000001 || projectile.x < 0 || projectile.y < 0 || projectile.x > SIZE || projectile.y > SIZE;
@@ -652,7 +750,7 @@
     recover() {
       this.ragdolls.clear(this.player.id);
       this.player.stunned = 0; this.player.ragdollGrace = 1.4;
-      const entity = this.current, p = this._safeRoadPosition(entity, this.player.vehicleId ? 18 : 10, this.player.vehicleId ? entity : null);
+      const entity = this.current, p = this._safeRoadPosition(entity, this.player.vehicleId ? 18 : PLAYER_RADIUS, this.player.vehicleId ? entity : null);
       entity.x = p.x; entity.y = p.y;
       if (this.player.vehicleId) { this.vehiclePhysics.reset(entity); entity.health = Math.max(25, entity.health); }
       this.player.x = p.x; this.player.y = p.y; this.player.composure = Math.max(60, this.player.composure);
@@ -910,7 +1008,7 @@
         const owner = body.owner;
         owner.stunned = 0; owner.ragdollGrace = 1.4;
         if (owner !== this.player) owner.angle = Math.atan2(owner.homeY - owner.y, owner.homeX - owner.x);
-        this._resolvePerson(owner, owner === this.player ? 10 : 7);
+        this._resolvePerson(owner, owner === this.player ? PLAYER_RADIUS : NPC_RADIUS);
       }
       if (this.mission) {
         this.missionStats.elapsed += dt;
@@ -932,8 +1030,8 @@
       this.player.verticalVelocity -= 18 * dt;
       this.player.elevation = Math.max(0, feet + this.player.verticalVelocity * dt);
       if (this.player.verticalVelocity > 0) {
-        const ceiling = this.vehiclePhysics.ceiling(this.player.x, this.player.y, feet + 1.7, this.player.elevation + 1.7);
-        if (Number.isFinite(ceiling)) { this.player.elevation = Math.max(0, ceiling - 1.705); this.player.verticalVelocity = 0; }
+        const ceiling = this.vehiclePhysics.ceiling(this.player.x, this.player.y, feet + PERSON_HEIGHT, this.player.elevation + PERSON_HEIGHT);
+        if (Number.isFinite(ceiling)) { this.player.elevation = Math.max(0, ceiling - PERSON_HEIGHT - 0.005); this.player.verticalVelocity = 0; }
       }
       const forward = Number(Boolean(input.up)) - Number(Boolean(input.down));
       const strafe = Number(Boolean(input.right)) - Number(Boolean(input.left));
@@ -950,7 +1048,7 @@
         if (this.player.verticalVelocity <= 0 && feet >= landing && this.player.elevation <= landing + 0.015) {
           this.player.elevation = landing; this.player.verticalVelocity = 0;
         }
-        this._move(this.player, dx, dy, 10);
+        this._move(this.player, dx, dy, PLAYER_RADIUS);
       }
       const support = this.vehiclePhysics.support(this.player.x, this.player.y, Math.max(feet, this.player.elevation) + 0.045);
       if (this.player.verticalVelocity <= 0 && this.player.elevation <= support + 0.015) {
@@ -1030,9 +1128,15 @@
         ped.bubbleTimer = Math.max(0, ped.bubbleTimer - dt);
         if (!ped.bubbleTimer) ped.bubble = '';
         if (ped.stunned > 0 || this.ragdolls.get(ped.id)) { ped.stunned = Math.max(0, ped.stunned - dt); continue; }
+        if (ped.walkAxis) {
+          const vertical = ped.walkAxis === 'y', along = vertical ? ped.y : ped.x;
+          const sideways = vertical ? ped.x - ped.homeX : ped.y - ped.homeY;
+          if (Math.abs(sideways) > 2) ped.angle = Math.atan2(ped.homeY - ped.y, ped.homeX - ped.x);
+          else if (along < ped.walkMin + 1) ped.angle = vertical ? Math.PI / 2 : 0;
+          else if (along > ped.walkMax - 1) ped.angle = vertical ? -Math.PI / 2 : Math.PI;
+        } else if (distance(ped, { x: ped.homeX, y: ped.homeY }) > 85) ped.angle = Math.atan2(ped.homeY - ped.y, ped.homeX - ped.x);
         const dx = Math.cos(ped.angle) * ped.pace * dt, dy = Math.sin(ped.angle) * ped.pace * dt;
-        if (distance(ped, { x: ped.homeX, y: ped.homeY }) > 85) ped.angle = Math.atan2(ped.homeY - ped.y, ped.homeX - ped.x);
-        if (this._move(ped, dx, dy, 7)) ped.angle = wrapAngle(ped.angle + Math.PI * (0.65 + this._random() * 0.2));
+        if (this._move(ped, dx, dy, NPC_RADIUS)) ped.angle = wrapAngle(ped.angle + (ped.walkAxis ? Math.PI : Math.PI * (0.65 + this._random() * 0.2)));
       }
     }
 
@@ -1067,7 +1171,7 @@
         } else this.vehiclePhysics.control(cop, { targetSpeed: 0, heading: cop.angle });
         let close;
         if (this.player.vehicleId) { const box = this._vehicleBox(this.current); box.half = box.half.map(n => n + 5); close = this._heightOverlap(this.current, cop, VehiclePhysics.height(this.current), VehiclePhysics.height(cop)) && boxContact(this._vehicleBox(cop), box); }
-        else close = this._personVehicleContact(this.player, cop, 14);
+        else close = this._personVehicleContact(this.player, cop, 14 * CHARACTER_SCALE);
         if (this.heat > 0 && this.graceTimer <= 0 && cop.distracted <= 0 && close) contact = true;
       }
       this.policeSeen = seen;
@@ -1130,7 +1234,7 @@
     }
   }
 
-  const api = { Game, SIZE, ROAD_CENTERS, ROAD_WIDTH, CAR_TYPES, GADGETS, POCKET_ITEMS, PAINT_COLORS: Object.freeze(COLORS.slice()) };
+  const api = { Game, SIZE, ROAD_CENTERS, ROAD_WIDTH, SIDEWALK_WIDTH, BUILDING_SETBACK, DISTRICTS, districtAt, CAR_TYPES, GADGETS, POCKET_ITEMS, PAINT_COLORS: Object.freeze(COLORS.slice()) };
   root.MayhemCore = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(globalThis);

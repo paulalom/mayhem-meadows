@@ -3,6 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Game } = require('../core.js');
 const C = require('../vendor/cannon.cjs');
+const { PERSON_HEIGHT } = require('../physics.js');
 
 const empty = () => {
   const game = new Game({ seed: 42 });
@@ -108,7 +109,7 @@ test('jumping cannot pass through a carwash beam or an airborne underbody', () =
     else { game.staticObjects = [{ kind: 'wash', x: 900, y: 900, parts: [{ half: [2.4,0.175,0.325], offset: [0,2.55,0] }] }]; game.vehiclePhysics.sync(); }
     game.jump(); let maxHeight = 0;
     for (let i = 0; i < 12; i++) { game.update(1 / 60); maxHeight = Math.max(maxHeight, game.player.elevation); }
-    assert.ok(maxHeight < 0.72, 'head stops below the real overhead collider');
+    assert.ok(maxHeight < 2.4 - PERSON_HEIGHT + 0.025, 'scaled head stops below the real overhead collider');
   }
 });
 
@@ -121,7 +122,7 @@ test('a tipped chassis uses its full orientation for standing collisions', () =>
 });
 
 test('falling cars tumble residents using vertical impact speed', () => {
-  const game = empty(), ride = car(game, 900); ride.elevation = 1.5; ride.verticalVelocity = -8;
+  const game = empty(), ride = car(game, 900); ride.elevation = PERSON_HEIGHT - 0.2; ride.verticalVelocity = -8;
   const ped = { id: 'fall-target', x: 900, y: 900, angle: 0, elevation: 0, stunned: 0, bubbleTimer: 0, pace: 0 };
   game.peds = [ped]; game._vehiclePeople(ride, 0, 0);
   assert.ok(game.ragdolls.get(ped.id));

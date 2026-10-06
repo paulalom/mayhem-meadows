@@ -106,15 +106,22 @@ Money, purchases, completed-contract counts, settings, and best score are stored
 
 ## The town is a toybox
 
-A compact map is better than an empty large one. Four or five streets in each direction create short blocks, recognizable corners, and plenty of choices.
+The town occupies a compact 108-metre square with six streets in each direction. Short blocks keep errands quick. Density changes between neighborhoods so a fast corner, a quiet garden, and a crowded shop row feel different within one outing.
 
-- **Town square:** safe spawn, garage, a conspicuous first car, and the contract board.
-- **Neon market:** tight corners, delivery targets, and lots of civilian traffic.
-- **Sprinkle Park:** broad paths and an escape shortcut that cars can squeeze through.
-- **Disco district:** open avenues that encourage speed and drifting.
-- **Car wash:** visible escape/repair service with an easy entrance.
+| District | Layout and identity | Play purpose |
+| --- | --- | --- |
+| Biscuit Heights · northwest | Small homes, garden gaps, trees and quiet courts | A forgiving place to stroll, change cars and recover from a busy street |
+| Waffle Works · northeast | Brick warehouses, larger roofs and loading yards | Strong industrial silhouettes and open turning space between solid buildings |
+| Market Mile · central cross | Closely spaced shops, taller corners and lively fronts | More visual activity and tight pedestrian shortcuts, with the garage and Sprinkle Park as anchors |
+| Riverfront · south | Low cafes and pavilions, broad open courts and planted spaces | A calmer change of pace, views toward the river and an easy approach to the car wash |
 
-Visual landmarks matter more than realism. Buildings have chunky roofs, pastel walls, and big signs. Cars and residents have simple, playful 3D silhouettes. Roads, sidewalks, mission rings, and the player's car remain readable under confetti and police effects. The camera follows smoothly with a little look-ahead; the HUD leaves the center of play clear.
+Every block has an actual layout: each building footprint drives rendering, car collision, ragdoll collision and sight obstruction. Open gaps stay open. Streets retain their existing width, while buildings move back to leave at least 1.6 metres between the road edge and the narrowest developed frontage, including about 1.5 metres of paved sidewalk. Most fronts have more space, with clear walking routes past furniture and doorways. Trees, benches and other solid street props use shared visual and physical shapes.
+
+People are 14% smaller, including their standing contacts, ragdoll joints and toy origins. This gives roads, cars and buildings more presence while preserving the jump and driving feel. Camera height follows the new character proportions.
+
+The countryside supplies depth beyond the town: rolling terrain, layered hills, tree lines and a winding river. Warm daylight and varied rooflines make each direction recognizable. The active road network remains level in this milestone; the exterior landscape is scenery around the playable town. Road targets, the initial yellow car, garage access and car wash remain reachable.
+
+The HUD names the current district. The minimap colors neighborhoods and draws real building footprints, helping players recognize open yards and gaps before choosing a route. Large signs, recognizable rooftops and the park fountain provide landmarks at street level. Confetti, patrols and objective rings keep their bright accent colors so decoration does not hide the next action.
 
 ## Tone and feedback
 
@@ -154,6 +161,8 @@ No multiplayer, huge procedural city, interiors, stairs, elevated road routes, c
 - Can players turn a corner, borrow a car, and aim confetti without fighting the camera? Does looking right turn the view right, and does holding aim slow it comfortably?
 - Does the first capture click avoid firing? Do Esc, menus, full screen, and tab changes release the mouse safely, clear held input, and show how to resume looking?
 - Does the view stay outside buildings, and do markers plus minimap keep destinations easy to find?
+- Can a player recognize dense shops, quiet gardens, industrial yards and the riverfront from the street? Do wider pavements remain walkable past props, and do visible building gaps match their collision space?
+- Does shrinking characters preserve consistent standing, aiming, tumbling and recovery, without changing their size during a fall?
 - Do file-open play, full screen, camera recentering, and the WebGL failure overlay behave predictably?
 - Do falling bodies retain connected limbs and stay outside walls, vehicles, and the ground? Can both residents and the player get up in a safe position?
 - Do pause and recovery work during a tumble, and can a crowd of fallen residents stay playable without unbounded physics work?

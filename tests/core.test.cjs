@@ -2,12 +2,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Game, SIZE, ROAD_CENTERS } = require('../core.js');
+const { PLAYER_RADIUS, NPC_RADIUS } = require('../physics.js');
 const makeGame = () => new Game({ seed: 42 });
 const advance = (game, seconds, input = {}) => { for (let t = 0; t < seconds - 0.0001; t += 1 / 60) game.update(1 / 60, input); };
 
 test('town starts near a usable car and all contract targets are reachable', () => {
   const game = makeGame();
-  assert.equal(game.buildings.length, 24);
+  assert.equal(game.blocks.length, 25); assert.equal(game.buildings.length, 58);
   assert.equal(game.interact(), true);
   assert.equal(game.current.color, '#ffd15b');
   for (const type of ['delivery', 'dash', 'party']) {
@@ -84,12 +85,12 @@ test('vehicle acceleration, braking, and steering ignore camera heading', () => 
 
 test('building collisions do not leave a car clipping or stuck inside a building', () => {
   const game = makeGame(); game.interact(); game.graceTimer = 0;
-  const car = game.current; car.x = 180; car.y = 350; car.angle = 0;
+  const car = game.current, building = game.buildings[0]; car.x = building.x - 70; car.y = building.y + building.h / 2; car.angle = 0;
   advance(game, 2, { up: true });
   assert.ok(game._isFree(game.current.x, game.current.y, 17.9));
   assert.ok(Number.isFinite(game.current.x));
   assert.ok(car.health < game.maxHealth);
-  assert.ok(car.x < 240);
+  assert.ok(car.x < building.x);
 });
 
 test('fast exit is blocked and slow exit places player in free space', () => {
@@ -222,7 +223,7 @@ test('save data clamps malicious values and round-trips only persistent progress
 
 test('voluntary flop creates a jointed body and blocks walking, popping, and entering cars until get-up', () => {
   const idle = makeGame(), walking = makeGame();
-  for (const game of [idle, walking]) { game.player.x = 1080; assert.equal(game.flop(), true); }
+  for (const game of [idle, walking]) { game.player.x = 1080; game.player.y = 900; assert.equal(game.flop(), true); }
   const body = walking.physics.get('player');
   assert.equal(walking.physics, walking.ragdolls); assert.equal(Object.keys(body.joints).length, 15); assert.equal(body.phase, 'fall');
   assert.equal(walking.flop(), false); assert.equal(walking.action(), false); assert.equal(walking.interact(), false);
@@ -286,10 +287,10 @@ test('moving traffic can knock the player down but post-recovery grace prevents 
 test('parked vehicles are solid on foot and standing residents cannot be walked through', () => {
   const game = makeGame(), car = game.cars[0]; game.peds = [];
   game.player.x = car.x - 60; game.player.y = car.y; advance(game, 0.8, { right: true });
-  assert.equal(game._personVehicleContact(game.player, car), null); assert.ok(game.player.x <= car.x - 23.49);
-  const ped = { id: 'test-resident', x: 1080, y: 1080, angle: 0, homeX: 1080, homeY: 1080, pace: 0, stunned: 0, bubbleTimer: 0 };
-  game.peds = [ped]; game.player.x = 1040; game.player.y = 1080; advance(game, 0.4, { right: true });
-  assert.ok(Math.hypot(game.player.x - ped.x, game.player.y - ped.y) >= 16.99); assert.ok(game.player.x < ped.x);
+  assert.equal(game._personVehicleContact(game.player, car), null); assert.ok(game.player.x <= car.x - 13.5 - PLAYER_RADIUS + 0.01);
+  const ped = { id: 'test-resident', x: 1080, y: 900, angle: 0, homeX: 1080, homeY: 900, pace: 0, stunned: 0, bubbleTimer: 0 };
+  game.peds = [ped]; game.player.x = 1040; game.player.y = 900; advance(game, 0.4, { right: true });
+  assert.ok(Math.hypot(game.player.x - ped.x, game.player.y - ped.y) >= PLAYER_RADIUS + NPC_RADIUS - 0.01); assert.ok(game.player.x < ped.x);
 });
 
 test('vehicle OBB contacts detect front bumpers while leaving genuinely clear side gaps alone', () => {
@@ -315,6 +316,8 @@ test('a bumper collision does not award the close-shave bonus, while a clear fas
 
 test('rotated vehicle footprints resolve building corners and boosted movement cannot tunnel through walls or people', () => {
   const game = makeGame(); game.cars = []; game.police = []; game.peds = [];
+  // Keep this collision fixture independent from the changing neighbourhood map.
+  game.buildings = [{ x: 240, y: 240, w: 240, h: 240, height: 6 }]; game.staticObjects = [];
   const car = game._addCar(225, 225, Math.PI / 4, 'van', '#ffd15b');
   assert.equal(game._vehicleFree(car), false); game._resolveVehicle(car); assert.ok(game._vehicleFree(car));
   Object.assign(car, { x: 180, y: 350, angle: 0 }); game._moveVehicle(car, 200, 0, 900, 0);

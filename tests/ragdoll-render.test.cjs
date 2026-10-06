@@ -8,7 +8,7 @@ const vm = require('node:vm');
 const core = require('../core.js');
 const { RagdollWorld } = require('../physics.js');
 
-const context = vm.createContext({ MayhemCore: core, console, AbortController });
+const context = vm.createContext({ MayhemCore: core, MayhemPhysics: require('../physics.js'), console, AbortController });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../vendor/three.min.js'), 'utf8'), context);
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../scene3d.js'), 'utf8'), context);
 const { THREE: T, MayhemScene: Scene3D } = context;
@@ -47,8 +47,8 @@ function matchesPoint(actual, joint, label) {
 
 function addCamera(scene) {
   const cameraTown = Object.create(Scene3D.prototype);
-  Object.assign(cameraTown, { T, game: scene.game, _buildingVolumes: [], _propVolumes: [] });
-  for (const name of ['_staticBox', '_static', '_material', '_sign', '_park', '_services', '_lamp', '_tree']) cameraTown[name] = () => {};
+  Object.assign(cameraTown, { T, game: scene.game, _geometries: [], _buildingVolumes: [], _propVolumes: [] });
+  for (const name of ['_staticBox', '_static', '_material', '_sign', '_park', '_services', '_lamp', '_tree', '_landscape']) cameraTown[name] = () => {};
   cameraTown._town();
   Object.assign(scene, {
     camera: new T.PerspectiveCamera(57, 1280 / 720, 0.06, 175),

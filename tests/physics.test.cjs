@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { performance } = require('node:perf_hooks');
-const { RagdollWorld, BODYPARTS, JOINT_NAMES, STEP, FLOOR } = require('../physics.js');
+const { RagdollWorld, BODYPARTS, JOINT_NAMES, STEP, FLOOR, CHARACTER_SCALE, PERSON_HEIGHT, MUZZLE_HEIGHT, PLAYER_RADIUS, NPC_RADIUS } = require('../physics.js');
 
 const entity = (id = 'person', x = 1000, y = 1000, angle = 0) => ({ id, x, y, angle });
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
@@ -49,15 +49,15 @@ test('constraints keep connected limbs bounded during tumble and floor bounce', 
     BODYPARTS.forEach((part, k) => { maximumError = Math.max(maximumError, Math.abs(distance(body.joints[part.from], body.joints[part.to]) - lengths[k])); });
     for (const joint of Object.values(body.joints)) assert.ok(joint.y >= FLOOR + joint.radius - 1e-7, 'joint clears floor');
   }
-  assert.ok(maximumError < 0.11, `maximum limb stretch ${maximumError}`);
+  assert.ok(maximumError < 0.11 * CHARACTER_SCALE, `maximum limb stretch ${maximumError}`);
   const heights = Object.values(body.joints).map(j => j.y);
-  assert.ok(Math.max(...heights) < 0.9, 'person tumbles down rather than freezing upright');
+  assert.ok(Math.max(...heights) < 0.9 * CHARACTER_SCALE, 'person tumbles down rather than freezing upright');
 });
 
 test('building walls and roofs exclude joint spheres and bone interior samples', () => {
   const world = new RagdollWorld(), person = entity('wall', 995, 1050);
   const building = { x: 1000, y: 1000, w: 100, h: 100, height: 5.3 };
-  const box = { x: 52.5, z: 52.5, hx: 2.5, hz: 2.5, top: 5.6 };
+  const box = { x: 52.5, z: 52.5, hx: 2.5, hz: 2.5, top: building.height };
   world.trigger(person, { x: 9, y: 3, z: 0 });
   const body = world.get(person.id);
   for (let i = 0; i < 300; i++) {
@@ -66,8 +66,26 @@ test('building walls and roofs exclude joint spheres and bone interior samples',
     for (const part of BODYPARTS) for (const t of [1 / 3, 2 / 3]) {
       const a = body.joints[part.from], b = body.joints[part.to];
       const p = { x: a.x * (1 - t) + b.x * t, y: a.y * (1 - t) + b.y * t, z: a.z * (1 - t) + b.z * t };
-      assert.ok(clearance(p, box) >= part.radius - 0.035, 'bone interior clears wall');
+      assert.ok(clearance(p, box) >= part.radius - 0.035 * CHARACTER_SCALE, 'bone interior clears wall');
     }
+  }
+});
+
+test('ragdoll roofs and Cannon landing surfaces share the complete building height', () => {
+  const { VehicleWorld } = require('../vehicle-physics.js');
+  const { CAR_TYPES } = require('../core.js');
+  for (const height of [3.4, 13.4]) {
+    const building = { x: 1000, y: 1000, w: 100, h: 100, height };
+    const town = { buildings: [building], staticObjects: [], cars: [], police: [] };
+    const vehicles = new VehicleWorld(town, CAR_TYPES), world = new RagdollWorld();
+    const box = world._colliders(town)[0], roof = vehicles.support(1050, 1050, height + 2);
+    assert.ok(Math.abs(roof - height) < 1e-10, 'Cannon lands on the full roof-inclusive height');
+    assert.ok(Math.abs(box.y + box.hy - roof) < 1e-10, 'ragdoll roof has no legacy extra thirty centimetres');
+    world.trigger(entity('roof-' + height, 1050, 1050), {}, { height: height + 1.6 });
+    const body = world.get('roof-' + height);
+    advance(world, 1.8, town);
+    const lowest = Math.min(...Object.values(body.joints).map(joint => joint.y - joint.radius));
+    assert.ok(lowest >= roof - 0.002 && lowest < roof + 0.02, 'a fallen body settles on the same surface as the standing controller');
   }
 });
 
@@ -102,8 +120,8 @@ test('jump-height ragdolls preserve their feet elevation and upward momentum', (
   const world = new RagdollWorld(), person = { ...entity('jump'), elevation: 2.4, verticalVelocity: 5 };
   world.trigger(person);
   const body = world.get(person.id), initial = body.joints.pelvis.y;
-  assert.equal(initial, 3.12);
-  assert.equal(body.joints.leftFoot.y, 2.565);
+  assert.equal(initial, person.elevation + 0.72 * CHARACTER_SCALE);
+  assert.equal(body.joints.leftFoot.y, person.elevation + 0.165 * CHARACTER_SCALE);
   advance(world, 0.1);
   assert.ok(body.joints.pelvis.y > initial + 0.25, 'airborne flop inherits jump velocity');
   advance(world, 3.7);
@@ -131,7 +149,7 @@ test('a fully rolled, elevated vehicle excludes joints and limb interiors in its
     for (const part of BODYPARTS) for (const t of [1 / 3, 2 / 3]) {
       const a = body.joints[part.from], b = body.joints[part.to];
       const sample = { x: a.x * (1 - t) + b.x * t, y: a.y * (1 - t) + b.y * t, z: a.z * (1 - t) + b.z * t };
-      assert.ok(solidClearance(sample, box) >= part.radius - 0.035, 'bone interior clears tipped vehicle');
+      assert.ok(solidClearance(sample, box) >= part.radius - 0.035 * CHARACTER_SCALE, 'bone interior clears tipped vehicle');
     }
   }
   assert.ok(closest < 0.01, 'falling person actually meets the tipped car');
@@ -187,7 +205,7 @@ test('compound fixed props exclude joint spheres and limb interiors', () => {
       for (const part of BODYPARTS) for (const t of [1 / 3, 2 / 3]) {
         const a = body.joints[part.from], b = body.joints[part.to];
         const sample = { x: a.x * (1 - t) + b.x * t, y: a.y * (1 - t) + b.y * t, z: a.z * (1 - t) + b.z * t };
-        assert.ok(solidClearance(sample, box) >= part.radius - 0.04, 'limb interior clears fixed bench');
+        assert.ok(solidClearance(sample, box) >= part.radius - 0.04 * CHARACTER_SCALE, 'limb interior clears fixed bench');
       }
     }
   }
@@ -205,7 +223,7 @@ test('get-up chooses ground clearance beside a tipped vehicle', () => {
   assert.equal(world.bodies.size, 0);
   assert.equal(person.elevation, 0);
   for (const joint of Object.values(body.joints)) assert.ok(solidClearance(joint, box) >= joint.radius - 0.002, 'recovered pose clears tipped body');
-  assert.ok(body.joints.pelvis.y < 1, 'recovered feet are on the ground');
+  assert.ok(body.joints.pelvis.y < CHARACTER_SCALE, 'recovered feet are on the ground');
 });
 
 test('round fixed posts collide as cylinders without filling their bounding-box corners', () => {
@@ -246,8 +264,8 @@ test('physical recovery returns near landing location and retires body once', ()
   assert.equal(completed.length, 1);
   assert.equal(completed[0], body);
   assert.equal(world.get(person.id), undefined);
-  assert.ok(body.joints.pelvis.y > 0.60, 'get-up motor lifts pelvis');
-  assert.ok(body.joints.head.y > 1.30, 'get-up motor returns upright');
+  assert.ok(body.joints.pelvis.y > 0.60 * CHARACTER_SCALE, 'get-up motor lifts pelvis');
+  assert.ok(body.joints.head.y > 1.30 * CHARACTER_SCALE, 'get-up motor returns upright');
   assert.ok(Math.hypot(body.joints.pelvis.x - landed.x, body.joints.pelvis.z - landed.z) < 0.6, 'recovery stays at landing');
   assert.deepEqual(world.step(1 / 60), []);
 });
@@ -259,7 +277,7 @@ test('a body that lands on a parked roof gets up beside the car', () => {
   advance(world, 3.8, { cars: [car] });
   assert.equal(world.bodies.size, 0);
   assert.ok(Math.abs(body.joints.pelvis.x - 50) > 1.15 || Math.abs(body.joints.pelvis.z - 50) > 0.675, 'ground position leaves the vehicle footprint');
-  assert.ok(body.joints.pelvis.y < 1, 'body returns to ground height before retiring');
+  assert.ok(body.joints.pelvis.y < CHARACTER_SCALE, 'body returns to ground height before retiring');
 });
 
 test('recovery leaves a high car roof before returning the owner to ground height', () => {
@@ -274,8 +292,8 @@ test('recovery leaves a high car roof before returning the owner to ground heigh
   assert.equal(finished.length, 1);
   assert.equal(person.elevation, 0);
   assert.ok(Math.abs(body.joints.pelvis.x - box.x) > box.hx || Math.abs(body.joints.pelvis.z - box.z) > box.hz, 'get-up chooses beside the high roof instead of underneath it');
-  assert.ok(body.joints.pelvis.y < 0.95, 'the get-up motor reaches the ground before retiring');
-  assert.ok(body.joints.leftFoot.y < 0.35 && body.joints.rightFoot.y < 0.35, 'feet finish at standing ground height');
+  assert.ok(body.joints.pelvis.y < 0.95 * CHARACTER_SCALE, 'the get-up motor reaches the ground before retiring');
+  assert.ok(body.joints.leftFoot.y < 0.35 * CHARACTER_SCALE && body.joints.rightFoot.y < 0.35 * CHARACTER_SCALE, 'feet finish at standing ground height');
   for (const joint of Object.values(body.joints)) assert.ok(solidClearance(joint, box) >= joint.radius - 0.002, 'final standing pose clears the elevated vehicle');
 });
 
@@ -323,4 +341,61 @@ test('twenty-four simultaneous bodies remain finite with town broadphase', t => 
   assert.equal(world.bodies.size, 24);
   for (const body of world.bodies.values()) allFinite(body);
   t.diagnostic(`24 bodies / 60 solver ticks: ${elapsed.toFixed(0)} ms on this machine (diagnostic, no timing assertion)`);
+});
+
+test('shared character dimensions make standing and articulated people fourteen percent smaller', () => {
+  assert.equal(CHARACTER_SCALE, 0.86);
+  assert.equal(PERSON_HEIGHT, 1.7 * CHARACTER_SCALE);
+  assert.equal(MUZZLE_HEIGHT, 1.15 * CHARACTER_SCALE);
+  assert.equal(PLAYER_RADIUS, 10 * CHARACTER_SCALE);
+  assert.equal(NPC_RADIUS, 7 * CHARACTER_SCALE);
+  const world = new RagdollWorld(), person = entity('player');
+  world.trigger(person);
+  const body = world.get(person.id), j = body.joints;
+  assert.equal(j.pelvis.y, 0.72 * CHARACTER_SCALE);
+  assert.equal(j.head.y, 1.48 * CHARACTER_SCALE);
+  assert.ok(Math.abs(j.rightShoulder.z - j.leftShoulder.z - 0.56 * CHARACTER_SCALE) < 1e-12);
+  assert.equal(j.head.radius, 0.23 * CHARACTER_SCALE);
+  assert.equal(j.leftFoot.radius, 0.115 * CHARACTER_SCALE);
+  assert.equal(j.leftHand.radius, 0.09 * CHARACTER_SCALE);
+  assert.equal(BODYPARTS.find(part => part.kind === 'torso').radius, 0.19 * CHARACTER_SCALE);
+  assert.ok(Math.abs(j.head.y + j.head.radius - PERSON_HEIGHT) < 0.02, 'head volume matches the shared standing height');
+  assert.equal(j.pelvis.invMass, 0.5);
+  assert.equal(j.leftFoot.invMass, 1.4);
+  assert.equal(body._bends.find(bend => bend.a === 'pelvis').min, 0.63 * CHARACTER_SCALE);
+});
+
+test('character scaling leaves vehicle dimensions and supplied impact velocity unchanged', () => {
+  const world = new RagdollWorld(), person = entity();
+  world.trigger(person, { x: 4, y: 5 });
+  const head = world.get(person.id).joints.head;
+  assert.ok(Math.abs((head.x - head.px) / STEP - 4 * (0.72 + 1.48 * 0.35)) < 1e-10, 'differential hit weighting keeps its original feel');
+  assert.ok(Math.abs((head.y - head.py) / STEP - 5) < 1e-10, 'jump and hit velocities stay in world metres per second');
+  const box = world._colliders({ cars: [{ id: 'car', kind: 'compact', x: 1000, y: 1000, colliderHeight: 1.3, orientation: { x: 0, y: 0, z: 0, w: 1 } }] })[0];
+  assert.equal(box.hx, 46 / 40);
+  assert.equal(box.hy, 1.3 / 2);
+  assert.equal(box.hz, 27 / 40);
+});
+
+test('smaller people recover beneath a low overhead vehicle without being displaced', () => {
+  const car = { id: 'canopy', kind: 'compact', x: 1000, y: 1000, elevation: PERSON_HEIGHT + FLOOR + 0.03, colliderHeight: 1.3, orientation: { x: 0, y: 0, z: 0, w: 1 } };
+  const run = cars => {
+    const world = new RagdollWorld(), person = entity('player');
+    world.trigger(person);
+    const body = world.get(person.id);
+    advance(world, 3.8, { cars });
+    return JOINT_NAMES.map(name => body.joints[name]);
+  };
+  assert.deepEqual(run([car]), run([]), 'get-up uses the smaller standing height instead of the old head clearance');
+});
+
+test('player roof recovery leaves space for the shared standing collision radius', () => {
+  const world = new RagdollWorld(), person = entity('player');
+  const car = { id: 'roof', kind: 'compact', x: 1000, y: 1000, colliderHeight: 1.3, orientation: { x: 0, y: 0, z: 0, w: 1 } };
+  world.trigger(person, {}, { height: 2 });
+  const body = world.get(person.id);
+  advance(world, 3.8, { cars: [car] });
+  const p = body.joints.pelvis, dx = Math.max(0, Math.abs(p.x - 50) - 46 / 40), dz = Math.max(0, Math.abs(p.z - 50) - 27 / 40);
+  assert.ok(Math.hypot(dx, dz) >= PLAYER_RADIUS / 20 - 0.025, 'retired player clears the standing capsule as well as the small joint spheres');
+  assert.equal(person.elevation, 0);
 });

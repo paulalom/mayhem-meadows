@@ -45,7 +45,7 @@
 
           <div id="game-shell" class="game-shell">
             <canvas id="game-canvas" tabindex="0" aria-label="Mayhem Meadows third-person 3D game. Move with WASD or arrow keys. Click the town to capture the mouse, then move it to look around. Hold right mouse to aim and left-click to use your toy on foot; C recenters the camera. E enters or leaves a nearby car. Space jumps on foot or applies the handbrake while driving. Hold Tab to choose a toy. I opens pockets; G opens your garage collection. Shift sprints or boosts. H honks the horn. R recovers and rights a flipped car. P pauses; Escape releases the mouse and pauses.">Your browser needs WebGL 2 support to play Mayhem Meadows in 3D.</canvas>
-            <div class="viewport-topline" aria-hidden="true"><span class="district-label"><span class="district-dot"></span>MEADOWS MUNICIPAL AREA</span><span class="viewport-tag">THIRD PERSON / 3D</span></div>
+            <div class="viewport-topline" aria-hidden="true"><span class="district-label"><span class="district-dot"></span><span id="district-name">MARKET MILE</span></span><span class="viewport-tag">THIRD PERSON / 3D</span></div>
             <div id="target-compass" class="target-compass" aria-label="Direction and distance to your next objective" hidden><span id="target-arrow" class="target-arrow" aria-hidden="true">↑</span><span class="target-copy"><span class="stat-label">Next stop</span><strong id="target-distance">0 m</strong></span></div>
             <div class="objective-panel">
               <span class="eyebrow objective-kicker">Current business</span>
@@ -59,7 +59,7 @@
             <div id="aim-reticle" class="aim-reticle" aria-hidden="true" hidden></div>
             <div id="speed-panel" class="speed-panel" aria-label="Current movement speed"><strong id="speed-value">0</strong><span id="speed-caption">ON FOOT</span></div>
             <div class="equipped-panel"><span class="stat-label">Equipped toy <kbd>TAB</kbd></span><strong id="equipped-toy">Confetti popper · unlimited</strong></div>
-            <div class="minimap-panel"><span class="minimap-title">Your little trouble map <span aria-hidden="true">N ↑</span></span><canvas id="minimap-canvas" width="140" height="140" aria-label="Overhead town minimap showing your position, services, patrols, and mission targets"></canvas></div>
+            <div class="minimap-panel"><span class="minimap-title">Your little trouble map <span aria-hidden="true">N ↑</span></span><canvas id="minimap-canvas" width="140" height="140" aria-label="Overhead town minimap showing districts, buildings, your position, services, patrols, and mission targets"></canvas></div>
             <div class="ride-strip"><span class="ride-icon" aria-hidden="true">↗</span><div class="ride-copy"><span class="stat-label">Current ride</span><strong id="ride-name">Your own two feet</strong></div><div class="ride-condition"><div class="ride-condition-label"><span class="stat-label">Ride condition</span><span id="ride-condition">100%</span></div><div id="ride-meter" class="meter ride-meter" role="progressbar" aria-label="Ride condition" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100"><span id="ride-bar"></span></div></div></div>
 
             <div id="start-screen" class="screen-overlay start-screen">

@@ -5,15 +5,19 @@
   // limits are solved against real town/vehicle volumes at a fixed 120 Hz.
   // Coordinates are metres: X/Z are the game's ground plane and Y points up.
   const STEP = 1 / 120, FLOOR = 0.05, UNIT = 20, MAX_SPEED = 22;
+  // One character scale is shared by standing meshes, collision capsules,
+  // aiming and articulated bodies. Metres for heights; map units for radii.
+  const CHARACTER_SCALE = 0.86, PERSON_HEIGHT = 1.7 * CHARACTER_SCALE, MUZZLE_HEIGHT = 1.15 * CHARACTER_SCALE;
+  const PLAYER_RADIUS = 10 * CHARACTER_SCALE, NPC_RADIUS = 7 * CHARACTER_SCALE;
   const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
   const finite = (n, fallback = 0) => Number.isFinite(n) ? n : fallback;
-  const ANATOMY = {
+  const ANATOMY = Object.fromEntries(Object.entries({
     pelvis: [0, 0.72, 0, 0.18, 0.5], chest: [0, 1.12, 0, 0.20, 0.45], head: [0.015, 1.48, 0, 0.23, 0.8],
     leftShoulder: [0, 1.17, -0.28, 0.095, 1], leftElbow: [0.015, 0.93, -0.34, 0.085, 1.4], leftHand: [0.04, 0.73, -0.36, 0.09, 1.6],
     rightShoulder: [0, 1.17, 0.28, 0.095, 1], rightElbow: [0.015, 0.93, 0.34, 0.085, 1.4], rightHand: [0.04, 0.73, 0.36, 0.09, 1.6],
     leftHip: [0, 0.66, -0.13, 0.10, 0.7], leftKnee: [0.025, 0.38, -0.13, 0.10, 1.2], leftFoot: [0.075, 0.165, -0.13, 0.115, 1.4],
     rightHip: [0, 0.66, 0.13, 0.10, 0.7], rightKnee: [0.025, 0.38, 0.13, 0.10, 1.2], rightFoot: [0.075, 0.165, 0.13, 0.115, 1.4]
-  };
+  }).map(([name, values]) => [name, values.map((value, i) => i < 4 ? value * CHARACTER_SCALE : value)]));
   const JOINT_NAMES = Object.keys(ANATOMY);
   const BODYPARTS = [
     ['pelvis', 'chest', 0.19, 'torso'], ['chest', 'head', 0.12, 'neck'],
@@ -23,9 +27,9 @@
     ['pelvis', 'leftHip', 0.12, 'hip'], ['pelvis', 'rightHip', 0.12, 'hip'],
     ['leftHip', 'leftKnee', 0.10, 'thigh'], ['leftKnee', 'leftFoot', 0.09, 'shin'],
     ['rightHip', 'rightKnee', 0.10, 'thigh'], ['rightKnee', 'rightFoot', 0.09, 'shin']
-  ].map(([from, to, radius, kind]) => Object.freeze({ from, to, radius, kind }));
+  ].map(([from, to, radius, kind]) => Object.freeze({ from, to, radius: radius * CHARACTER_SCALE, kind }));
   const BRACES = [['leftShoulder', 'rightShoulder'], ['leftHip', 'rightHip'], ['leftShoulder', 'leftHip'], ['rightShoulder', 'rightHip'], ['leftShoulder', 'rightHip'], ['rightShoulder', 'leftHip'], ['head', 'leftShoulder'], ['head', 'rightShoulder']];
-  const BENDS = [['leftShoulder', 'leftHand', 0.18], ['rightShoulder', 'rightHand', 0.18], ['leftHip', 'leftFoot', 0.22], ['rightHip', 'rightFoot', 0.22], ['pelvis', 'head', 0.63]];
+  const BENDS = [['leftShoulder', 'leftHand', 0.18], ['rightShoulder', 'rightHand', 0.18], ['leftHip', 'leftFoot', 0.22], ['rightHip', 'rightFoot', 0.22], ['pelvis', 'head', 0.63]].map(([a, b, min]) => [a, b, min * CHARACTER_SCALE]);
   const CAR_DIMENSIONS = { compact: [46, 27, 1.40], sports: [49, 28, 1.35], van: [55, 32, 1.64] };
   const vectorDistance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
   const restDistance = (a, b) => Math.hypot(ANATOMY[a][0] - ANATOMY[b][0], ANATOMY[a][1] - ANATOMY[b][1], ANATOMY[a][2] - ANATOMY[b][2]);
@@ -122,7 +126,7 @@
     // the standing person. A flying car overhead must not push them sideways.
     // A person who actually landed on an elevated roof must leave its edge
     // before getting up on the ground. People beneath it keep their clearance.
-    if ((box.y - box.extentY >= 1.75 && landedHeight < box.y) || box.y + box.extentY <= FLOOR) return null;
+    if ((box.y - box.extentY >= PERSON_HEIGHT + FLOOR && landedHeight < box.y) || box.y + box.extentY <= FLOOR) return null;
     const m = box.basis, forward = Math.hypot(m[0], m[6]);
     if (box.shape === 'cylinder' && Math.abs(m[4]) > 0.9999) {
       const dx = point.x - box.x, dz = point.z - box.z, length = Math.hypot(dx, dz), depth = radius + Math.max(box.hx, box.hz) - length;
@@ -233,7 +237,7 @@
         joints[name] = { x: p.x, y: p.y, z: p.z, px: p.x, py: p.y, pz: p.z, radius: anatomy[3], invMass: anatomy[4] };
       }
       const constraints = BODYPARTS.concat(BRACES.map(([from, to]) => ({ from, to }))).map(part => ({ a: part.from, b: part.to, min: restDistance(part.from, part.to), max: restDistance(part.from, part.to) }));
-      const bends = BENDS.map(([a, b, min]) => ({ a, b, min, max: restDistance(a, b) + 0.02 }));
+      const bends = BENDS.map(([a, b, min]) => ({ a, b, min, max: restDistance(a, b) + 0.02 * CHARACTER_SCALE }));
       const body = { id: entity.id, owner: entity, angle, age: 0, phase: 'fall', recovery: 0, joints, standingPose: pose, lastImpact: 0, _points: JOINT_NAMES.map(name => joints[name]), _constraints: constraints, _bends: bends, _lastSafeX: entity.x / UNIT, _lastSafeZ: entity.y / UNIT };
       body._excluded = new Set(constraints.concat(bends).map(c => JOINT_NAMES.indexOf(c.a) + ':' + JOINT_NAMES.indexOf(c.b)));
       this.bodies.set(entity.id, body);
@@ -249,9 +253,12 @@
         const j = body.joints[name], anatomy = ANATOMY[name];
         // Differential impulse supplies actual angular momentum: a shoulder
         // catches more of the impact than a foot, and the two arms differ.
-        const twist = anatomy[2] * 0.45, leverage = 0.72 + anatomy[1] * 0.35;
+        // Relative impact weighting keeps its feel as the body shrinks. The
+        // geometric lever arms and collision shapes use the smaller anatomy.
+        const side = anatomy[2] / CHARACTER_SCALE, height = anatomy[1] / CHARACTER_SCALE;
+        const twist = side * 0.45, leverage = 0.72 + height * 0.35;
         const vx = ix * leverage + iz * twist, vz = iz * leverage - ix * twist;
-        const vy = iy + (name.includes('Hand') ? 0.25 : 0) + horizontal * anatomy[2] * 0.12;
+        const vy = iy + (name.includes('Hand') ? 0.25 : 0) + horizontal * side * 0.12;
         j.px -= vx * STEP; j.py -= vy * STEP; j.pz -= vz * STEP; limitVelocity(j);
       }
     }
@@ -259,7 +266,9 @@
     _colliders(environment) {
       const boxes = [], buildings = environment.buildings || [], seen = new Set();
       buildings.forEach((building, i) => {
-        const height = clamp(finite(building.height, [5.3, 7, 4.5, 6.2, 8.2][i % 5]) + 0.3, 0.4, 40);
+        // Building height includes its roof, matching the standing and car
+        // worlds. Roof trim and flagpoles remain cosmetic details.
+        const height = clamp(finite(building.height, [5.3, 7, 4.5, 6.2, 8.2][i % 5]), 0.4, 40);
         if (![building.x, building.y, building.w, building.h].every(Number.isFinite)) return;
         boxes.push(prepareBox({ x: (building.x + building.w / 2) / UNIT, z: (building.y + building.h / 2) / UNIT, y: height / 2, hx: building.w / UNIT / 2, hy: height / 2, hz: building.h / UNIT / 2, angle: 0, dynamic: false }));
       });
@@ -306,9 +315,11 @@
       const pelvis = body.joints.pelvis;
       // Choose a standing centre near the landed pelvis, with shoulder-width
       // clearance. This also lets a character stand beside a stopped car.
-      const centre = { x: clamp(pelvis.x, 0.45, size - 0.45), y: 0.72, z: clamp(pelvis.z, 0.45, size - 0.45) };
+      const radius = Math.max(0.43 * CHARACTER_SCALE, (body.owner.id === 'player' ? PLAYER_RADIUS : NPC_RADIUS) / UNIT);
+      const margin = radius + 0.02 * CHARACTER_SCALE;
+      const centre = { x: clamp(pelvis.x, margin, size - margin), y: ANATOMY.pelvis[1], z: clamp(pelvis.z, margin, size - margin) };
       for (let pass = 0; pass < 3; pass++) for (const box of boxes) {
-        const hit = horizontalBox(centre, 0.43, box, pelvis.y);
+        const hit = horizontalBox(centre, radius, box, pelvis.y);
         if (!hit) continue;
         centre.x += hit.x * hit.depth; centre.z += hit.z * hit.depth;
       }
@@ -337,7 +348,7 @@
     _bodyContacts(bodies) {
       for (let i = 0; i < bodies.length; i++) for (let k = i + 1; k < bodies.length; k++) {
         const a = bodies[i], b = bodies[k];
-        if (vectorDistance(a.joints.pelvis, b.joints.pelvis) > 2.1) continue;
+        if (vectorDistance(a.joints.pelvis, b.joints.pelvis) > 2.1 * CHARACTER_SCALE) continue;
         for (const ja of a._points) for (const jb of b._points) {
           const radius = ja.radius + jb.radius;
           if (vectorDistance(ja, jb) < radius) distanceConstraint(ja, jb, radius, Infinity, 0.6);
@@ -398,7 +409,7 @@
     }
   }
 
-  const api = { RagdollWorld, BODYPARTS, JOINT_NAMES, STEP, FLOOR };
+  const api = { RagdollWorld, BODYPARTS, JOINT_NAMES, STEP, FLOOR, CHARACTER_SCALE, PERSON_HEIGHT, MUZZLE_HEIGHT, PLAYER_RADIUS, NPC_RADIUS };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.MayhemPhysics = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

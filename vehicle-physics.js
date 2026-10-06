@@ -1,6 +1,7 @@
 (function (root) {
   'use strict';
   const C = root.CANNON || (typeof require === 'function' ? require('./vendor/cannon.cjs') : null);
+  const Physics = root.MayhemPhysics || (typeof require === 'function' ? require('./physics.js') : null);
   const SCALE = 20;
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const height = entity => entity.kind === 'van' ? 1.7 : 1.3;
@@ -12,7 +13,7 @@
     const center = new C.Vec3(vehicle.x / SCALE, finite(vehicle.elevation) + h / 2, vehicle.y / SCALE);
     const half = [type.length / 40, h / 2, type.width / 40];
     let best = null;
-    for (const vertical of [r, 0.85, 1.7 - r]) {
+    for (const vertical of [r, Physics.PERSON_HEIGHT / 2, Physics.PERSON_HEIGHT - r]) {
       const world = new C.Vec3(person.x / SCALE, finite(person.elevation) + vertical, person.y / SCALE);
       const local = inverse.vmult(world.vsub(center));
       const values = [local.x, local.y, local.z], nearest = values.map((v, i) => clamp(v, -half[i], half[i]));
@@ -229,7 +230,8 @@
 
     ceiling(x, z, fromHeight, toHeight) {
       let ceiling = Infinity;
-      for (const [dx,dz] of [[0,0],[0.4,0],[-0.4,0],[0,0.4],[0,-0.4]]) {
+      const radius = Physics.PLAYER_RADIUS / SCALE * 0.8;
+      for (const [dx,dz] of [[0,0],[radius,0],[-radius,0],[0,radius],[0,-radius]]) {
         const result = new C.RaycastResult();
         if (this.world.raycastClosest(new C.Vec3(x / SCALE + dx, fromHeight, z / SCALE + dz), new C.Vec3(x / SCALE + dx, toHeight, z / SCALE + dz), { skipBackfaces: false }, result)) ceiling = Math.min(ceiling, result.hitPointWorld.y);
       }

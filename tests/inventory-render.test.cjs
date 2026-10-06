@@ -7,7 +7,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const core = require('../core.js');
 
-const context = vm.createContext({ MayhemCore: core, console, AbortController });
+const context = vm.createContext({ MayhemCore: core, MayhemPhysics: require('../physics.js'), console, AbortController });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../vendor/three.min.js'), 'utf8'), context);
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../scene3d.js'), 'utf8'), context);
 const { THREE: T, MayhemScene: Scene3D } = context;
@@ -130,6 +130,57 @@ test('solid street props are rendered once from the shared compound shapes and p
     assert.ok(Math.abs(size.y - part.half[1] * 2) < 0.00001, 'visual collider height uses the map shape');
     assert.ok(Math.abs(size.x - part.half[0] * 2) < 0.025, 'visible cylinder/box uses the physical footprint');
   }
+});
+
+test('people use the shared smaller scale while vehicles keep their original dimensions', () => {
+  const scene = makeScene(), physics = require('../physics.js');
+  assert.ok(Math.abs(scene._player.group.scale.x - physics.CHARACTER_SCALE) < 0.000001);
+  const personBounds = new T.Box3().setFromObject(scene._player.group), personSize = personBounds.getSize(new T.Vector3());
+  assert.ok(Math.abs(personSize.y - physics.PERSON_HEIGHT) < 0.04, 'visible stature matches physical stature plus hat: ' + personSize.y);
+  scene._cars(0);
+  const model = scene._vehicles.get(scene.game.cars[0].id);
+  assert.equal(model.group.scale.x, 1);
+  assert.equal(model.visual.scale.x, 1);
+});
+
+test('district facades follow real footprints and cottage roofs face outward', () => {
+  const scene = makeScene();
+  scene._staticParts = new Map(); scene._buildingVolumes = []; scene._sign = () => {};
+  const styles = new Set();
+  scene.game.buildings.forEach((building, i) => { styles.add(building.style); scene._building(building, i); });
+  assert.equal(scene._buildingVolumes.length, scene.game.buildings.length);
+  assert.ok(styles.has('cottage') && styles.has('warehouse') && styles.has('shop') && styles.has('cafe'));
+  scene.game.buildings.forEach((building, i) => {
+    const volume = scene._buildingVolumes[i];
+    assert.ok(Math.abs(volume.minX - building.x / 20 + 0.12) < 0.000001);
+    assert.ok(Math.abs(volume.maxX - (building.x + building.w) / 20 - 0.12) < 0.000001);
+    assert.ok(Math.abs(volume.maxY - building.height - 0.45) < 0.000001);
+  });
+  const normals = scene._roofGeometry().attributes.normal;
+  for (let vertex = 0; vertex < 12; vertex++) assert.ok(normals.getY(vertex) > 0, 'roof slopes are visible from above');
+  assert.ok(normals.getZ(12) < 0 && normals.getZ(15) > 0, 'gable faces point outward');
+});
+
+test('the landscape contains real rolling terrain and a winding river outside active town roads', () => {
+  const scene = makeScene();
+  scene._staticParts = new Map(); scene._worldInfo = { districts: {}, landscape: {} };
+  scene._landscape(core.SIZE / 20);
+  const terrain = scene._landscapeGroup.getObjectByName('Rolling terrain');
+  assert.ok(terrain?.isMesh && terrain.geometry.index.count > 10000);
+  const vertices = terrain.geometry.attributes.position;
+  let low=Infinity, high=-Infinity;
+  for(let i=0;i<vertices.count;i++){ low=Math.min(low,vertices.getY(i));high=Math.max(high,vertices.getY(i)); }
+  assert.ok(high-low > 5, 'the backdrop has true height variation');
+  const water = scene._riverGroup.getObjectByName('River water');
+  assert.ok(water?.isMesh && water.geometry.attributes.position.count > 200);
+  const river = water.geometry.attributes.position;
+  for(let i=0;i<river.count;i++) assert.ok(river.getX(i)<0 || river.getX(i)>108 || river.getZ(i)<0 || river.getZ(i)>108, 'water stays beyond the playable city');
+  assert.ok(scene.worldInfo.landscape.treeCount > 30);
+  scene.reducedMotion=true;scene._landscapeStep(0);
+  const calm=Array.from(scene._riverFlow.instanceMatrix.array);scene._landscapeStep(20);
+  assert.deepEqual(Array.from(scene._riverFlow.instanceMatrix.array),calm,'calm motion holds water glints still');
+  scene.reducedMotion=false;scene._landscapeStep(20);
+  assert.notDeepEqual(Array.from(scene._riverFlow.instanceMatrix.array),calm,'full motion gently moves glints downstream');
 });
 
 test('confetti renders at the vertical shot impact while ordinary confetti keeps its ground lift', () => {

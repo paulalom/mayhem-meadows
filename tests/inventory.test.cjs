@@ -2,6 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Game, GADGETS, POCKET_ITEMS, PAINT_COLORS } = require('../core.js');
+const { MUZZLE_HEIGHT } = require('../physics.js');
 const makeGame = () => new Game({ seed: 42 });
 const shop = game => { game.player.x = 900; game.player.y = 900; game.money = 2000; };
 const advance = (game, seconds) => { for (let elapsed = 0; elapsed < seconds - 0.000001; elapsed += 1 / 60) game.update(1 / 60); };
@@ -85,7 +86,7 @@ test('Party Cannon travels before bursting, expends ammo, tumbles a crowd, and s
   Object.assign(game.peds[1], { x: 1290, y: 1120, pace: 0 });
   assert.equal(game.action(0), true); assert.equal(game.inventory.ammo.cannon, 5); assert.equal(game.projectiles.length, 1);
   assert.equal(game.physics.bodies.size, 0); advance(game, 0.1);
-  assert.ok(game.projectiles[0].x > 1105); assert.ok(game.projectiles[0].height > 1.15);
+  assert.ok(game.projectiles[0].x > 1105); assert.ok(game.projectiles[0].height > MUZZLE_HEIGHT);
   advance(game, 0.35); assert.equal(game.projectiles.length, 0); assert.equal(game.physics.bodies.size, 2);
   assert.equal(game.heat, 1);
   game._actionCooldown = 0; game.inventory.ammo.cannon = 0;
@@ -171,7 +172,7 @@ test('aimed cannon passes above short obstacles and bounds extreme or invalid pi
   game._actionCooldown = 0; game.action(0, { pitch: 100 });
   assert.equal(game.player.aimPitch, 1.35); assert.ok(Number.isFinite(game.projectiles[1].verticalSpeed));
   game._actionCooldown = 0; game.action(0, { pitch: NaN });
-  assert.equal(game.projectiles[2].aimed, undefined); assert.equal(game.projectiles[2].height, 1.15);
+  assert.equal(game.projectiles[2].aimed, undefined); assert.equal(game.projectiles[2].height, MUZZLE_HEIGHT);
 });
 
 test('garage ownership persists condition and paint without duplicating or healing deployed cars', () => {

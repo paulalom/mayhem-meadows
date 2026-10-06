@@ -110,7 +110,8 @@ async function aimAtResident(page, id) {
       const ped = globalThis.__browserCheckGame.peds.find(resident => resident.id === pedId);
       const camera = globalThis.__browserCheckScene.camera;
       const dx = ped.x / 20 - camera.position.x, dz = ped.y / 20 - camera.position.z;
-      return { yaw: Math.atan2(dz, dx), pitch: Math.atan2(1.05 - camera.position.y, Math.hypot(dx, dz)) };
+      const torso = (ped.elevation || 0) + 1.05 * globalThis.MayhemPhysics.CHARACTER_SCALE;
+      return { yaw: Math.atan2(dz, dx), pitch: Math.atan2(torso - camera.position.y, Math.hypot(dx, dz)) };
     }, id);
     const before = await sceneState(page);
     await lookCamera(page, angleDifference(target.yaw, before.cameraYaw) / (0.004 * 0.55), -(target.pitch - before.cameraPitch) / (0.0035 * 0.55));
@@ -343,6 +344,76 @@ async function main() {
       assert.ok([after.cameraX, after.cameraY, after.cameraZ, after.targetX, after.targetY, after.targetZ].every(Number.isFinite), 'Camera and target positions must be finite.');
       assert.ok(after.cameraY > after.targetY, 'Third-person view should sit above its target.');
       diagnostics.foot = after;
+    });
+    await check('district blocks have wider sidewalks and varied solid building footprints while the starter spawn remains clear', async () => {
+      const world = await page.evaluate(() => {
+        const game = globalThis.__browserCheckGame, scene = globalThis.__browserCheckScene, radius = globalThis.MayhemPhysics.PLAYER_RADIUS;
+        const colliderBodies = game.vehiclePhysics.world.bodies.filter(body => body.kind === 'building');
+        const collisionMatches = game.buildings.every((building, index) => {
+          const body = colliderBodies[index], shape = body?.shapes[0];
+          return body && shape && Math.abs(body.position.x * 20 - building.x - building.w / 2) < 0.01 &&
+            Math.abs(body.position.z * 20 - building.y - building.h / 2) < 0.01 &&
+            Math.abs(shape.halfExtents.x * 40 - building.w) < 0.01 && Math.abs(shape.halfExtents.z * 40 - building.h) < 0.01;
+        });
+        return { blocks: game.blocks.length, buildings: game.buildings.length,
+          districts: [...new Set(game.blocks.map(block => block.district))],
+          footprints: [...new Set(game.buildings.map(building => `${building.w}x${building.h}`))],
+          heights: [...new Set(game.buildings.map(building => building.height))], collisionMatches,
+          info: scene.worldInfo, playerClear: game._isFree(game.player.x, game.player.y, radius),
+          starterClear: game._vehicleFree(game.cars[0]),
+          starterDistance: Math.hypot(game.player.x - game.cars[0].x, game.player.y - game.cars[0].y) };
+      });
+      assert.equal(world.blocks, 25);
+      assert.ok(world.buildings >= 40 && world.footprints.length >= 4, 'Different districts must have several actual footprint sizes and denser blocks.');
+      assert.equal(world.districts.length, 4);
+      assert.ok(world.heights.length >= 3);
+      assert.ok(world.info.sidewalkWidth >= 1.5, 'Sidewalk geometry must be wider than the old narrow strip.');
+      assert.equal(world.collisionMatches, true, 'Actual Cannon building bodies must follow the new varied footprints.');
+      assert.equal(world.playerClear, true); assert.equal(world.starterClear, true);
+      assert.ok(world.starterDistance < 55, 'The starter car must remain within a useful entry distance.');
+      diagnostics.worldLayout = world;
+    });
+    await check('player and resident meshes use the shared smaller character scale and a matching muzzle height', async () => {
+      const characters = await page.evaluate(() => {
+        const scene = globalThis.__browserCheckScene, physics = globalThis.MayhemPhysics;
+        return { expected: physics.CHARACTER_SCALE, muzzleHeight: physics.MUZZLE_HEIGHT,
+          playerScale: scene._player.group.scale.toArray(),
+          residents: [...scene._residents.values()].map(model => model.group.scale.toArray()),
+          cameraTarget: scene.cameraInfo.targetY, playerElevation: globalThis.__browserCheckGame.player.elevation };
+      });
+      assert.equal(characters.expected, 0.86);
+      assert.ok(characters.playerScale.every(scale => Math.abs(scale - characters.expected) < 0.0001));
+      assert.ok(characters.residents.length > 0 && characters.residents.every(axes => axes.every(scale => Math.abs(scale - characters.expected) < 0.0001)));
+      assert.ok(Math.abs(characters.muzzleHeight - 1.15 * characters.expected) < 0.0001);
+      assert.ok(characters.cameraTarget > characters.playerElevation, 'The camera must still frame the scaled avatar above its feet.');
+      diagnostics.characters = characters;
+    });
+    await check('district HUD changes to the live district name as the player visits each area and restores the starter position', async () => {
+      const fixture = await page.evaluate(() => {
+        const game = globalThis.__browserCheckGame, original = { x: game.player.x, y: game.player.y, angle: game.player.angle };
+        const points = [];
+        for (const district of Object.keys(globalThis.MayhemCore.DISTRICTS)) {
+          const block = game.blocks.find(candidate => candidate.district === district);
+          const point = { x: block.x + 20, y: block.y + 180 };
+          const districtInfo = game.districtAt(point);
+          points.push({ ...point, id: districtInfo.id, name: districtInfo.name, display: districtInfo.name.toUpperCase() });
+        }
+        game.cars = game.cars.filter(car => !car.traffic); game.police = [];
+        return { original, points };
+      });
+      try {
+        for (const point of fixture.points) {
+          await page.evaluate(target => Object.assign(globalThis.__browserCheckGame.player, { x: target.x, y: target.y, elevation: 0, verticalVelocity: 0, grounded: true }), point);
+          await page.waitForFunction(display => document.getElementById('district-name').textContent === display, point.display);
+          assert.equal(await page.locator('#district-name').textContent(), point.display);
+          assert.equal(await page.locator('#game-canvas').getAttribute('data-district'), point.id);
+        }
+      } finally {
+        await page.evaluate(original => Object.assign(globalThis.__browserCheckGame.player, { ...original, elevation: 0, verticalVelocity: 0, grounded: true }), fixture.original);
+        await page.keyboard.press('c'); await waitForFreshFrames(page);
+      }
+      diagnostics.districtVisits = fixture.points;
+      await page.screenshot({ path: path.join(evidence, 'desktop-district-street.png'), fullPage: true });
     });
     await waitForMinimap(page);
     await page.screenshot({ path: path.join(evidence, 'desktop-third-person-foot.png'), fullPage: true });
@@ -781,31 +852,115 @@ async function main() {
           return route.abort();
         });
         const wallPage = await wallContext.newPage();
+        await installEngineInspection(wallContext);
         wallPage.on('pageerror', error => errors.push(error.message));
         wallPage.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
         await wallPage.goto(url);
         await wallPage.locator('#play-button').click();
         await waitForScene(wallPage, 'foot');
-        // The first street has a building wall at x=840; A approaches it using
-        // real player input, while the simulation's collision prevents entry.
-        await wallPage.keyboard.down('a');
-        await wallPage.waitForTimeout(450);
-        await wallPage.keyboard.up('a');
-        await wallPage.waitForTimeout(250);
+        const wall = await wallPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame, radius = globalThis.MayhemPhysics.PLAYER_RADIUS;
+          game.cars = []; game.peds = []; game.police = []; game.physics.clearAll();
+          const building = game.buildings.find(b => game._isFree(b.x + b.w + radius + 35, b.y + b.h / 2, radius));
+          if (!building) throw new Error('The generated town needs a clear building frontage for walking.');
+          Object.assign(game.player, { x: building.x + building.w + radius + 35, y: building.y + building.h / 2,
+            elevation: 0, verticalVelocity: 0, grounded: true, vehicleId: null, angle: Math.PI });
+          return { ...building, radius };
+        });
+        await captureMouse(wallPage);
+        await wallPage.keyboard.press('c');
+        await wallPage.waitForFunction(() => Math.abs(Math.abs(globalThis.__browserCheckScene.viewYaw) - Math.PI) < 0.05);
+        await wallPage.keyboard.down('w');
+        await wallPage.waitForTimeout(350);
+        await wallPage.keyboard.up('w');
         const nearWall = await sceneState(wallPage);
-        assert.ok(nearWall.worldX >= 849 && nearWall.worldX < 875, 'The avatar should approach the west wall without entering it.');
-        for (let step = 0; step < 13; step++) {
-          await lookCamera(wallPage, 85);
+        assert.ok(nearWall.worldX >= wall.x + wall.w + wall.radius - 0.2 && nearWall.worldX < wall.x + wall.w + wall.radius + 8, 'The avatar should approach its live building wall without entering it.');
+        for (let step = 0; step < 16; step++) {
+          await lookCamera(wallPage, 100);
           const state = await sceneState(wallPage);
           assert.ok(state.cameraDistance > 0.4 && state.cameraDistance < 12, 'Camera boom length must remain usable.');
           assert.ok([state.cameraX, state.cameraY, state.cameraZ].every(Number.isFinite), 'Camera coordinates must stay finite.');
-          // All nearby building bodies are at least 4.5 scene units tall.
-          // The test keeps the standard low foot camera below that roof line.
-          const insideWestWall = state.cameraX > 30 && state.cameraX < 42 && state.cameraZ > 48 && state.cameraZ < 60 && state.cameraY < 4.5;
-          assert.equal(insideWestWall, false, `Camera entered the west building on orbit step ${step}.`);
+          const insideBuilding = await wallPage.evaluate(view => globalThis.__browserCheckGame.buildings.some(b =>
+            view.cameraX * 20 > b.x + 0.1 && view.cameraX * 20 < b.x + b.w - 0.1 &&
+            view.cameraZ * 20 > b.y + 0.1 && view.cameraZ * 20 < b.y + b.h - 0.1 && view.cameraY < b.height), state);
+          assert.equal(insideBuilding, false, `Camera entered a live building footprint on orbit step ${step}.`);
         }
         await wallPage.screenshot({ path: path.join(evidence, 'desktop-near-wall-orbit.png'), fullPage: true });
       } finally { await closeTestContext(wallContext); }
+    });
+    await check('rolling terrain and a winding river have real outside-town geometry visible from a safe riverfront overlook', async () => {
+      const scenicContext = await createTestContext(browser, { viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
+      try {
+        await installEngineInspection(scenicContext);
+        await scenicContext.route('**/*', route => {
+          if (/^(file|data|blob):/.test(route.request().url())) return route.continue();
+          externalRequests.push(route.request().url()); return route.abort();
+        });
+        const scenicPage = await scenicContext.newPage();
+        scenicPage.on('pageerror', error => errors.push(error.message));
+        scenicPage.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+        await scenicPage.goto(url);
+        await scenicPage.locator('#play-button').click();
+        await waitForScene(scenicPage, 'foot');
+        const overlook = await scenicPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame, scene = globalThis.__browserCheckScene;
+          const riverPoint = scene._riverCurve.getPoint(0.32), size = globalThis.MayhemCore.SIZE;
+          const point = { x: Math.max(80, Math.min(size - 80, riverPoint.x * 20)), y: size - 55 };
+          game.cars = []; game.peds = []; game.police = []; game.physics.clearAll();
+          if (!game._isFree(point.x, point.y, globalThis.MayhemPhysics.PLAYER_RADIUS)) throw new Error('Riverfront overlook must be a clear playable position.');
+          const angle = Math.atan2(riverPoint.z * 20 - point.y, riverPoint.x * 20 - point.x);
+          Object.assign(game.player, { ...point, angle, elevation: 0, verticalVelocity: 0, grounded: true, vehicleId: null });
+          return { ...point, angle };
+        });
+        await captureMouse(scenicPage);
+        await scenicPage.keyboard.press('c');
+        await scenicPage.waitForFunction(expected => Math.abs(Math.atan2(Math.sin(globalThis.__browserCheckScene.viewYaw - expected), Math.cos(globalThis.__browserCheckScene.viewYaw - expected))) < 0.05, overlook.angle);
+        await scenicPage.waitForTimeout(300);
+        const landscape = await scenicPage.evaluate(() => {
+          const scene = globalThis.__browserCheckScene, T = scene.T, size = globalThis.MayhemCore.SIZE / 20;
+          const terrain = scene._landscapeGroup.getObjectByName('Rolling terrain'), water = scene._riverSurface;
+          scene.scene.updateMatrixWorld(true);
+          const terrainBounds = new T.Box3().setFromObject(terrain), riverBounds = new T.Box3().setFromObject(scene._riverGroup);
+          const projection = new T.Matrix4().multiplyMatrices(scene.camera.projectionMatrix, scene.camera.matrixWorldInverse);
+          const frustum = new T.Frustum().setFromProjectionMatrix(projection), heights = new Set();
+          const terrainPosition = terrain.geometry.getAttribute('position');
+          for (let i = 0; i < terrainPosition.count; i++) heights.add(terrainPosition.getY(i).toFixed(2));
+          const renderedMeshes = [];
+          scene.scene.traverse(object => {
+            if (!object.isMesh) return;
+            for (let ancestor = object; ancestor; ancestor = ancestor.parent) if (!ancestor.visible) return;
+            renderedMeshes.push(object);
+          });
+          const waterPosition = water.geometry.getAttribute('position'), indices = water.geometry.index;
+          const center = new T.Vector3(), vertex = new T.Vector3(), ray = new T.Raycaster();
+          let projectedWaterTriangles = 0, unobstructedWaterTriangles = 0;
+          for (let index = 0; index < indices.count; index += 3) {
+            center.set(0, 0, 0);
+            for (let corner = 0; corner < 3; corner++) center.add(vertex.fromBufferAttribute(waterPosition, indices.getX(index + corner)));
+            center.multiplyScalar(1 / 3).applyMatrix4(water.matrixWorld);
+            if (center.x >= 0 && center.x <= size && center.z >= 0 && center.z <= size) continue;
+            const screen = center.clone().project(scene.camera);
+            if (Math.abs(screen.x) >= 0.95 || Math.abs(screen.y) >= 0.95 || screen.z <= -1 || screen.z >= 1) continue;
+            projectedWaterTriangles++;
+            ray.setFromCamera(new T.Vector2(screen.x, screen.y), scene.camera);
+            if (ray.intersectObjects(renderedMeshes, false)[0]?.object === water) unobstructedWaterTriangles++;
+          }
+          return { info: scene.worldInfo, terrainVertices: terrainPosition.count, riverVertices: waterPosition.count,
+            terrainHeights: heights.size, terrainInView: frustum.intersectsObject(terrain),
+            terrainBounds: { min: terrainBounds.min.toArray(), max: terrainBounds.max.toArray() },
+            riverBounds: { min: riverBounds.min.toArray(), max: riverBounds.max.toArray() },
+            projectedWaterTriangles, unobstructedWaterTriangles, renderCalls: scene.renderer.info.render.calls };
+        });
+        assert.ok(landscape.terrainVertices > 1000 && landscape.terrainHeights > 8, 'The hinterland must contain genuinely raised, varied terrain.');
+        assert.ok(landscape.riverVertices > 200 && landscape.info.landscape.riverSamples > 100 && landscape.info.landscape.riverWidth > 7);
+        assert.ok(landscape.info.landscape.treeCount > 20, 'The world edge should have a substantial backdrop of trees.');
+        assert.ok(landscape.terrainBounds.min[0] < 0 && landscape.terrainBounds.max[2] > 108, 'Real terrain must extend beyond the town boundary.');
+        assert.equal(landscape.terrainInView, true);
+        assert.ok(landscape.projectedWaterTriangles > 4 && landscape.unobstructedWaterTriangles > 0, 'Actual outside-town river triangles must be in the view and unobstructed.');
+        assert.ok(landscape.renderCalls > 0);
+        diagnostics.landscape = { ...landscape, overlook };
+        await scenicPage.screenshot({ path: path.join(evidence, 'desktop-river-overlook.png'), fullPage: true });
+      } finally { await closeTestContext(scenicContext); }
     });
     const physicsContext = await createTestContext(browser, { viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
     try {
@@ -1003,14 +1158,17 @@ async function main() {
       });
 
       await check('a high-speed wall impact rebounds, launches the real car and renders its full airborne rotation', async () => {
-        await physicsPage.evaluate(() => {
+        const wall = await physicsPage.evaluate(() => {
           const game = globalThis.__browserCheckGame, car = game.cars[0];
           game.cars = [car]; game.peds = []; game.police = []; game.physics.clearAll(); game.abandonMission(); game.heat = 0;
-          Object.assign(car, { x: 900, y: 1080, angle: Math.PI, traffic: false, health: 100 });
+          const building = game.buildings.find(b => game._vehicleFree({ ...car, x: b.x - 70, y: b.y + b.h / 2, angle: 0 }) &&
+            game._vehicleFree({ ...car, x: b.x - 28, y: b.y + b.h / 2, angle: 0 }));
+          if (!building) throw new Error('The generated town needs a clear building frontage for vehicle collision checks.');
+          Object.assign(car, { x: building.x - 70, y: building.y + building.h / 2, angle: 0, traffic: false, health: 100 });
           game.vehiclePhysics.reset(car);
           // This is an approach speed, not a fabricated collision outcome.
           // The normal fixed-step loop and Cannon wall contact produce flight.
-          Object.assign(car, { speed: 290, vx: -290, vy: 0 });
+          Object.assign(car, { speed: 300, vx: 300, vy: 0 });
           Object.assign(game.player, { vehicleId: car.id, x: car.x, y: car.y });
           globalThis.__browserCheckContacts = [];
           const startTime = game.time;
@@ -1027,19 +1185,20 @@ async function main() {
           game.vehiclePhysics.bodies.get(car.id).body.addEventListener('collide', event => {
             if (event.body.kind === 'building') globalThis.__browserCheckContacts.push({ kind: 'building', closing: Math.abs(event.contact.getImpactVelocityAlongNormal()) });
           });
+          return { ...building };
         });
         await waitForScene(physicsPage, 'drive');
         await physicsPage.keyboard.press('c');
         try {
           await physicsPage.waitForFunction(() => {
             const car = globalThis.__browserCheckGame.current;
-            return globalThis.__browserCheckContacts.length > 0 && car.elevation > 0.2 && car.vx > 10 && Math.abs(car.orientation.x) + Math.abs(car.orientation.z) > 0.015;
+            return globalThis.__browserCheckContacts.length > 0 && car.elevation > 0.2 && car.vx < -10 && Math.abs(car.orientation.x) + Math.abs(car.orientation.z) > 0.015;
           }, null, { timeout: 3000 });
         } finally { diagnostics.airborneWallTrace = await physicsPage.evaluate(() => ({ ...globalThis.__browserCheckWallTrace, contacts: [...globalThis.__browserCheckContacts] })); }
         const airborne = await vehicleState(physicsPage);
         assertRenderedVehicle(airborne);
-        assert.ok(airborne.x > 842, 'The car must rebound outside the solid west wall.');
-        assert.ok(airborne.vx > 10, 'A westward collision must produce an eastward bounce.');
+        assert.ok(airborne.x < wall.x, 'The car must rebound outside the solid building frontage.');
+        assert.ok(airborne.vx < -10, 'An eastward approach must produce a westward bounce.');
         assert.ok(airborne.elevation > 0.2 && airborne.renderedHeight > 0.2, 'Physical and visible car must both leave the road.');
         assert.ok(Math.abs(airborne.orientation.x) + Math.abs(airborne.orientation.z) > 0.015, 'The impact must create real pitch or roll, not only a yaw turn.');
         diagnostics.airborneWallImpact = airborne;
