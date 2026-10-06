@@ -80,6 +80,8 @@ npm run check
 
 This runs JavaScript syntax checks, deterministic simulation tests, and camera, vehicle physics, jump, and ragdoll regression tests. `tools/browser-check.cjs` adds optional Playwright checks with headless Chrome; it requires a separately available Playwright installation, using `PLAYWRIGHT_MODULE_PATH` if necessary. Run it with `node tools/browser-check.cjs`. Browser evidence is ignored by Git.
 
+Automated Chrome checks virtualize pointer capture and send relative look events inside isolated test pages, keeping the desktop mouse free. Keyboard/buttons, WebGL rendering, and gameplay still run in Chrome. Native pointer capture remains a manual play check; the normal game uses Chrome's native mouse look. Browser evidence records the input mode.
+
 If you change or upgrade the engine, recreate the locally bundled rendering and physics engines with:
 
 ```sh

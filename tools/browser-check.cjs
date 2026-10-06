@@ -1,11 +1,14 @@
 'use strict';
 
 // Optional UI checks: run with `node tools/browser-check.cjs` and Playwright installed.
-// Chrome is headless here. The browser context and its saves are isolated from yours.
+// Chrome is headless here. Contexts and saves are isolated; pointer lock is
+// virtualized, so checks never capture the user's desktop cursor. Relative look
+// uses DOM PointerEvents; keyboard/buttons, WebGL and gameplay remain real.
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const assert = require('node:assert/strict');
+const { installBrowserInputFixture } = require('./browser-input-fixture.cjs');
 
 function loadPlaywright() {
   const locations = [
@@ -28,6 +31,22 @@ const saveKey = 'mayhem-meadows.v1';
 const errors = [];
 const checks = [];
 const diagnostics = {};
+const checkFilter = process.env.BROWSER_CHECK_FILTER ? new RegExp(process.env.BROWSER_CHECK_FILTER, 'i') : null;
+
+async function createTestContext(browser, options) {
+  const context = await browser.newContext(options);
+  try { await context.addInitScript(installBrowserInputFixture); }
+  catch (error) { await context.close(); throw error; }
+  return context;
+}
+
+async function releaseTestPointer(context) {
+  await Promise.allSettled(context.pages().map(page => page.evaluate(() => globalThis.__browserInputFixture?.release())));
+}
+
+async function closeTestContext(context) {
+  try { await releaseTestPointer(context); } finally { await context.close(); }
+}
 
 async function sceneState(page) {
   return page.locator('#game-canvas').evaluate(canvas => {
@@ -47,27 +66,29 @@ async function waitForScene(page, mode) {
   return sceneState(page);
 }
 
-const mousePositions = new WeakMap();
-
 async function captureMouse(page) {
+  assert.equal(await page.evaluate(() => globalThis.__browserInputFixture?.assertSafe()), true, 'Capture requires the safe automated pointer fixture.');
   if (await page.evaluate(() => document.pointerLockElement === document.getElementById('game-canvas'))) return;
   await page.locator('#game-canvas').scrollIntoViewIfNeeded();
   const box = await page.locator('#game-canvas').boundingBox();
   assert.ok(box, 'Game canvas has no visible bounds.');
   const x = box.x + box.width * 0.53, y = box.y + box.height * 0.56;
   await page.mouse.click(x, y);
-  mousePositions.set(page, { x, y });
   await page.waitForFunction(() => document.pointerLockElement === document.getElementById('game-canvas') && document.getElementById('game-canvas').dataset.mouseLocked === 'true', null, { timeout: 3000 });
   await waitForFreshFrames(page);
 }
 
 async function lookCamera(page, dx, dy = 0) {
   await captureMouse(page);
-  const previous = mousePositions.get(page);
-  assert.ok(previous, 'Captured mouse coordinates must be tracked.');
-  const next = { x: previous.x + dx, y: previous.y + dy };
-  await page.mouse.move(next.x, next.y, { steps: 8 });
-  mousePositions.set(page, next);
+  // Native pointer lock is intentionally absent. Relative DOM input reaches the
+  // game's real handler without moving a pointer outside the visible viewport.
+  await page.evaluate(async delta => {
+    const canvas = document.getElementById('game-canvas');
+    for (let step = 0; step < 8; step++) {
+      globalThis.__browserInputFixture.relativeMove(canvas, delta.x / 8, delta.y / 8);
+      await new Promise(requestAnimationFrame);
+    }
+  }, { x: dx, y: dy });
   await page.waitForTimeout(400);
 }
 
@@ -82,8 +103,8 @@ async function aimAtResident(page, id) {
   await page.mouse.down({ button: 'right' });
   await page.waitForFunction(() => document.getElementById('game-canvas').dataset.aiming === 'true');
   await page.waitForTimeout(350);
-  // Derive the angle from the live rendered view, then use actual Chrome mouse
-  // movement to put the resident's torso beneath the central crosshair.
+  // Derive the angle from the live rendered view, then send virtual relative
+  // input through the game's handler to aim at the resident's actual torso.
   for (let attempt = 0; attempt < 3; attempt++) {
     const target = await page.evaluate(pedId => {
       const ped = globalThis.__browserCheckGame.peds.find(resident => resident.id === pedId);
@@ -253,6 +274,7 @@ async function equipWithWheel(page, digit) {
 }
 
 async function check(name, action) {
+  if (checkFilter && !checkFilter.test(name) && !name.startsWith('no ')) return;
   try {
     await action();
     checks.push({ name, passed: true });
@@ -274,7 +296,7 @@ async function main() {
   else throw new Error('Chrome executable not found. Set BROWSER_EXECUTABLE to your Chrome path.');
   const browser = await chromium.launch(launch);
   try {
-    const context = await browser.newContext({ viewport: { width: 1365, height: 900 }, deviceScaleFactor: 1, serviceWorkers: 'block' });
+    const context = await createTestContext(browser, { viewport: { width: 1365, height: 900 }, deviceScaleFactor: 1, serviceWorkers: 'block' });
     await installEngineInspection(context);
     const page = await context.newPage();
     const externalRequests = [];
@@ -286,6 +308,11 @@ async function main() {
       return route.abort();
     });
     await page.goto(url);
+    await check('no native pointer capture APIs remain in the automated context', async () => {
+      const safe = await page.evaluate(() => ({ safe: globalThis.__browserInputFixture?.assertSafe(), mode: globalThis.__browserInputFixture?.pointerLockMode }));
+      assert.deepEqual(safe, { safe: true, mode: 'virtual-pointer-lock' });
+      diagnostics.inputFixture = safe;
+    });
     await check('direct file launch shows welcome screen', async () => {
       await page.locator('#play-button').waitFor({ state: 'visible' });
       assert.match(await page.title(), /Mayhem Meadows/);
@@ -319,7 +346,8 @@ async function main() {
     });
     await waitForMinimap(page);
     await page.screenshot({ path: path.join(evidence, 'desktop-third-person-foot.png'), fullPage: true });
-    await check('click captures the real Chrome mouse without firing or aiming', async () => {
+    await check('click enters virtual test pointer capture without firing or aiming', async () => {
+      await page.evaluate(() => { const game = globalThis.__browserCheckGame; game.cars = game.cars.filter(car => !car.traffic); game.police = []; });
       const before = await page.evaluate(() => ({ actionCooldown: globalThis.__browserCheckGame._actionCooldown, projectiles: globalThis.__browserCheckGame.projectiles.length }));
       await captureMouse(page);
       const after = await page.evaluate(() => ({ actionCooldown: globalThis.__browserCheckGame._actionCooldown, projectiles: globalThis.__browserCheckGame.projectiles.length }));
@@ -328,7 +356,7 @@ async function main() {
       assert.equal(await page.locator('#aim-reticle').evaluate(element => element.classList.contains('aiming')), false);
       assert.equal(await page.locator('#mouse-hint').isVisible(), false);
     });
-    await check('captured mouse looks right and up without holding a button; C recenters', async () => {
+    await check('relative DOM pointer input looks right and up without holding a button; C recenters', async () => {
       const before = await sceneState(page);
       await lookCamera(page, 70, -20);
       const after = await sceneState(page);
@@ -402,7 +430,7 @@ async function main() {
       await waitForFreshFrames(page);
       assert.deepEqual(await page.evaluate(() => ({ actionCooldown: globalThis.__browserCheckGame._actionCooldown, projectiles: globalThis.__browserCheckGame.projectiles.length })), before);
     });
-    await check('Escape releases the mouse, clears aiming and pauses; resuming requires a fresh capture click', async () => {
+    await check('Escape releases virtual capture, clears aiming and pauses; resuming requires a fresh click', async () => {
       await page.mouse.down({ button: 'right' });
       await page.waitForFunction(() => document.getElementById('game-canvas').dataset.aiming === 'true');
       await page.keyboard.press('Escape');
@@ -678,7 +706,7 @@ async function main() {
       await page.locator('#help-screen').waitFor({ state: 'hidden' });
     });
     await check('blocked local storage still permits Play and car entry', async () => {
-      const blockedContext = await browser.newContext({ viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
+      const blockedContext = await createTestContext(browser, { viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
       try {
         await blockedContext.route('**/*', route => {
           if (/^(file|data|blob):/.test(route.request().url())) return route.continue();
@@ -713,10 +741,10 @@ async function main() {
         await blockedPage.locator('#motion-toggle').click();
         assert.equal(await blockedPage.locator('#game-canvas').evaluate(element => element === document.activeElement), true);
         await blockedPage.screenshot({ path: path.join(evidence, 'storage-blocked-play.png'), fullPage: true });
-      } finally { await blockedContext.close(); }
+      } finally { await closeTestContext(blockedContext); }
     });
     await check('missing WebGL 2 shows a friendly renderer message without uncaught errors', async () => {
-      const unsupportedContext = await browser.newContext({ viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
+      const unsupportedContext = await createTestContext(browser, { viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
       const unsupportedErrors = [];
       try {
         await unsupportedContext.route('**/*', route => {
@@ -742,10 +770,10 @@ async function main() {
         assert.equal(await unsupportedPage.locator('#reload-button').isVisible(), true);
         assert.deepEqual(unsupportedErrors, []);
         await unsupportedPage.screenshot({ path: path.join(evidence, 'webgl-unavailable.png'), fullPage: true });
-      } finally { await unsupportedContext.close(); }
+      } finally { await closeTestContext(unsupportedContext); }
     });
     await check('the camera stays outside building walls during a full near-wall orbit', async () => {
-      const wallContext = await browser.newContext({ viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
+      const wallContext = await createTestContext(browser, { viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
       try {
         await wallContext.route('**/*', route => {
           if (/^(file|data|blob):/.test(route.request().url())) return route.continue();
@@ -777,9 +805,9 @@ async function main() {
           assert.equal(insideWestWall, false, `Camera entered the west building on orbit step ${step}.`);
         }
         await wallPage.screenshot({ path: path.join(evidence, 'desktop-near-wall-orbit.png'), fullPage: true });
-      } finally { await wallContext.close(); }
+      } finally { await closeTestContext(wallContext); }
     });
-    const physicsContext = await browser.newContext({ viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
+    const physicsContext = await createTestContext(browser, { viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
     try {
       await physicsContext.route('**/*', route => {
         if (/^(file|data|blob):/.test(route.request().url())) return route.continue();
@@ -1104,8 +1132,8 @@ async function main() {
         assert.ok(driven.health > 0);
         diagnostics.flippedCarRecovery = recovered;
       });
-    } finally { await physicsContext.close(); }
-    const inventoryContext = await browser.newContext({ viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
+    } finally { await closeTestContext(physicsContext); }
+    const inventoryContext = await createTestContext(browser, { viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
     try {
       await inventoryContext.route('**/*', route => {
         if (/^(file|data|blob):/.test(route.request().url())) return route.continue();
@@ -1140,7 +1168,7 @@ async function main() {
         await waitForFreshFrames(inventoryPage);
       });
 
-      await check('pockets release real mouse capture and clear held aim and movement', async () => {
+      await check('pockets release virtual pointer capture and clear held aim and movement', async () => {
         await captureMouse(inventoryPage);
         await inventoryPage.mouse.down({ button: 'right' });
         await inventoryPage.waitForFunction(() => document.getElementById('game-canvas').dataset.aiming === 'true');
@@ -1240,7 +1268,7 @@ async function main() {
         await inventoryPage.waitForFunction(() => document.getElementById('game-canvas').dataset.aiming === 'true');
         await inventoryPage.keyboard.down('Tab');
         await inventoryPage.locator('#toy-wheel').waitFor({ state: 'visible' });
-        assert.equal(await inventoryPage.evaluate(() => document.pointerLockElement), null, 'The wheel must release real mouse capture.');
+        assert.equal(await inventoryPage.evaluate(() => document.pointerLockElement), null, 'The wheel must release virtual pointer capture.');
         await inventoryPage.waitForFunction(() => document.getElementById('game-canvas').dataset.aiming === 'false');
         assert.equal((await sceneState(inventoryPage)).aiming, 'false');
         await inventoryPage.mouse.up({ button: 'right' });
@@ -1504,10 +1532,10 @@ async function main() {
         }
         await inventoryPage.setViewportSize({ width: 1365, height: 900 });
       });
-    } finally { await inventoryContext.close(); }
+    } finally { await closeTestContext(inventoryContext); }
 
     await check('old version-one saves migrate with existing progress and settings intact', async () => {
-      const legacyContext = await browser.newContext({ viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
+      const legacyContext = await createTestContext(browser, { viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
       try {
         await installEngineInspection(legacyContext);
         await legacyContext.route('**/*', route => {
@@ -1534,21 +1562,24 @@ async function main() {
         assert.deepEqual(migrated.garage, { cars: [] });
         assert.equal(await legacyPage.locator('#sound-toggle').getAttribute('aria-pressed'), 'false');
         assert.equal(await legacyPage.locator('#motion-toggle').getAttribute('aria-pressed'), 'true');
-      } finally { await legacyContext.close(); }
+      } finally { await closeTestContext(legacyContext); }
     });
 
     await check('no external network requests', async () => assert.deepEqual(externalRequests, []));
     await check('no page or console errors', async () => assert.deepEqual(errors, []));
-    fs.writeFileSync(path.join(evidence, 'browser-check.json'), JSON.stringify({ url, checks, diagnostics, errors, externalRequests }, null, 2) + '\n');
+    fs.writeFileSync(path.join(evidence, 'browser-check.json'), JSON.stringify({ url, inputMode: 'virtual-pointer-lock', inputDetails: { relativeMovement: 'DOM PointerEvent', keyboardAndButtons: 'Playwright Chrome input' }, filter: checkFilter?.source || null, checks, diagnostics, errors, externalRequests }, null, 2) + '\n');
     const failed = checks.filter(result => !result.passed).length;
-    process.stdout.write(`\n${checks.length - failed}/${checks.length} browser checks passed. Evidence: ${evidence}\n`);
+    process.stdout.write(`\n${checks.length - failed}/${checks.length} browser checks passed${checkFilter ? ' (filtered run)' : ''}. Evidence: ${evidence}\n`);
     if (failed) process.exitCode = 1;
   } finally {
+    await Promise.allSettled(browser.contexts().map(releaseTestPointer));
     await browser.close();
   }
 }
 
-main().catch(error => {
+if (require.main === module) main().catch(error => {
   process.stderr.write(`${error.stack}\n`);
   process.exitCode = 1;
 });
+
+module.exports = { createTestContext, releaseTestPointer, closeTestContext, installEngineInspection, captureMouse, lookCamera };
