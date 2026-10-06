@@ -106,22 +106,26 @@ Money, purchases, completed-contract counts, settings, and best score are stored
 
 ## The town is a toybox
 
-The town occupies a compact 108-metre square with six streets in each direction. Short blocks keep errands quick. Density changes between neighborhoods so a fast corner, a quiet garden, and a crowded shop row feel different within one outing.
+The playable world spans 280 metres in each direction. A compact city center opens into residential neighborhoods and meadow edges. Its streets follow a connected network of winding avenues, irregular junctions, branching side streets and suburban loops. Short trips around the garage remain quick; longer outings now reach quieter neighborhoods beyond the center.
 
 | District | Layout and identity | Play purpose |
 | --- | --- | --- |
-| Biscuit Heights · northwest | Small homes, garden gaps, trees and quiet courts | A forgiving place to stroll, change cars and recover from a busy street |
-| Waffle Works · northeast | Brick warehouses, larger roofs and loading yards | Strong industrial silhouettes and open turning space between solid buildings |
-| Market Mile · central cross | Closely spaced shops, taller corners and lively fronts | More visual activity and tight pedestrian shortcuts, with the garage and Sprinkle Park as anchors |
-| Riverfront · south | Low cafes and pavilions, broad open courts and planted spaces | A calmer change of pace, views toward the river and an easy approach to the car wash |
+| Biscuit Heights | Small homes, garden gaps, trees and quiet courts | A forgiving place to stroll, change cars and recover from a busy street |
+| Waffle Works | Brick warehouses, larger roofs and loading yards | Strong industrial silhouettes and open turning space between solid buildings |
+| Market Mile | Closely spaced shops, taller corners and lively fronts | More visual activity and tight pedestrian shortcuts, with the garage and Sprinkle Park as anchors |
+| Riverfront | Low cafes and pavilions, broad open courts and planted spaces | A calmer change of pace, views toward the river and an easy approach to the car wash |
+| Willow Gardens | Winding residential streets, detached homes, gardens and a neighborhood green | A relaxed loop for exploring and practicing corners |
+| Orchard Park | More widely spaced homes, branching lanes and cul-de-sacs near meadow land | A destination beyond town with longer scenic driving routes and room to turn around |
 
-Every block has an actual layout: each building footprint drives rendering, car collision, ragdoll collision and sight obstruction. Open gaps stay open. Streets retain their existing width, while buildings move back to leave at least 1.6 metres between the road edge and the narrowest developed frontage, including about 1.5 metres of paved sidewalk. Most fronts have more space, with clear walking routes past furniture and doorways. Trees, benches and other solid street props use shared visual and physical shapes.
+Buildings face their streets, with changing setbacks and spacing as the city opens into suburbs. Each rotated building footprint drives rendering, car collision, ragdoll collision and sight obstruction. Open gaps stay open. Sidewalks follow the actual road curves. Houses have deeper garden setbacks; urban fronts keep room for walking past furniture and doorways. Trees, benches and other solid street props use shared visual and physical shapes.
+
+Traffic and patrols follow the same road network that the player sees. Navigation projects a position onto the nearest road, finds a connected route through its junctions, then follows sampled bends. Parked cars sit in clear roadside bays with street access, keeping driving lanes and sidewalks open. Recovery searches clear positions on those roads. Contract destinations use reachable road anchors across the city and suburbs, so the larger world creates different outings without stranding a marker in a garden.
 
 People are 14% smaller, including their standing contacts, ragdoll joints and toy origins. This gives roads, cars and buildings more presence while preserving the jump and driving feel. Camera height follows the new character proportions.
 
-The countryside supplies depth beyond the town: rolling terrain, layered hills, tree lines and a winding river. Warm daylight and varied rooflines make each direction recognizable. The active road network remains level in this milestone; the exterior landscape is scenery around the playable town. Road targets, the initial yellow car, garage access and car wash remain reachable.
+The countryside supplies depth beyond the neighborhoods: rolling terrain, layered hills, tree lines and a winding river. Warm daylight and varied rooflines make each direction recognizable. The active road network remains level in this milestone; the exterior hills and water are scenery around the expanded playable world. The initial yellow car, garage access and car wash remain reachable.
 
-The HUD names the current district. The minimap colors neighborhoods and draws real building footprints, helping players recognize open yards and gaps before choosing a route. Large signs, recognizable rooftops and the park fountain provide landmarks at street level. Confetti, patrols and objective rings keep their bright accent colors so decoration does not hide the next action.
+The HUD names the current district. The minimap colors neighborhoods and draws actual curved roads and rotated building footprints, helping players recognize loops, branches, open yards and gaps before choosing a route. Large signs, recognizable rooftops and village greens provide landmarks at street level. Confetti, patrols and objective rings keep their bright accent colors so decoration does not hide the next action.
 
 ## Tone and feedback
 
@@ -162,6 +166,7 @@ No multiplayer, huge procedural city, interiors, stairs, elevated road routes, c
 - Does the first capture click avoid firing? Do Esc, menus, full screen, and tab changes release the mouse safely, clear held input, and show how to resume looking?
 - Does the view stay outside buildings, and do markers plus minimap keep destinations easy to find?
 - Can a player recognize dense shops, quiet gardens, industrial yards and the riverfront from the street? Do wider pavements remain walkable past props, and do visible building gaps match their collision space?
+- Can a player drive from the center into both suburbs and return along connected roads? Do traffic, patrols and recovery follow real bends instead of crossing lots? Do rotated buildings block their visible walls while leaving their empty surrounding corners clear?
 - Does shrinking characters preserve consistent standing, aiming, tumbling and recovery, without changing their size during a fall?
 - Do file-open play, full screen, camera recentering, and the WebGL failure overlay behave predictably?
 - Do falling bodies retain connected limbs and stay outside walls, vehicles, and the ground? Can both residents and the player get up in a safe position?

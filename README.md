@@ -16,7 +16,7 @@ Alternatively, with Node.js installed:
 npm start
 ```
 
-Then open **http://127.0.0.1:4173** in your browser. This optional server only serves static files on your computer. All game logic runs in the browser.
+Then open **http://127.0.0.1:4173** in Chrome. This optional server only serves static files on your computer. All game logic runs in the browser.
 
 The layout adapts to small screens, but touch controls and gamepads are not implemented.
 
@@ -44,8 +44,8 @@ Click the town to capture the mouse and start looking around. Your first click c
 
 ## The toybox
 
-- **Neighborhoods:** Biscuit Heights, Waffle Works, Market Mile and Riverfront have different building density, rooflines and open spaces. Wider sidewalks give walking more room, and characters are 14% smaller with matching physical bodies. The HUD names your district; the minimap shows district colors and building footprints.
-- **Driving:** compact, sports car, and van handling; traffic; drifting and near-miss style points. Cars are three-dimensional rigid bodies with gravity: impacts can bounce, lift, roll, or flip them before they land. Press R to right your ride and return to a safe road position.
+- **City and suburbs:** winding avenues, irregular junctions, side streets and residential loops connect six neighborhoods across a 280-metre playable world. Market Mile's shops and Waffle Works' yards open into quieter homes in Biscuit Heights, Willow Gardens and Orchard Park, with Riverfront as a scenic destination. Buildings face their streets, sidewalks follow the curves, and gardens become more spacious toward the outskirts. Characters remain 14% smaller with matching physical bodies. The HUD names your district; the minimap draws the actual roads and rotated footprints.
+- **Driving:** compact, sports car, and van handling; traffic; drifting and near-miss style points. Parked cars use clear roadside bays with access from the street. Cars are three-dimensional rigid bodies with gravity: impacts can bounce, lift, roll, or flip them before they land. Press R to right your ride and return to a safe road position.
 - **Jumping:** press Space on foot for a jump with gravity and a landing, including onto low solid surfaces. Holding Space does not repeatedly jump; left-click remains the toy action.
 - **Third-person camera:** mouse movement looks around on foot, with a closer shoulder view and slower sensitivity while aiming. The driving camera follows smoothly and gives you time to look around before returning behind the car. Buildings shorten the camera distance to keep the view clear. Press C whenever you want to recenter.
 - **Navigation:** glowing 3D mission markers, an objective direction/distance indicator, and a separate overhead minimap.
@@ -92,6 +92,7 @@ npm run vendor
 
 | File | Responsibility |
 | --- | --- |
+| world.js | Organic road network, neighborhoods, lots, shared landmarks and connected route planning |
 | core.js | Simulation, map, traffic, police, contracts, inventory, garage, rewards, and save validation |
 | vehicle-physics.js | Cannon vehicle bodies, gravity, orientation, elastic contacts, and fixed obstacle shapes |
 | physics.js | Ragdoll joints, gravity, contacts, and automatic get-up |
@@ -105,4 +106,4 @@ npm run vendor
 
 Next priorities: playtest toy reach and the garage economy, tune chases, add touch/gamepad controls, then add route variety and cosmetic rewards.
 
-Version 0.7.0 adds varied neighborhoods, wider sidewalks, smaller characters with matching physics, district navigation and countryside scenery. Automated Chrome mouse-look checks now keep the desktop cursor free.
+Version 0.8.0 replaces the uniform road grid with an organic street network and expands the playable world into two suburbs. Traffic, recovery, missions, collisions, camera clearance and the minimap use the new layout. Automated Chrome checks continue to keep the desktop cursor free.

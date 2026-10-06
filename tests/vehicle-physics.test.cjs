@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Game } = require('../core.js');
 const C = require('../vendor/cannon.cjs');
-const { PERSON_HEIGHT } = require('../physics.js');
+const { PERSON_HEIGHT, PLAYER_RADIUS } = require('../physics.js');
 
 const empty = () => {
   const game = new Game({ seed: 42 });
@@ -145,4 +145,77 @@ test('rigid bodies pause with game time and live physics never enters a save', (
   game.update(0); game.update(NaN); assert.deepEqual(body.position, before);
   const save = JSON.stringify(game.exportSave());
   for (const field of ['orientation','elevation','verticalVelocity','angularVelocity','bodies']) assert.equal(save.includes(field), false);
+});
+
+test('angled lot roofs, on-foot walls, and tool trajectories share the same rotated footprint', () => {
+  const game = empty(), angle = Math.PI / 4, c = Math.cos(angle), s = Math.sin(angle);
+  const building = { x: 1320, y: 1375, w: 160, h: 50, height: 3.4, angle };
+  game.buildings = [building]; game.vehiclePhysics.sync();
+  const roofPoint = { x: 1400 + 55 * c, y: 1400 + 55 * s };
+  assert.ok(roofPoint.y > building.y + building.h, 'fixture is outside the unrotated source rectangle');
+  assert.ok(Math.abs(game.vehiclePhysics.support(roofPoint.x, roofPoint.y, 5) - building.height) < 1e-10);
+  assert.equal(game.vehiclePhysics.support(1340, 1420, 5), 0, 'a source-rectangle corner outside the rotated solid stays clear');
+
+  const free = { x: 1340, y: 1420, elevation: 0 };
+  assert.equal(game._moveCircleBuildings(free, 0, 0, PLAYER_RADIUS), false);
+  assert.deepEqual(free, { x: 1340, y: 1420, elevation: 0 });
+  const person = { ...roofPoint, elevation: 0 };
+  assert.equal(game._moveCircleBuildings(person, 0, 0, PLAYER_RADIUS), true);
+  const localX = (person.x - 1400) * c + (person.y - 1400) * s;
+  const localY = -(person.x - 1400) * s + (person.y - 1400) * c;
+  const distance = Math.hypot(Math.max(0, Math.abs(localX) - 80), Math.max(0, Math.abs(localY) - 25));
+  assert.ok(distance >= PLAYER_RADIUS, 'standing player is outside the actual angled wall');
+  const standingOnRoof = { ...roofPoint, elevation: building.height };
+  assert.equal(game._moveCircleBuildings(standingOnRoof, 0, 0, PLAYER_RADIUS), false, 'the roof remains walkable');
+
+  assert.equal(game.vehiclePhysics.hitsSegment({ x: 1350, y: 1450, height: 1 }, { x: 1500, y: 1450, height: 1 }), true, 'the angled facade blocks a tool shot beyond the old rectangle');
+  assert.equal(game.vehiclePhysics.hitsSegment({ x: 1350, y: 1450, height: 4 }, { x: 1500, y: 1450, height: 4 }), false, 'shots over the complete roof remain clear');
+});
+
+test('an angled facade bounces a chassis along its real surface normal', () => {
+  const game = empty(), angle = 0.6, c = Math.cos(angle), s = Math.sin(angle);
+  game.buildings = [{ x: 1320, y: 1350, w: 160, h: 100, height: 6, angle }];
+  const ride = car(game, 1400 - 165 * c, 1400 - 165 * s);
+  ride.angle = angle; ride.speed = 280; ride.vx = 280 * c; ride.vy = 280 * s;
+  let normalVelocity = 0, maxHeight = 0;
+  stepBodies(game, 0.8, () => {
+    normalVelocity = Math.min(normalVelocity, ride.vx * c + ride.vy * s);
+    maxHeight = Math.max(maxHeight, ride.elevation);
+  });
+  assert.ok(normalVelocity < -30, 'impact reverses velocity against the rotated wall');
+  assert.ok((ride.x - 1400) * c + (ride.y - 1400) * s < -80, 'the chassis stays on the approach side');
+  assert.ok(maxHeight > 0.15, 'the existing playful elastic launch is preserved');
+});
+
+test('rotated compound props expose their real offset footprint and elevation', () => {
+  const game = empty(); game.staticObjects = [{ kind: 'bench', x: 1400, y: 1400, angle: Math.PI / 2, elevation: 0.2,
+    parts: [{ half: [0.8, 0.1, 0.2], offset: [0.3, 0.5, 0] }] }];
+  game.vehiclePhysics.sync();
+  assert.ok(Math.abs(game.vehiclePhysics.support(1400, 1418, 2) - 0.8) < 1e-10, 'local X offset and long axis rotate into map Y');
+  assert.equal(game.vehiclePhysics.support(1418, 1400, 2), 0, 'the old axis-aligned footprint does not block empty space');
+});
+
+test('expanded physics bounds allow suburban driving and bounce at the new perimeter', () => {
+  const game = empty();
+  assert.equal(Game.SIZE, 5600);
+  assert.equal(game.vehiclePhysics.size, Game.SIZE);
+  const suburban = car(game, 4250, 4500); suburban.speed = suburban.vx = 180;
+  stepBodies(game, 0.5);
+  assert.ok(suburban.x > 4320, 'the old 2160 perimeter no longer traps suburban cars');
+  const edge = car(game, 5520, 4500); edge.speed = edge.vx = 280;
+  let bounce = false; stepBodies(game, 0.6, () => { bounce ||= edge.vx < -20; });
+  assert.ok(bounce, 'the new outer boundary reverses chassis velocity');
+  assert.ok(edge.x < Game.SIZE - 20, 'the vehicle remains inside the expanded town');
+  assert.equal(game.vehiclePhysics.world.bodies.filter(body => body.kind === 'boundary').length, 4);
+});
+
+test('world-size resynchronization preserves live cars while replacing all four perimeter walls', () => {
+  const game = empty(), ride = car(game, 3000, 3500); game.vehiclePhysics.sync();
+  const body = game.vehiclePhysics.get(ride.id), oldWalls = game.vehiclePhysics.world.bodies.filter(candidate => candidate.kind === 'boundary');
+  game.world = { ...game.world, size: 6200 }; game.vehiclePhysics.sync();
+  assert.equal(game.vehiclePhysics.size, 6200, 'the active world size takes priority over the Game fallback');
+  assert.equal(game.vehiclePhysics.get(ride.id), body, 'resizing fixed bounds preserves dynamic body identity');
+  assert.equal(game.vehiclePhysics.world.bodies.filter(candidate => candidate.kind === 'boundary').length, 4);
+  for (const wall of oldWalls) assert.equal(game.vehiclePhysics.world.bodies.includes(wall), false);
+  assert.ok(game.vehiclePhysics.world.bodies.some(candidate => candidate.kind === 'boundary' && candidate.position.x === 6210 / 20), 'east boundary follows the resized world');
 });

@@ -53,20 +53,37 @@
       this.floor.addShape(new C.Plane()); this.floor.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
       this.world.addBody(this.floor);
       this._townBodies = [];
-      for (const building of game.buildings) this._fixed('building', building.x + building.w / 2, building.y + building.h / 2, [{ half: [building.w / 40, building.height / 2, building.h / 40], offset: [0, building.height / 2, 0] }]);
+      for (const building of game.buildings) this._building(building);
       for (const object of game.staticObjects) this._fixed(object.kind, object.x, object.y, object.parts, object);
-      const size = game.constructor.SIZE || 2160, wallHeight = 6;
-      this._fixed('boundary', -10, size / 2, [{ half: [0.5, wallHeight / 2, size / 40], offset: [0, wallHeight / 2, 0] }]);
-      this._fixed('boundary', size + 10, size / 2, [{ half: [0.5, wallHeight / 2, size / 40], offset: [0, wallHeight / 2, 0] }]);
-      this._fixed('boundary', size / 2, -10, [{ half: [size / 40, wallHeight / 2, 0.5], offset: [0, wallHeight / 2, 0] }]);
-      this._fixed('boundary', size / 2, size + 10, [{ half: [size / 40, wallHeight / 2, 0.5], offset: [0, wallHeight / 2, 0] }]);
+      this._boundaries();
       this._launchAt = new Map();
       this._buildings = game.buildings; this._objects = game.staticObjects;
       this.sync();
     }
 
+    _building(building) {
+      // Source rectangles rotate around their centre, matching the world lot
+      // footprint and the on-foot/ragdoll oriented boxes.
+      return this._fixed('building', building.x + building.w / 2, building.y + building.h / 2,
+        [{ half: [building.w / 40, building.height / 2, building.h / 40], offset: [0, building.height / 2, 0] }], building);
+    }
+
+    _worldSize() {
+      return clamp(finite(this.game.world?.size, finite(this.game.worldSize, finite(this.game.constructor?.SIZE, 2160))), 80, 20000);
+    }
+
+    _boundaries() {
+      const size = this._worldSize(), wallHeight = 6;
+      for (const body of this.world.bodies.slice()) if (body.kind === 'boundary') this.world.removeBody(body);
+      this._fixed('boundary', -10, size / 2, [{ half: [0.5, wallHeight / 2, size / 40], offset: [0, wallHeight / 2, 0] }]);
+      this._fixed('boundary', size + 10, size / 2, [{ half: [0.5, wallHeight / 2, size / 40], offset: [0, wallHeight / 2, 0] }]);
+      this._fixed('boundary', size / 2, -10, [{ half: [size / 40, wallHeight / 2, 0.5], offset: [0, wallHeight / 2, 0] }]);
+      this._fixed('boundary', size / 2, size + 10, [{ half: [size / 40, wallHeight / 2, 0.5], offset: [0, wallHeight / 2, 0] }]);
+      this.size = size;
+    }
+
     _fixed(kind, x, z, parts, source) {
-      const body = new C.Body({ mass: 0, material: this.wallMaterial, position: new C.Vec3(x / SCALE, 0, z / SCALE) });
+      const body = new C.Body({ mass: 0, material: this.wallMaterial, position: new C.Vec3(x / SCALE, finite(source?.elevation), z / SCALE) });
       body.kind = kind; body.source = source;
       if (source && source.angle) body.quaternion.setFromEuler(0, -source.angle, 0);
       for (const part of parts) {
@@ -102,9 +119,10 @@
     }
 
     sync() {
+      if (this.size !== this._worldSize()) this._boundaries();
       if (this._buildings !== this.game.buildings || this._objects !== this.game.staticObjects) {
         for (const body of this.world.bodies.slice()) if (body.mass === 0 && body !== this.floor && body.kind !== 'boundary') this.world.removeBody(body);
-        for (const b of this.game.buildings) this._fixed('building', b.x + b.w / 2, b.y + b.h / 2, [{ half: [b.w / 40, b.height / 2, b.h / 40], offset: [0,b.height / 2,0] }]);
+        for (const building of this.game.buildings) this._building(building);
         for (const object of this.game.staticObjects) this._fixed(object.kind, object.x, object.y, object.parts, object);
         this._buildings = this.game.buildings; this._objects = this.game.staticObjects;
       }

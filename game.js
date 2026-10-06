@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const { Game, SIZE, ROAD_CENTERS, ROAD_WIDTH, CAR_TYPES, GADGETS, POCKET_ITEMS, PAINT_COLORS, DISTRICTS } = MayhemCore;
+  const { Game, SIZE, CAR_TYPES, GADGETS, POCKET_ITEMS, PAINT_COLORS, DISTRICTS } = MayhemCore;
   const $ = id => document.getElementById(id);
   const canvas = $('game-canvas');
   const game = new Game();
@@ -449,14 +449,28 @@
   function drawMinimap() {
     const r = minimap.getBoundingClientRect(), w = r.width, h = r.height, scale = w / SIZE;
     mini.clearRect(0, 0, w, h); mini.fillStyle = '#608d76'; mini.fillRect(0, 0, w, h);
-    for (const block of game.blocks || []) {
-      mini.fillStyle = DISTRICTS[block.district]?.mapColor || '#7e9f83';
-      mini.fillRect(block.x * scale, block.y * scale, block.w * scale, block.h * scale);
+    for (const area of game.areas || []) {
+      mini.fillStyle = DISTRICTS[area.district]?.mapColor || '#7e9f83';
+      if (area.points?.length) {
+        mini.beginPath();
+        area.points.forEach((point, index) => { if (index) mini.lineTo(point.x * scale, point.y * scale); else mini.moveTo(point.x * scale, point.y * scale); });
+        mini.closePath(); mini.fill();
+      }
     }
-    mini.fillStyle = '#3b4655';
-    for (const road of ROAD_CENTERS) { mini.fillRect((road - ROAD_WIDTH / 2) * scale, 0, ROAD_WIDTH * scale, h); mini.fillRect(0, (road - ROAD_WIDTH / 2) * scale, w, ROAD_WIDTH * scale); }
+    mini.strokeStyle = '#3b4655'; mini.lineCap = 'round'; mini.lineJoin = 'round';
+    for (const road of game.roads) {
+      mini.lineWidth = Math.max(1.1, road.width * scale);
+      mini.beginPath();
+      road.points.forEach((point, index) => { if (index) mini.lineTo(point.x * scale, point.y * scale); else mini.moveTo(point.x * scale, point.y * scale); });
+      mini.stroke();
+    }
     mini.fillStyle = '#b3b7a0';
-    for (const building of game.buildings) mini.fillRect(building.x * scale, building.y * scale, building.w * scale, building.h * scale);
+    for (const building of game.buildings) {
+      mini.save(); mini.translate((building.x + building.w / 2) * scale, (building.y + building.h / 2) * scale);
+      mini.rotate(building.angle || 0);
+      mini.fillRect(-building.w * scale / 2, -building.h * scale / 2, building.w * scale, building.h * scale);
+      mini.restore();
+    }
     for (const service of game.services) { mini.fillStyle = service.id === 'wash' ? '#70e6db' : '#e6f77c'; mini.fillRect(service.x * scale - 2, service.y * scale - 2, 4, 4); }
     const t = target();
     if (t) { mini.strokeStyle = '#effa88'; mini.lineWidth = 2; mini.beginPath(); mini.arc(t.x * scale, t.y * scale, 5, 0, Math.PI * 2); mini.stroke(); }

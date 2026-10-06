@@ -1,24 +1,15 @@
 (function (root) {
   'use strict';
 
-  const SIZE = 2160;
+  const World = root.MayhemWorld || (typeof require === 'function' ? require('./world.js') : null);
+  const SIZE = World.SIZE;
+  // Kept as a compatibility export for old tools; routing uses RoadNetwork.
   const ROAD_CENTERS = [180, 540, 900, 1260, 1620, 1980];
   const ROAD_WIDTH = 104;
-  const SIDEWALK_WIDTH = 32;
+  const SIDEWALK_WIDTH = World.SIDEWALK_WIDTH;
   const BUILDING_SETBACK = ROAD_WIDTH / 2 + SIDEWALK_WIDTH;
-  const DISTRICTS = Object.freeze({
-    heights: Object.freeze({ id: 'heights', name: 'Biscuit Heights', color: '#bcd2ae', mapColor: '#bcd2ae' }),
-    works: Object.freeze({ id: 'works', name: 'Waffle Works', color: '#b8c7cd', mapColor: '#b8c7cd' }),
-    market: Object.freeze({ id: 'market', name: 'Market Mile', color: '#d9c6b6', mapColor: '#d9c6b6' }),
-    riverfront: Object.freeze({ id: 'riverfront', name: 'Riverfront', color: '#b7d5c7', mapColor: '#b7d5c7' })
-  });
-  function districtAt(point, y) {
-    const x = typeof point === 'number' ? point : point.x;
-    y = typeof point === 'number' ? y : point.y;
-    const col = Math.max(0, Math.min(4, Math.floor((x - ROAD_CENTERS[0]) / 360)));
-    const row = Math.max(0, Math.min(4, Math.floor((y - ROAD_CENTERS[0]) / 360)));
-    return DISTRICTS[row >= 3 ? 'riverfront' : row === 2 || col === 2 ? 'market' : col < 2 ? 'heights' : 'works'];
-  }
+  const DISTRICTS = World.DISTRICTS;
+  const districtAt = World.districtAt;
   const CAR_TYPES = {
     compact: { name: 'Pocket Rocket', maxSpeed: 300, acceleration: 430, handling: 2.7, grip: 9, mass: 1, width: 27, length: 46 },
     sports: { name: 'Sprinkle GT', maxSpeed: 370, acceleration: 490, handling: 2.5, grip: 6, mass: 0.9, width: 28, length: 49 },
@@ -68,6 +59,11 @@
   }
 
   function segmentHitsRect(a, b, rect) {
+    if (rect.angle) {
+      const cx = rect.x + rect.w / 2, cy = rect.y + rect.h / 2, c = Math.cos(rect.angle), s = Math.sin(rect.angle);
+      const local = point => ({ x: (point.x-cx)*c + (point.y-cy)*s, y: -(point.x-cx)*s + (point.y-cy)*c });
+      return segmentHitsRect(local(a),local(b),{ x: -rect.w/2, y: -rect.h/2, w: rect.w, h: rect.h });
+    }
     let low = 0, high = 1;
     const dx = b.x - a.x, dy = b.y - a.y;
     for (const [p, q] of [[-dx, a.x - rect.x], [dx, rect.x + rect.w - a.x], [-dy, a.y - rect.y], [dy, rect.y + rect.h - a.y]]) {
@@ -112,10 +108,7 @@
       this.particles = [];
       this.projectiles = [];
       this.skidMarks = [];
-      this.services = [
-        { id: 'garage', x: 900, y: 900, label: 'Sprinkle Garage' },
-        { id: 'wash', x: 1620, y: 1980, label: 'Cool-Down Car Wash · $75' }
-      ];
+      this.services = [];
       this._troubleCooldown = 0;
       this._impactCooldown = 0;
       this._actionCooldown = 0;
@@ -124,8 +117,6 @@
       this._driftTime = 0;
       this._nearMisses = new Map();
       this._makeTown();
-      this._makeStreetObjects();
-      this._makePedestrians();
       this.vehiclePhysics = new VehiclePhysics.VehicleWorld(this, CAR_TYPES);
     }
 
@@ -147,82 +138,50 @@
     drainEvents() { return this._events.splice(0); }
 
     _makeTown() {
-      this._makeBlocks();
-      this._addCar(916, 1080, -Math.PI / 2, 'compact', '#ffd15b');
-      const parked = [[540, 730], [1260, 370], [1620, 1080], [180, 1520], [1980, 720], [1260, 1770], [540, 1910], [1980, 1730]];
-      parked.forEach(([x, y], i) => this._addCar(x + (i % 2 ? -22 : 22), y, -Math.PI / 2, ['compact', 'sports', 'van'][i % 3], COLORS[i % COLORS.length]));
-      for (let i = 0; i < 13; i++) {
-        const col = i % 6, row = (Math.floor(i / 6) * 2 + 1) % 6;
-        const car = this._addCar(ROAD_CENTERS[col], ROAD_CENTERS[row], i % 2 ? 0 : Math.PI / 2, ['compact', 'van', 'sports'][i % 3], COLORS[(i + 2) % COLORS.length], true);
-        car.route = this._wanderRoute(car);
+      this.world = World.createWorld(); this.network = this.world.network;
+      this.roads = this.world.roads; this.nodes = this.world.nodes;
+      this.blocks = this.world.blocks; this.areas = this.world.areas;
+      this.buildings = this.world.buildings; this.staticObjects = this.world.staticObjects;
+      this.services = this.world.services; this.pedPaths = this.world.pedPaths;
+      Object.assign(this.player, this.world.start.player);
+      const starter = this.world.start.car;
+      this._addCar(starter.x, starter.y, starter.angle, starter.kind, starter.color);
+      for (const spawn of this.world.vehicleSpawns) {
+        if (distance(spawn, starter) < 5) continue;
+        const candidate = { ...spawn, elevation: 0 };
+        if (!this._vehicleFree(candidate) || this._vehicles().some(other => this._vehicleContact(candidate, other))) continue;
+        const car = this._addCar(spawn.x, spawn.y, spawn.angle, spawn.kind, spawn.color, spawn.traffic);
+        car.roadId = spawn.roadId;
+        if (car.traffic) car.route = this._wanderRoute(car);
       }
-      this.police.push({ id: 'police-' + this._nextId++, x: 1260, y: 180, angle: Math.PI / 2, speed: 0, route: [{ x: 1260, y: 540 }], routeTimer: 4, lastSeen: { x: 900, y: 1080 } });
-    }
-
-    _makeBlocks() {
-      const names = ['Biscuit Bank', 'Waffle Works', 'Disco Depot', 'Sprinkle Shop', 'Crumb Café', 'The Noodle Hut', 'Bean Palace', 'Fudge Factory'];
-      for (let row = 0; row < 5; row++) for (let col = 0; col < 5; col++) {
-        const x = ROAD_CENTERS[col], y = ROAD_CENTERS[row], district = districtAt({ x: x + 180, y: y + 180 }).id;
-        const block = { id: 'block-' + row + '-' + col, row, col, x, y, w: 360, h: 360, district,
-          mapColor: DISTRICTS[district].mapColor, pavement: { x: x + 52, y: y + 52, w: 256, h: 256 },
-          buildable: { x: x + BUILDING_SETBACK, y: y + BUILDING_SETBACK, w: 192, h: 192 }, buildings: [] };
-        this.blocks.push(block);
-        const add = (dx, dy, w, h, height, style) => {
-          const building = { id: block.id + '-building-' + block.buildings.length, blockId: block.id, district, style,
-            x: x + dx, y: y + dy, w, h, height, color: COLORS[(row + col * 2 + block.buildings.length) % COLORS.length],
-            name: names[(row * 5 + col + block.buildings.length) % names.length] };
-          block.buildings.push(building); this.buildings.push(building);
-        };
-        if (row === 2 && col === 2) {
-          block.kind = block.landUse = 'park'; block.courtyard = { x: x + 84, y: y + 84, w: 192, h: 192 };
-        } else if (district === 'heights') {
-          block.kind = block.landUse = 'garden';
-          add(96 + col * 10, 96 + row * 8, 108 + col * 12, 116 - row * 14, 3.7 + (row + col) * 0.45, 'cottage');
-          block.courtyard = { x: x + 92, y: y + 232, w: 180, h: 40 };
-        } else if (district === 'works') {
-          block.kind = block.landUse = 'yard';
-          add(92, 92, 152 + row * 12, 100 - col * 2, 5.1 + row * 0.6 + (col - 3) * 0.7, 'warehouse');
-          add(92, 226, 68 + row * 6, 44, 3.0 + row * 0.4, 'warehouse');
-          block.courtyard = { x: x + 178, y: y + 212, w: 88, h: 58 };
-        } else if (district === 'market') {
-          block.kind = block.landUse = 'shops';
-          for (let i = 0; i < 3; i++) add(84 + i * 70, 84, 52, 76 + (i === 1 ? 8 : 0),
-            row === 1 && col === 2 && i === 1 ? 13.4 : 4.4 + ((row + col + i) % 4) * 1.1,
-            row === 1 && col === 2 && i === 1 ? 'tower' : 'shop');
-          for (let i = 0; i < 2; i++) add(84 + i * 112, 212, 80, 64, 4.8 + ((row + i) % 3) * 0.9, 'shop');
-          block.courtyard = { x: x + 84, y: y + 176, w: 192, h: 24 };
-        } else if (col % 2) {
-          block.kind = block.landUse = 'court';
-          add(212, 216, 58, 54, 3.1 + (row - 3) * 0.4, 'cafe');
-          block.courtyard = { x: x + 90, y: y + 94, w: 114, h: 174 };
-        } else {
-          block.kind = block.landUse = 'cafe';
-          add(96, 100, 66 + col * 3, 74, 3.6 + (row - 3) * 0.45, 'cafe');
-          add(186, 208, 82, 62, 3.0 + col * 0.15, 'cafe');
-          block.courtyard = { x: x + 96, y: y + 188, w: 174, h: 16 };
-        }
-        block.density = block.buildings.reduce((area, building) => area + building.w * building.h, 0) / (192 * 192);
-      }
+      this._makePedestrians();
+      const patrolPoint = this.nodes.find(node => distance(node, this.player) > 500 && this._vehicleFree({ ...node, kind: 'compact', angle: 0 })) || this._safeRoadPosition({ x: 1260, y: 180 });
+      this.police.push({ id: 'police-' + this._nextId++, x: patrolPoint.x, y: patrolPoint.y, angle: patrolPoint.angle || 0,
+        speed: 0, route: [], routeTimer: 0, lastSeen: { x: this.player.x, y: this.player.y } });
     }
 
     _makePedestrians() {
-      const counts = { heights: 6, works: 5, market: 19, riverfront: 6 };
-      for (const [district, count] of Object.entries(counts)) {
-        const blocks = this.blocks.filter(block => block.district === district);
+      const budgets = { heights:6,works:6,market:12,riverfront:8,willow:8,orchard:8 }, used = {};
+      for (const path of this.pedPaths) {
+        const paths = this.pedPaths.filter(candidate => candidate.district===path.district).length;
+        const indexInDistrict = used[path.district] || 0; used[path.district] = indexInDistrict + 1;
+        const budget = budgets[path.district] || paths;
+        const count = Math.floor((indexInDistrict+1)*budget/paths)-Math.floor(indexInDistrict*budget/paths);
         for (let n = 0; n < count; n++) {
-          const block = blocks[n % blocks.length], edge = Math.floor(n / blocks.length) % 4;
-          const vertical = edge < 2, across = edge % 2 ? 290 : 70;
+          let index = Math.min(path.points.length - 2, Math.floor((n + 0.4) / count * (path.points.length - 1)));
           let point = null;
-          for (const along of [118, 190, 252, 154, 220, 100]) {
-            const candidate = { x: block.x + (vertical ? across : along), y: block.y + (vertical ? along : across) };
-            if (this._personFree(candidate.x, candidate.y, Physics.NPC_RADIUS) && this.peds.every(ped => distance(ped, candidate) > Physics.NPC_RADIUS * 3)) { point = candidate; break; }
+          for (let trial = 0; trial < path.points.length; trial++) {
+            const candidate = path.points[(index + trial) % path.points.length];
+            if (this._personFree(candidate.x, candidate.y, NPC_RADIUS) && this.peds.every(ped => distance(ped, candidate) > NPC_RADIUS * 3)) {
+              point = candidate; index = (index + trial) % path.points.length; break;
+            }
           }
-          if (!point) point = this._safeRoadPosition({ x: block.x, y: block.y }, Physics.NPC_RADIUS);
-          const index = this.peds.length;
-          this.peds.push({ id: 'ped-' + index, ...point, angle: vertical ? Math.PI / 2 : 0, stunned: 0, bubble: '', bubbleTimer: 0,
-            homeX: point.x, homeY: point.y, district, walkAxis: vertical ? 'y' : 'x',
-            walkMin: (vertical ? block.y : block.x) + 96, walkMax: (vertical ? block.y : block.x) + 270,
-            color: COLORS[index % COLORS.length], pace: 15 + this._random() * 12 });
+          if (!point) continue;
+          const next = path.points[Math.min(index + 1,path.points.length - 1)], id = this.peds.length;
+          this.peds.push({ id: 'ped-' + id, x: point.x, y: point.y, angle: Math.atan2(next.y-point.y,next.x-point.x),
+            stunned: 0, bubble: '', bubbleTimer: 0, homeX: point.x, homeY: point.y, district: path.district,
+            pathId: path.id, pathIndex: index + 1 < path.points.length ? index + 1 : index - 1,
+            pathDirection: index + 1 < path.points.length ? 1 : -1, color: COLORS[id % COLORS.length], pace: 15 + this._random() * 12 });
         }
       }
     }
@@ -233,47 +192,9 @@
       return car;
     }
 
-    _makeStreetObjects() {
-      const add = (kind, x, y, parts, extra = {}) => {
-        const width = Math.max(...parts.map(p => Math.abs(p.offset[0]) + p.half[0])) * 40;
-        const depth = Math.max(...parts.map(p => Math.abs(p.offset[2]) + p.half[2])) * 40;
-        const height = Math.max(...parts.map(p => p.offset[1] + p.half[1]));
-        this.staticObjects.push({ id: kind + '-' + this.staticObjects.length, kind, x: x * 20, y: y * 20, elevation: 0, width, depth, height, parts, ...extra });
-      };
-      const box = (half, offset) => ({ half, offset });
-      const cylinder = (radius, halfHeight, offset) => ({ shape: 'cylinder', half: [radius, halfHeight, radius], offset });
-      add('fountain', 54, 54, [cylinder(1.65, 0.25, [0, 0.35, 0]), cylinder(0.18, 0.65, [0, 0.95, 0]), cylinder(0.78, 0.09, [0, 1.36, 0])]);
-      [[49.7,49.6],[58.2,49.6],[49.7,58.3],[58.2,58.3]].forEach(([x,y], i) => add('tree', x, y, [cylinder(0.147, 0.735, [0,0.735,0])], { scale: 1.05, variety: i }));
-      for (const [x,y] of [[50.95,49.6],[56.95,49.6],[50.95,58.3],[56.95,58.3]]) add('bench', x, y, [box([0.7,0.075,0.225],[0,0.44,0]),box([0.7,0.27,0.065],[0,0.83,0.21])]);
-      for (const x of ROAD_CENTERS) for (const y of ROAD_CENTERS) if ((Math.round(x / 360) + Math.round(y / 360)) % 2 === 0) add('lamp', x / 20 + 3.14, y / 20 + 3.2, [cylinder(0.075,1.9,[0,1.9,0]),box([0.45,0.06,0.05],[-0.4,3.65,0]),box([0.25,0.07,0.18],[-0.82,3.59,0])]);
-      add('garage', 48.9, 48.6, [box([0.95,0.9,0.65],[0,0.9,0]),box([1.05,0.09,0.75],[0,1.88,0])]);
-      add('wash',81,102.35,[box([0.13,1.25,0.13],[-2.25,1.25,0]),box([0.13,1.25,0.13],[2.25,1.25,0]),box([2.4,0.175,0.325],[0,2.55,0])]);
-      for (const block of this.blocks) {
-        const worldX = block.x / 20, worldY = block.y / 20, identity = { district: block.district, blockId: block.id };
-        if (block.kind === 'garden') {
-          add('tree', worldX + 12.5, worldY + 7.2, [cylinder(0.14,0.75,[0,0.75,0])], { ...identity, scale: 1.0, variety: block.row + block.col });
-          add('bench', worldX + 6.5, worldY + 12.5, [box([0.7,0.075,0.225],[0,0.44,0]),box([0.7,0.27,0.065],[0,0.83,0.21])], identity);
-        } else if (block.kind === 'shops') {
-          add('planter', worldX + 5.0, worldY + 9.4, [box([0.5,0.28,0.3],[0,0.28,0])], identity);
-          if (block.col % 2 === 0) add('bollard', worldX + 13.7, worldY + 3.55, [cylinder(0.1,0.36,[0,0.36,0])], identity);
-        } else if (block.kind === 'court') {
-          add('bench', worldX + 12.4, worldY + 6.8, [box([0.7,0.075,0.225],[0,0.44,0]),box([0.7,0.27,0.065],[0,0.83,0.21])], identity);
-          add('tree', worldX + 4.6, worldY + 13.7, [cylinder(0.14,0.75,[0,0.75,0])], { ...identity, scale: 0.9, variety: block.col });
-        } else if (block.kind === 'cafe') {
-          add('planter', worldX + 12.2, worldY + 5.4, [box([0.55,0.28,0.35],[0,0.28,0])], identity);
-        }
-      }
-      for (const district of Object.keys(DISTRICTS)) {
-        const block = this.blocks.find(candidate => candidate.district === district && candidate.kind !== 'park');
-        add('wayfinding', (block.x + 70) / 20, (block.y + 70) / 20,
-          [cylinder(0.055,0.68,[0,0.68,0]),box([0.48,0.19,0.04],[0,1.3,0])],
-          { district, label: DISTRICTS[district].name, blockId: block.id });
-      }
-    }
-
     _isFree(x, y, radius = PLAYER_RADIUS) {
       if (x < radius || y < radius || x > SIZE - radius || y > SIZE - radius) return false;
-      return !this.buildings.some(b => Math.hypot(x - clamp(x, b.x, b.x + b.w), y - clamp(y, b.y, b.y + b.h)) < radius) &&
+      return !this.buildings.some(b => this._circlePart({ x, y }, radius, { box: this._buildingBox(b) })) &&
         !this._staticParts().some(part => part.bottom < PERSON_HEIGHT && this._circlePart({ x, y }, radius, part));
     }
 
@@ -282,6 +203,14 @@
     _vehicleBox(entity) {
       const type = CAR_TYPES[entity.kind] || CAR_TYPES.compact;
       return orientedBox(entity, type.length, type.width);
+    }
+
+    _buildingBox(building) { return orientedBox({ x: building.x + building.w/2, y: building.y + building.h/2, angle: building.angle || 0 },building.w,building.h); }
+
+    _buildingBounds(building) {
+      const box = this._buildingBox(building), ex = Math.abs(box.axes[0].x)*box.half[0] + Math.abs(box.axes[1].x)*box.half[1];
+      const ey = Math.abs(box.axes[0].y)*box.half[0] + Math.abs(box.axes[1].y)*box.half[1];
+      return { x: box.x-ex, y: box.y-ey, w: ex*2, h: ey*2 };
     }
 
     _vehicleContact(a, b) {
@@ -297,7 +226,7 @@
       const ex = Math.abs(box.axes[0].x) * box.half[0] + Math.abs(box.axes[1].x) * box.half[1];
       const ey = Math.abs(box.axes[0].y) * box.half[0] + Math.abs(box.axes[1].y) * box.half[1];
       return entity.x >= ex && entity.x <= SIZE - ex && entity.y >= ey && entity.y <= SIZE - ey &&
-        !this.buildings.some(b => boxContact(box, orientedBox({ x: b.x + b.w / 2, y: b.y + b.h / 2, angle: 0 }, b.w, b.h))) &&
+        !this.buildings.some(b => boxContact(box, this._buildingBox(b))) &&
         !this._staticParts().some(part => part.bottom < VehiclePhysics.height(entity) && boxContact(box, part.box));
     }
 
@@ -407,8 +336,9 @@
         const x = clamp(entity.x, ex, SIZE - ex), y = clamp(entity.y, ey, SIZE - ey);
         if (x !== entity.x || y !== entity.y) { entity.x = x; entity.y = y; changed = collided = true; }
         for (const b of this.buildings) {
-          if (entity.x + ex <= b.x || entity.x - ex >= b.x + b.w || entity.y + ey <= b.y || entity.y - ey >= b.y + b.h) continue;
-          const rect = orientedBox({ x: b.x + b.w / 2, y: b.y + b.h / 2, angle: 0 }, b.w, b.h);
+          const bounds = this._buildingBounds(b);
+          if (entity.x + ex <= bounds.x || entity.x - ex >= bounds.x + bounds.w || entity.y + ey <= bounds.y || entity.y - ey >= bounds.y + bounds.h) continue;
+          const rect = this._buildingBox(b);
           const hit = boxContact(this._vehicleBox(entity), rect);
           if (!hit) continue;
           entity.x += hit.nx * (hit.depth + 0.001); entity.y += hit.ny * (hit.depth + 0.001); changed = collided = true;
@@ -463,16 +393,10 @@
         let changed = false;
         for (const b of this.buildings) {
           if (!this._heightOverlap(entity, { elevation: 0 }, PERSON_HEIGHT, b.height)) continue;
-          if (entity.x + radius <= b.x || entity.x - radius >= b.x + b.w || entity.y + radius <= b.y || entity.y - radius >= b.y + b.h) continue;
-          const nx = clamp(entity.x, b.x, b.x + b.w), ny = clamp(entity.y, b.y, b.y + b.h);
-          const rx = entity.x - nx, ry = entity.y - ny, d = Math.hypot(rx, ry);
-          if (d >= radius) continue;
-          changed = collision = true;
-          if (d > 0.001) { entity.x = nx + rx / d * radius; entity.y = ny + ry / d * radius; }
-          else {
-            const edges = [{ amount: entity.x - b.x, x: b.x - radius, y: entity.y }, { amount: b.x + b.w - entity.x, x: b.x + b.w + radius, y: entity.y }, { amount: entity.y - b.y, x: entity.x, y: b.y - radius }, { amount: b.y + b.h - entity.y, x: entity.x, y: b.y + b.h + radius }];
-            edges.sort((a, z) => a.amount - z.amount); entity.x = edges[0].x; entity.y = edges[0].y;
-          }
+          const bounds = this._buildingBounds(b);
+          if (entity.x + radius <= bounds.x || entity.x - radius >= bounds.x + bounds.w || entity.y + radius <= bounds.y || entity.y - radius >= bounds.y + bounds.h) continue;
+          const hit = this._circlePart(entity,radius,{ box: this._buildingBox(b) });
+          if (hit) { entity.x += hit.nx * (hit.depth + 0.002); entity.y += hit.ny * (hit.depth + 0.002); changed = collision = true; }
         }
         for (const part of this._staticParts()) {
           if (finite(entity.elevation, 0) >= part.top - 0.025 || finite(entity.elevation, 0) + PERSON_HEIGHT <= part.bottom + 0.025) continue;
@@ -484,11 +408,7 @@
       return collision;
     }
 
-    _roadPosition(point) {
-      const x = ROAD_CENTERS.reduce((a, b) => Math.abs(point.x - a) < Math.abs(point.x - b) ? a : b);
-      const y = ROAD_CENTERS.reduce((a, b) => Math.abs(point.y - a) < Math.abs(point.y - b) ? a : b);
-      return Math.abs(point.x - x) < Math.abs(point.y - y) ? { x, y: clamp(point.y, 180, 1980), axis: 'y' } : { x: clamp(point.x, 180, 1980), y, axis: 'x' };
-    }
+    _roadPosition(point) { return this.network.nearestRoad(point); }
 
     _safeRoadPosition(point, radius = 18, ignore = null) {
       const road = this._roadPosition(point);
@@ -497,47 +417,75 @@
           const vehicle = { ...ignore, ...candidate, elevation: 0, orientation: null, upright: true };
           return this._vehicleFree(vehicle) && !this._vehicles().some(other => other !== ignore && this._vehicleContact(vehicle, other));
         }
-        return this._personFree(candidate.x, candidate.y, radius);
+        return this._personFree(candidate.x,candidate.y,radius);
       };
-      for (const offset of [0, 60, -60, 120, -120, 180, -180, 240, -240]) {
-        const candidate = { x: road.x + (road.axis === 'x' ? offset : 0), y: road.y + (road.axis === 'y' ? offset : 0) };
+      for (const arc of [0,60,-60,120,-120,200,-200,320,-320]) for (const lane of [0,18,-18]) {
+        const candidate = this.network.pointOnRoad(road.roadId,road.s + arc,lane);
         if (free(candidate)) return candidate;
       }
-      for (const x of ROAD_CENTERS) for (const y of ROAD_CENTERS) if (free({ x, y })) return { x, y };
-      return { x: road.x, y: road.y };
-    }
-
-    _nearestNode(point) {
-      const nearest = value => ROAD_CENTERS.reduce((a, b) => Math.abs(value - a) < Math.abs(value - b) ? a : b);
-      return { x: nearest(point.x), y: nearest(point.y) };
-    }
-
-    _roadRoute(from, to) {
-      const start = this._roadPosition(from), finish = this._roadPosition(to);
-      const candidates = p => ROAD_CENTERS.map(n => p.axis === 'x' ? { x: n, y: p.y } : { x: p.x, y: n });
-      let best = null;
-      for (const a of candidates(start)) for (const b of candidates(finish)) {
-        const cost = distance(start, a) + Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + distance(b, finish);
-        if (!best || cost < best.cost) best = { a, b, cost };
+      for (const node of this.nodes.slice().sort((a,b) => distance(a,point)-distance(b,point))) {
+        const projection = this._roadPosition(node);
+        for (const offset of [0,70,-70,140,-140]) {
+          const candidate = this.network.pointOnRoad(projection.roadId,projection.s+offset,0);
+          if (free(candidate)) return candidate;
+        }
       }
-      const route = [], add = p => { if (!route.length || distance(route[route.length - 1], p) > 1) route.push({ x: p.x, y: p.y }); };
-      add(start); add(best.a);
-      let x = best.a.x, y = best.a.y;
-      while (x !== best.b.x) { x += Math.sign(best.b.x - x) * 360; add({ x, y }); }
-      while (y !== best.b.y) { y += Math.sign(best.b.y - y) * 360; add({ x, y }); }
-      add(finish);
-      while (route.length > 1 && distance(from, route[0]) < 25) route.shift();
-      return route;
+      return { x: road.x, y: road.y, angle: road.angle };
     }
+
+    _nearestNode(point) { return this.nodes.reduce((a,b) => distance(a,point) < distance(b,point) ? a : b); }
+
+    _roadRoute(from,to,laneOffset = 0) { return this.network.route(from,to,laneOffset); }
 
     _wanderRoute(car) {
-      const node = this._nearestNode(car), previous = car.previousNode;
-      let options = [[360, 0], [-360, 0], [0, 360], [0, -360]].map(([dx, dy]) => ({ x: node.x + dx, y: node.y + dy })).filter(p => p.x >= 180 && p.y >= 180 && p.x <= 1980 && p.y <= 1980);
-      const forward = options.filter(p => !previous || distance(previous, p) > 10);
-      if (forward.length) options = forward;
-      car.previousNode = node;
-      const next = this._pick(options), heading = Math.atan2(next.y - node.y, next.x - node.x);
-      return [{ x: next.x - Math.sin(heading) * 20, y: next.y + Math.cos(heading) * 20 }];
+      const connected = this.nodes.filter(node => this.network.adjacency.get(node.id).length > 1);
+      let options = connected.filter(node => distance(node,car)>180 && distance(node,car)<1600 && node.id!==car.wanderGoal);
+      if (!options.length) options = connected.filter(node => node.id!==car.wanderGoal);
+      // A random shortest route can start with an unnecessary U-turn. Choose
+      // a destination in the current direction when the graph allows it.
+      // Calm patrols obey the same lanes as residents. Wanted pursuit uses
+      // _roadRoute without a lane offset, plus its close direct approach.
+      const offset = 18, start = Math.floor(this._random()*options.length);
+      let fallback;
+      for (let n=0;n<options.length;n++) {
+        const goal = options[(start+n)%options.length], route = this._roadRoute(car,goal,offset);
+        const forward = route.find(point => distance(car,point)>55) || route.at(-1);
+        const error = forward ? Math.abs(wrapAngle(Math.atan2(forward.y-car.y,forward.x-car.x)-finite(car.angle,0))) : Math.PI;
+        if (!fallback || error<fallback.error) fallback={goal,route,error};
+        if (error<1.1) { car.wanderGoal=goal.id; return route; }
+      }
+      car.wanderGoal=fallback.goal.id; return fallback.route;
+    }
+
+    _advanceRoute(entity, route, radius = 14) {
+      while (route.length > 1) {
+        const target = route[0], next = route[1], beyond = (entity.x-target.x)*(next.x-target.x)+(entity.y-target.y)*(next.y-target.y)>0;
+        if (distance(entity,target) < radius || beyond && distance(entity,target)<48) route.shift(); else break;
+      }
+      return route[0];
+    }
+
+    _routeTarget(entity, route, lookAhead = 60) {
+      if (route.length<2) return route[0];
+      let best=null;
+      // Project only onto the upcoming samples; distant crossings must not
+      // skip a loop, junction or neighborhood on the selected graph route.
+      for (let i=0;i<Math.min(route.length-1,8);i++) {
+        const a=route[i],b=route[i+1],dx=b.x-a.x,dy=b.y-a.y,length2=dx*dx+dy*dy;
+        const t=length2 ? clamp(((entity.x-a.x)*dx+(entity.y-a.y)*dy)/length2,0,1) : 1;
+        const point={x:a.x+dx*t,y:a.y+dy*t}, d=distance(entity,point);
+        if (!best || d<best.distance) best={index:i,t,point,distance:d};
+      }
+      if (best.distance>80) return route[0];
+      if (best.index>0) route.splice(0,best.index);
+      if (best.t>.98 && route.length>1) { route.shift(); best.point=route[0]; }
+      let point=best.point, remaining=lookAhead;
+      for (let i=1;i<route.length;i++) {
+        const next=route[i], span=distance(point,next);
+        if (span>=remaining && span>0) return {x:point.x+(next.x-point.x)*remaining/span,y:point.y+(next.y-point.y)*remaining/span};
+        remaining-=span; point=next;
+      }
+      return route.at(-1);
     }
 
     _confetti(x, y, count = 22, height) {
@@ -700,7 +648,7 @@
           const elapsed = projectile.maxLife - projectile.life;
           projectile.height = projectile.aimed ? projectile.startHeight + projectile.verticalSpeed * elapsed - 2 * elapsed * elapsed : finite(projectile.baseHeight, 0) + MUZZLE_HEIGHT + Math.sin(Math.PI * (1 - projectile.life / projectile.maxLife)) * 1.1;
           const atHeight = height => !projectile.aimed || Math.min(before.height, projectile.height) <= height && Math.max(before.height, projectile.height) >= 0.1;
-          const walls = this.buildings.some(b => atHeight(finite(b.height, 8)) && segmentHitsRect(before, projectile, { x: b.x - 3, y: b.y - 3, w: b.w + 6, h: b.h + 6 }));
+          const walls = this.buildings.some(b => atHeight(finite(b.height, 8)) && segmentHitsRect(before, projectile, { x: b.x - 3, y: b.y - 3, w: b.w + 6, h: b.h + 6, angle: b.angle || 0 }));
           const vehicles = this.vehiclePhysics.hitsSegment(before, projectile);
           const people = atHeight(PERSON_HEIGHT + 0.35 * CHARACTER_SCALE) && this.peds.some(ped => ped.stunned <= 0 && distance(ped, projectile) < 16 * CHARACTER_SCALE);
           const ground = projectile.aimed && projectile.height <= 0.12;
@@ -752,6 +700,7 @@
       this.player.stunned = 0; this.player.ragdollGrace = 1.4;
       const entity = this.current, p = this._safeRoadPosition(entity, this.player.vehicleId ? 18 : PLAYER_RADIUS, this.player.vehicleId ? entity : null);
       entity.x = p.x; entity.y = p.y;
+      if (this.player.vehicleId && Number.isFinite(p.angle)) entity.angle = p.angle;
       if (this.player.vehicleId) { this.vehiclePhysics.reset(entity); entity.health = Math.max(25, entity.health); }
       this.player.x = p.x; this.player.y = p.y; this.player.composure = Math.max(60, this.player.composure);
       this.player.elevation = this.player.verticalVelocity = 0; this.player.grounded = true;
@@ -774,10 +723,11 @@
     acceptMission(type) {
       if (this.mission) { this._toast('Finish or abandon your current gig first.'); return false; }
       const variation = this.completed % 2;
+      const anchors = this.world.missionAnchors, copyTargets = points => points.map(point => ({ x: point.x, y: point.y }));
       const recipes = {
-        delivery: { title: 'Emergency Disco', description: 'Collect the disco ball, then deliver it to the dance hall.', stage: 'pickup', targets: variation ? [{ x: 540, y: 1620 }, { x: 1980, y: 540 }] : [{ x: 900, y: 540 }, { x: 1980, y: 1620 }], totalTime: 80, reward: 140 },
-        dash: { title: 'Lawn Enforcement Slalom', description: 'Drive through six gates in order. Late finish? You still get base pay.', stage: 'checkpoints', targets: [{ x: 900, y: 540 }, { x: 1620, y: 540 }, { x: 1620, y: 1260 }, { x: 540, y: 1260 }, { x: 540, y: 1980 }, { x: 1980, y: 1980 }], totalTime: 105, reward: 180 },
-        party: { title: 'Operation Un-Boring', description: 'Drive to each party ring, slow down, and press H to honk.', stage: 'parties', targets: variation ? [{ x: 180, y: 900 }, { x: 1260, y: 540 }, { x: 1980, y: 1620 }] : [{ x: 540, y: 540 }, { x: 1620, y: 900 }, { x: 1260, y: 1980 }], totalTime: 110, reward: 200 }
+        delivery: { title: 'Emergency Disco', description: 'Collect the disco ball, then deliver it to the dance hall.', stage: 'pickup', targets: copyTargets(variation ? anchors.deliveryAlt : anchors.delivery), totalTime: 100, reward: 140 },
+        dash: { title: 'Lawn Enforcement Slalom', description: 'Drive through six gates across town and the suburbs. Late finish? You still get base pay.', stage: 'checkpoints', targets: copyTargets(anchors.dash), totalTime: 170, reward: 180 },
+        party: { title: 'Operation Un-Boring', description: 'Drive to each party ring, slow down, and press H to honk.', stage: 'parties', targets: copyTargets(variation ? anchors.partyAlt : anchors.party), totalTime: 150, reward: 200 }
       };
       const recipe = recipes[type];
       if (!recipe) { this._toast('Choose a delivery, dash, or party gig.'); return false; }
@@ -1106,20 +1056,48 @@
 
     _traffic(car, dt) {
       if (!car.route || !car.route.length) car.route = this._wanderRoute(car);
-      let target = car.route[0];
-      if (distance(car, target) < 12) { car.route = this._wanderRoute(car); target = car.route[0]; }
-      const angle = Math.atan2(target.y - car.y, target.x - car.x), desired = distance(car, target) < 75 ? 55 : 100;
-      let speed = desired;
-      if (this._vehicles().some(other => other !== car && distance(other, car) < 68 && Math.abs(wrapAngle(Math.atan2(other.y - car.y, other.x - car.x) - angle)) < 0.7)) speed = 8;
-      for (const other of this._vehicles()) if (other !== car && distance(other, car) < 75 && Math.abs(wrapAngle(Math.atan2(other.y - car.y, other.x - car.x) - angle)) < 0.7) {
-        const type = CAR_TYPES[car.kind] || CAR_TYPES.compact, otherType = CAR_TYPES[other.kind] || CAR_TYPES.compact;
-        const gap = (type.length + otherType.length) / 2 + 4;
-        speed = Math.min(speed, Math.max(0, distance(other, car) - gap) / dt);
-      }
+      this._advanceRoute(car, car.route);
+      if (car.route.length === 1 && distance(car,car.route[0])<22) car.route = this._wanderRoute(car);
+      const target = this._routeTarget(car,car.route,clamp(42+Math.abs(car.speed)*.35,45,75));
+      const angle = Math.atan2(target.y - car.y, target.x - car.x), error=Math.abs(wrapAngle(angle-car.angle));
+      const desired = error>1.15 ? 12 : error>.65 ? 22 : error>.35 ? 52 : 100;
+      const speed = this._trafficSpeed(car,angle,desired);
       this.vehiclePhysics.control(car, { targetSpeed: speed, heading: angle });
+      const blocker=this._vehicles().find(other=>other.id===car.blockedBy);
+      if(Math.abs(car.speed)<8 && speed<8 && blocker?.traffic && Math.abs(blocker.speed)<8) {
+        car.yieldTimer=(car.yieldTimer || 0)+dt;
+        const delay=1.2+(parseInt(car.id.replace(/\D/g,''),10) || 0)*.03;
+        if(car.yieldTimer>delay) {
+          // Rejoin the correct lane after a bumper nudge or a tight turn.
+          // Staggered refreshes give the first arrival a clear path without
+          // changing its destination or moving either physical body.
+          const goal=this.network.nodeById.get(car.wanderGoal);
+          if(goal) car.route=this._roadRoute(car,goal,18);
+          car.yieldTimer=0;
+        }
+      } else car.yieldTimer=0;
       if (Math.abs(car.speed) < 8 && speed > 25) car.blockedTime = (car.blockedTime || 0) + dt;
       else car.blockedTime = Math.max(0, (car.blockedTime || 0) - dt);
       if (car.blockedTime > 2.5) { car.route = this._wanderRoute(car); car.blockedTime = 0; }
+    }
+
+    _trafficSpeed(car,heading,desired) {
+      const type=CAR_TYPES[car.kind] || CAR_TYPES.compact,c=Math.cos(heading),s=Math.sin(heading);
+      let speed=desired; car.blockedBy=null;
+      for(const other of this._vehicles()) {
+        if(other===car || distance(other,car)>100 || !this._heightOverlap(car,other,VehiclePhysics.height(car),VehiclePhysics.height(other))) continue;
+        const dx=other.x-car.x,dy=other.y-car.y,along=dx*c+dy*s,lateral=Math.abs(-dx*s+dy*c);
+        const otherType=CAR_TYPES[other.kind] || CAR_TYPES.compact,angle=(other.angle || 0)-heading;
+        const otherWidth=(otherType.width*Math.abs(Math.cos(angle))+otherType.length*Math.abs(Math.sin(angle)))/2;
+        const otherLength=(otherType.length*Math.abs(Math.cos(angle))+otherType.width*Math.abs(Math.sin(angle)))/2;
+        // Opposing lanes are close, but a neighboring lane must not count as
+        // an obstacle unless the actual swept vehicle widths overlap.
+        if(along<=0 || lateral>type.width/2+otherWidth+2) continue;
+        const gap=type.length/2+otherLength+6;
+        const allowed=Math.max(0,(along-gap)*2);
+        if(allowed<speed) { speed=allowed; car.blockedBy=other.id; }
+      }
+      return speed;
     }
 
     _pedestrians(dt) {
@@ -1128,26 +1106,35 @@
         ped.bubbleTimer = Math.max(0, ped.bubbleTimer - dt);
         if (!ped.bubbleTimer) ped.bubble = '';
         if (ped.stunned > 0 || this.ragdolls.get(ped.id)) { ped.stunned = Math.max(0, ped.stunned - dt); continue; }
-        if (ped.walkAxis) {
-          const vertical = ped.walkAxis === 'y', along = vertical ? ped.y : ped.x;
-          const sideways = vertical ? ped.x - ped.homeX : ped.y - ped.homeY;
-          if (Math.abs(sideways) > 2) ped.angle = Math.atan2(ped.homeY - ped.y, ped.homeX - ped.x);
-          else if (along < ped.walkMin + 1) ped.angle = vertical ? Math.PI / 2 : 0;
-          else if (along > ped.walkMax - 1) ped.angle = vertical ? -Math.PI / 2 : Math.PI;
+        const path = ped.pathId && this.pedPaths.find(candidate => candidate.id===ped.pathId);
+        if (path) {
+          let target = path.points[ped.pathIndex];
+          if (distance(ped,target)>150) {
+            ped.pathIndex = path.points.reduce((best,point,index) => distance(point,ped)<distance(path.points[best],ped) ? index : best,0);
+            target = path.points[ped.pathIndex];
+          }
+          if (distance(ped,target)<3) {
+            if (ped.pathIndex + ped.pathDirection<0 || ped.pathIndex + ped.pathDirection>=path.points.length) ped.pathDirection *= -1;
+            ped.pathIndex += ped.pathDirection; target = path.points[ped.pathIndex];
+          }
+          ped.angle = Math.atan2(target.y-ped.y,target.x-ped.x);
         } else if (distance(ped, { x: ped.homeX, y: ped.homeY }) > 85) ped.angle = Math.atan2(ped.homeY - ped.y, ped.homeX - ped.x);
         const dx = Math.cos(ped.angle) * ped.pace * dt, dy = Math.sin(ped.angle) * ped.pace * dt;
-        if (this._move(ped, dx, dy, NPC_RADIUS)) ped.angle = wrapAngle(ped.angle + (ped.walkAxis ? Math.PI : Math.PI * (0.65 + this._random() * 0.2)));
+        if (this._move(ped, dx, dy, NPC_RADIUS)) {
+          if (path) { ped.pathDirection *= -1; ped.pathIndex = clamp(ped.pathIndex + ped.pathDirection,0,path.points.length-1); }
+          else ped.angle = wrapAngle(ped.angle + Math.PI * (0.65 + this._random() * 0.2));
+        }
       }
     }
 
     _updatePolice(dt) {
       const wanted = Math.max(1, this.heat);
       while (this.police.length < wanted) {
-        const candidates = [];
-        for (const x of ROAD_CENTERS) for (const y of ROAD_CENTERS) if (distance(this.current, { x, y }) > 440 && this.police.every(cop => distance(cop, { x, y }) > 120)) candidates.push({ x, y });
+        const candidates = this.nodes.map(node => ({ ...node, angle: this._roadPosition(node).angle })).filter(node => distance(this.current,node)>440 &&
+          this._vehicleFree({ ...node,kind:'compact' }) && this._vehicles().every(vehicle => distance(vehicle,node)>100));
         candidates.sort((a, b) => Math.abs(distance(this.current, a) - 650) - Math.abs(distance(this.current, b) - 650));
-        const point = candidates.length ? candidates[0] : { x: 180, y: 180 };
-        this.police.push({ id: 'police-' + this._nextId++, ...point, angle: 0, speed: 0, route: [], routeTimer: 0, lastSeen: { x: this.current.x, y: this.current.y } });
+        const point = candidates.length ? candidates[0] : this._safeRoadPosition({ x:this.current.x+650,y:this.current.y },18);
+        this.police.push({ id: 'police-' + this._nextId++, x:point.x,y:point.y,angle:point.angle || 0, speed: 0, route: [], routeTimer: 0, lastSeen: { x: this.current.x, y: this.current.y } });
       }
       if (this.police.length > wanted) this.police.length = wanted;
       let seen = false, contact = false;
@@ -1161,13 +1148,14 @@
           else cop.route = this._wanderRoute(cop);
           cop.routeTimer = this.heat ? 1.1 : 5;
         }
-        const direct = sight && distance(cop, this.current) < 180;
-        let target = direct ? this.current : cop.route[0];
-        while (!direct && target && distance(cop, target) < 18 && cop.route.length > 1) { cop.route.shift(); target = cop.route[0]; }
+        const direct = sight && distance(cop,this.current)<125 && this._roadPosition(cop).roadId===this._roadPosition(this.current).roadId;
+        if (!direct) this._advanceRoute(cop,cop.route,18);
+        let target = direct ? this.current : this._routeTarget(cop,cop.route,clamp(45+Math.abs(cop.speed)*.35,50,90));
         if (target && distance(cop, target) > 10 && cop.distracted <= 0) {
           const heading = Math.atan2(target.y - cop.y, target.x - cop.x);
-          const desired = this.heat ? 160 + this.heat * 25 : 75;
-          this.vehiclePhysics.control(cop, { targetSpeed: desired, heading });
+          const error=Math.abs(wrapAngle(heading-cop.angle));
+          const desired = error>1.2 ? 14 : error>.7 ? 25 : (this.heat ? 160 + this.heat * 25 : 75) * (error>.4 ? .55 : 1);
+          this.vehiclePhysics.control(cop, { targetSpeed: this.heat ? desired : this._trafficSpeed(cop,heading,desired), heading });
         } else this.vehiclePhysics.control(cop, { targetSpeed: 0, heading: cop.angle });
         let close;
         if (this.player.vehicleId) { const box = this._vehicleBox(this.current); box.half = box.half.map(n => n + 5); close = this._heightOverlap(this.current, cop, VehiclePhysics.height(this.current), VehiclePhysics.height(cop)) && boxContact(this._vehicleBox(cop), box); }
@@ -1234,6 +1222,7 @@
     }
   }
 
+  Game.SIZE = SIZE;
   const api = { Game, SIZE, ROAD_CENTERS, ROAD_WIDTH, SIDEWALK_WIDTH, BUILDING_SETBACK, DISTRICTS, districtAt, CAR_TYPES, GADGETS, POCKET_ITEMS, PAINT_COLORS: Object.freeze(COLORS.slice()) };
   root.MayhemCore = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

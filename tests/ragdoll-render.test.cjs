@@ -8,7 +8,7 @@ const vm = require('node:vm');
 const core = require('../core.js');
 const { RagdollWorld } = require('../physics.js');
 
-const context = vm.createContext({ MayhemCore: core, MayhemPhysics: require('../physics.js'), console, AbortController });
+const context = vm.createContext({ MayhemCore: core, MayhemWorld: require('../world.js'), MayhemPhysics: require('../physics.js'), console, AbortController });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../vendor/three.min.js'), 'utf8'), context);
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../scene3d.js'), 'utf8'), context);
 const { THREE: T, MayhemScene: Scene3D } = context;
@@ -48,7 +48,7 @@ function matchesPoint(actual, joint, label) {
 function addCamera(scene) {
   const cameraTown = Object.create(Scene3D.prototype);
   Object.assign(cameraTown, { T, game: scene.game, _geometries: [], _buildingVolumes: [], _propVolumes: [] });
-  for (const name of ['_staticBox', '_static', '_material', '_sign', '_park', '_services', '_lamp', '_tree', '_landscape']) cameraTown[name] = () => {};
+  for (const name of ['_staticBox', '_static', '_material', '_sign', '_roads', '_park', '_services', '_lamp', '_tree', '_landscape']) cameraTown[name] = () => {};
   cameraTown._town();
   Object.assign(scene, {
     camera: new T.PerspectiveCamera(57, 1280 / 720, 0.06, 175),
@@ -123,13 +123,15 @@ test('the camera follows physical fallen height and keeps a safe boom at walls, 
   let checked = 0;
   for (const building of game.buildings) {
     const x = building.x / 20, z = building.y / 20, w = building.w / 20, d = building.h / 20;
-    for (const point of [
+    const cosine = Math.cos(building.angle || 0), sine = Math.sin(building.angle || 0), cx = x + w / 2, cz = z + d / 2;
+    const points = [
       { x: x - 0.19, z: z + d / 2, height: 0 },
       { x: x + w + 0.19, z: z + d / 2, height: 0 },
       { x: x - 0.19, z: z - 0.19, height: 0 },
       { x: x + w + 0.19, z: z + d + 0.19, height: 0 },
       { x: x + w / 2, z: z + d / 2, height: building.height + 0.5 }
-    ]) {
+    ].map(point => ({ x: cx + (point.x - cx) * cosine - (point.z - cz) * sine, z: cz + (point.x - cx) * sine + (point.z - cz) * cosine, height: point.height }));
+    for (const point of points) {
       game.ragdolls.clearAll();
       Object.assign(player, { x: point.x * 20, y: point.z * 20, angle: -Math.PI / 2 });
       game.ragdolls.trigger(player, { x: 2, y: 3, z: -1 }, { height: point.height });

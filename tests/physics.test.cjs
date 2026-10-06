@@ -399,3 +399,57 @@ test('player roof recovery leaves space for the shared standing collision radius
   assert.ok(Math.hypot(dx, dz) >= PLAYER_RADIUS / 20 - 0.025, 'retired player clears the standing capsule as well as the small joint spheres');
   assert.equal(person.elevation, 0);
 });
+
+test('angled building facades exclude joint spheres and limb interiors about the lot centre', () => {
+  const angle = 0.57, c = Math.cos(angle), s = Math.sin(angle);
+  const building = { x: 1320, y: 1372, w: 160, h: 56, height: 4.6, angle };
+  const box = { x: 70, z: 70, hx: 4, hz: 1.4, top: building.height, angle };
+  const world = new RagdollWorld(), person = entity('angled-wall', 1400 - 102 * c, 1400 - 102 * s, angle);
+  world.trigger(person, { x: 8 * c, y: 2.5, z: 8 * s });
+  const body = world.get(person.id);
+  let contact = false;
+  for (let i = 0; i < 300; i++) {
+    world.step(STEP, { buildings: [building] });
+    for (const joint of Object.values(body.joints)) {
+      const gap = clearance(joint, box) - joint.radius;
+      contact ||= gap < 0.01;
+      assert.ok(gap >= -0.002, 'joint clears the independently transformed facade');
+    }
+    for (const part of BODYPARTS) for (const t of [1 / 3, 2 / 3]) {
+      const a = body.joints[part.from], b = body.joints[part.to];
+      const point = { x: a.x * (1 - t) + b.x * t, y: a.y * (1 - t) + b.y * t, z: a.z * (1 - t) + b.z * t };
+      assert.ok(clearance(point, box) >= part.radius - 0.035 * CHARACTER_SCALE, 'bone interior clears the angled wall');
+    }
+  }
+  assert.ok(contact, 'the body actually strikes the rotated facade');
+});
+
+test('a rotated roof supports fallen people beyond the source rectangle bounds', () => {
+  const angle = Math.PI / 4, building = { x: 1320, y: 1375, w: 160, h: 50, height: 3.4, angle };
+  const x = 1400 + Math.cos(angle) * 55, y = 1400 + Math.sin(angle) * 55;
+  assert.ok(y > building.y + building.h, 'fixture is outside the old unrotated footprint');
+  const world = new RagdollWorld(), person = entity('angled-roof', x, y, angle);
+  world.trigger(person, {}, { height: building.height + 1.6 });
+  const body = world.get(person.id);
+  advance(world, 1.8, { buildings: [building] });
+  const lowest = Math.min(...Object.values(body.joints).map(joint => joint.y - joint.radius));
+  assert.ok(lowest >= building.height - 0.002 && lowest < building.height + 0.02, 'the body settles on the true rotated roof');
+});
+
+test('extended suburbs retain local recovery and the new perimeter bounds every joint', () => {
+  for (const start of [4600, 5580]) {
+    const world = new RagdollWorld(), person = entity('player', start, start);
+    world.trigger(person, { x: 12, y: 3, z: 12 });
+    const body = world.get(person.id);
+    advance(world, 3.8, { size: 5600 });
+    assert.equal(world.bodies.size, 0);
+    assert.ok(person.x > start - 30 && person.y > start - 30, 'recovery never snaps suburban residents to the old map edge');
+    assert.ok(person.x <= 5600 - PLAYER_RADIUS + 0.1 && person.y <= 5600 - PLAYER_RADIUS + 0.1, 'standing capsule clears the expanded perimeter');
+    for (const joint of Object.values(body.joints)) {
+      allFinite(body);
+      assert.ok(joint.x >= joint.radius - 1e-7 && joint.x <= 280 - joint.radius + 1e-7, 'joint clears east/west bounds');
+      assert.ok(joint.z >= joint.radius - 1e-7 && joint.z <= 280 - joint.radius + 1e-7, 'joint clears north/south bounds');
+    }
+    assert.equal(person.elevation, 0);
+  }
+});

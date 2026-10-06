@@ -151,6 +151,80 @@ async function waitForFreshFrames(page) {
   return sceneState(page);
 }
 
+async function driveNetworkRoute(page, destination, trace) {
+  const route = await page.evaluate(target => globalThis.__browserCheckGame.network.route(globalThis.__browserCheckGame.current, target, 0), destination);
+  assert.ok(route.length > 4, 'The journey must use sampled roads through the actual graph.');
+  const held = new Set(), started = Date.now();
+  let cursor = 0, previousAngle;
+  trace.waypoints = route.length; trace.samples = []; trace.steeringChanges = 0; trace.headingChange = 0; trace.maxRoadDistance = 0;
+  async function hold(key, enabled) {
+    if (enabled === held.has(key)) return;
+    if (enabled) { await page.keyboard.down(key); held.add(key); }
+    else { await page.keyboard.up(key); held.delete(key); }
+  }
+  try {
+    while (Date.now() - started < 60000) {
+      const car = await page.evaluate(() => {
+        const game = globalThis.__browserCheckGame, car = game.current, road = game.network.project(car);
+        return { x: car.x, y: car.y, angle: car.angle, speed: car.speed, upright: car.upright, health: car.health,
+          roadDistance: road.distance, roadWidth: road.width, district: game.districtAt(car).id };
+      });
+      assert.ok([car.x, car.y, car.angle, car.speed].every(Number.isFinite), 'The real vehicle pose must stay finite during the journey.');
+      const remaining = Math.hypot(car.x - destination.x, car.y - destination.y);
+      trace.maxRoadDistance = Math.max(trace.maxRoadDistance, car.roadDistance);
+      if (previousAngle !== undefined) trace.headingChange += Math.abs(angleDifference(car.angle, previousAngle));
+      previousAngle = car.angle;
+      if (trace.samples.length < 650) trace.samples.push({ ...car, remaining });
+      if (remaining < 42) { trace.arrived = car; return car; }
+      let nearest = cursor, nearestDistance = Infinity;
+      for (let i = cursor; i < Math.min(route.length, cursor + 35); i++) {
+        const d = Math.hypot(car.x - route[i].x, car.y - route[i].y);
+        if (d < nearestDistance) { nearest = i; nearestDistance = d; }
+      }
+      cursor = nearest;
+      let aimIndex = cursor;
+      while (aimIndex < route.length - 1 && Math.hypot(route[aimIndex].x - car.x, route[aimIndex].y - car.y) < 65) aimIndex++;
+      const aim = route[aimIndex], delta = angleDifference(Math.atan2(aim.y - car.y, aim.x - car.x), car.angle);
+      const limit = Math.abs(delta) > 0.75 ? 80 : Math.abs(delta) > 0.35 ? 130 : 195;
+      const steerLeft = delta < -0.07, steerRight = delta > 0.07;
+      if (steerLeft !== held.has('a') || steerRight !== held.has('d')) trace.steeringChanges++;
+      await hold('a', steerLeft); await hold('d', steerRight);
+      await hold('s', car.speed > limit + 25); await hold('w', car.speed < limit && car.speed >= -10);
+      await page.waitForTimeout(80);
+    }
+    throw new Error(`Real-keyboard journey did not reach the graph destination; last position ${JSON.stringify(trace.samples.at(-1))}`);
+  } finally {
+    for (const key of held) await page.keyboard.up(key);
+  }
+}
+
+async function captureNetworkOverview(page) {
+  await page.keyboard.press('p');
+  await page.locator('#pause-screen').waitFor({ state: 'visible' });
+  await page.locator('#resume-button').click();
+  await captureMouse(page);
+  await page.waitForFunction(() => Number(getComputedStyle(document.getElementById('toast')).opacity) === 0, null, { timeout: 6000 });
+  // This temporary evidence camera uses the real renderer and world meshes.
+  // It is never installed as a gameplay camera or persisted in a player save.
+  await page.evaluate(() => {
+    const scene = globalThis.__browserCheckScene, T = scene.T, size = globalThis.__browserCheckGame.world.size / 20;
+    const camera = new T.OrthographicCamera(-size * 0.86, size * 0.86, size * 0.55, -size * 0.55, 0.1, 2000);
+    camera.position.set(size / 2, 450, size / 2); camera.up.set(0, 0, -1); camera.lookAt(size / 2, 0, size / 2); camera.updateMatrixWorld(true);
+    globalThis.__browserOverviewEvidence = { original: scene.renderer.render, fog: scene.scene.fog };
+    scene.scene.fog = null;
+    scene.renderer.render = function (world) { return globalThis.__browserOverviewEvidence.original.call(this, world, camera); };
+    scene.renderer.render(scene.scene, scene.camera);
+  });
+  try {
+    await page.screenshot({ path: path.join(evidence, 'desktop-organic-network-overview.png'), fullPage: true });
+  } finally {
+    await page.evaluate(() => {
+      const scene = globalThis.__browserCheckScene, saved = globalThis.__browserOverviewEvidence;
+      scene.renderer.render = saved.original; scene.scene.fog = saved.fog; delete globalThis.__browserOverviewEvidence;
+    });
+  }
+}
+
 // Only this isolated test context captures the engine. Normal game pages never
 // expose a debug instance. Wrapping constructors leaves the real simulation,
 // renderer, controls and fixed-step loop in charge of every tested outcome.
@@ -175,6 +249,44 @@ async function installEngineInspection(context) {
         };
       },
     });
+    // Isolated scenario poses are derived from the live road graph. The real
+    // game update, native keyboard events and Cannon contacts still produce
+    // every movement and collision outcome checked below.
+    globalThis.__browserCheckLane = () => {
+      const game = globalThis.__browserCheckGame;
+      for (const road of game.roads) for (const fraction of [0.25, 0.5, 0.75]) {
+        const center = game.network.pointOnRoad(road.id, road.length * fraction);
+        const ux = Math.cos(center.angle), uy = Math.sin(center.angle), nx = -uy, ny = ux;
+        const point = (along = 0, across = 0) => ({ x: center.x + ux * along + nx * across, y: center.y + uy * along + ny * across });
+        const free = [-180, -90, 0, 90, 180].every(along => [-25, 0, 25].every(across => {
+          const p = point(along, across), projected = game.network.project(p);
+          return projected.distance < projected.width / 2 - 12 && game._vehicleFree({ ...game.cars[0], ...p,
+            angle: center.angle, orientation: null, elevation: 0, upright: true });
+        }));
+        if (free) return { ...center, ux, uy, nx, ny, point,
+          along: entity => (entity.x - center.x) * ux + (entity.y - center.y) * uy,
+          across: entity => (entity.x - center.x) * nx + (entity.y - center.y) * ny };
+      }
+      throw new Error('The actual road network needs a clear stretch for controlled driving and toy checks.');
+    };
+    globalThis.__browserCheckWall = () => {
+      const game = globalThis.__browserCheckGame;
+      for (const building of game.buildings.filter(b => Math.abs(Math.sin(2 * (b.angle || 0))) > 0.2)) {
+        const angle = building.angle || 0, ux = Math.cos(angle), uy = Math.sin(angle);
+        const center = { x: building.x + building.w / 2, y: building.y + building.h / 2 };
+        const point = gap => ({ x: center.x - ux * (building.w / 2 + gap), y: center.y - uy * (building.w / 2 + gap) });
+        if ([28, 42, 56, 70].every(gap => game._vehicleFree({ ...game.cars[0], ...point(gap), angle, orientation: null, elevation: 0, upright: true })))
+          return { building, angle, ux, uy, center, point };
+      }
+      throw new Error('The generated town needs a clear rotated building frontage.');
+    };
+    globalThis.__browserCheckService = () => {
+      const game = globalThis.__browserCheckGame, garage = game.services.find(service => service.id === 'garage');
+      const road = game.network.project(garage);
+      const direction = road.road.length - road.s >= 60 ? 1 : -1;
+      return { garage, car: game.network.pointOnRoad(road.roadId, road.s + direction * 50),
+        player: game.network.pointOnRoad(road.roadId, road.s + direction * 18), road, direction };
+    };
   });
 }
 
@@ -345,7 +457,7 @@ async function main() {
       assert.ok(after.cameraY > after.targetY, 'Third-person view should sit above its target.');
       diagnostics.foot = after;
     });
-    await check('district blocks have wider sidewalks and varied solid building footprints while the starter spawn remains clear', async () => {
+    await check('an expanded connected curved road graph serves six districts with denser city lots, suburban gardens and aligned rotated colliders', async () => {
       const world = await page.evaluate(() => {
         const game = globalThis.__browserCheckGame, scene = globalThis.__browserCheckScene, radius = globalThis.MayhemPhysics.PLAYER_RADIUS;
         const colliderBodies = game.vehiclePhysics.world.bodies.filter(body => body.kind === 'building');
@@ -353,22 +465,76 @@ async function main() {
           const body = colliderBodies[index], shape = body?.shapes[0];
           return body && shape && Math.abs(body.position.x * 20 - building.x - building.w / 2) < 0.01 &&
             Math.abs(body.position.z * 20 - building.y - building.h / 2) < 0.01 &&
-            Math.abs(shape.halfExtents.x * 40 - building.w) < 0.01 && Math.abs(shape.halfExtents.z * 40 - building.h) < 0.01;
+            Math.abs(shape.halfExtents.x * 40 - building.w) < 0.01 && Math.abs(shape.halfExtents.z * 40 - building.h) < 0.01 &&
+            Math.abs(Math.abs(body.quaternion.y * Math.sin(-(building.angle || 0) / 2) + body.quaternion.w * Math.cos(-(building.angle || 0) / 2)) - 1) < 0.0001;
         });
-        return { blocks: game.blocks.length, buildings: game.buildings.length,
+        const renderMatches = game.buildings.every(building => {
+          const frame = scene._buildingFrames.get(building.id);
+          return frame && Math.abs(frame.center.x * 20 - building.x - building.w / 2) < 0.01 &&
+            Math.abs(frame.center.z * 20 - building.y - building.h / 2) < 0.01 &&
+            Math.abs(frame.width * 20 - building.w) < 0.01 && Math.abs(frame.depth * 20 - building.h) < 0.01 &&
+            Math.abs(Math.atan2(Math.sin(frame.yaw + (building.angle || 0)), Math.cos(frame.yaw + (building.angle || 0)))) < 0.0001;
+        });
+        let bayMesh;
+        scene.scene.traverse(object => { if (object.isMesh && object.material.color?.getHexString() === '9caca9') bayMesh = object; });
+        const bays = game.world.parkingBays, cubeVertices = scene._cube.getAttribute('position').count;
+        const bayPositions = bayMesh?.geometry.getAttribute('position');
+        // Driveways share this paving batch. Locate each actual bay cube by its
+        // center rather than assuming the merged material contains only bays.
+        const parkingRendered = Boolean(bayPositions && bayPositions.count % cubeVertices === 0 && bays.every(bay => {
+          let start = -1;
+          for (let offset = 0; offset < bayPositions.count; offset += cubeVertices) {
+            let x = 0, z = 0;
+            for (let vertex = 0; vertex < cubeVertices; vertex++) { x += bayPositions.getX(offset + vertex); z += bayPositions.getZ(offset + vertex); }
+            if (Math.abs(x / cubeVertices * 20 - bay.x - bay.w / 2) < 0.01 && Math.abs(z / cubeVertices * 20 - bay.y - bay.h / 2) < 0.01) { start = offset; break; }
+          }
+          if (start < 0) return false;
+          let localX = 0, localZ = 0;
+          const c = Math.cos(bay.angle), s = Math.sin(bay.angle), cx = bay.x + bay.w / 2, cz = bay.y + bay.h / 2;
+          for (let vertex = 0; vertex < cubeVertices; vertex++) {
+            const vx = bayPositions.getX(start + vertex), vz = bayPositions.getZ(start + vertex);
+            localX = Math.max(localX, Math.abs((vx * 20 - cx) * c + (vz * 20 - cz) * s));
+            localZ = Math.max(localZ, Math.abs(-(vx * 20 - cx) * s + (vz * 20 - cz) * c));
+          }
+          return Math.abs(localX - bay.w / 2) < 0.01 && Math.abs(localZ - bay.h / 2) < 0.01;
+        }));
+        const parkedSpawns = game.world.vehicleSpawns.filter(spawn => !spawn.traffic);
+        const parkingAligned = parkedSpawns.every(spawn => {
+          const bay = bays.find(bay => bay.id === spawn.parkingBayId), car = game.cars.find(car => !car.traffic && car.kind === spawn.kind && Math.hypot(car.x - spawn.x, car.y - spawn.y) < 0.3);
+          const model = car && scene._vehicles.get(car.id);
+          return bay && car && model && Math.abs(bay.x + bay.w / 2 - car.x) < 0.3 && Math.abs(bay.y + bay.h / 2 - car.y) < 0.3 &&
+            Math.hypot(model.group.position.x * 20 - car.x, model.group.position.z * 20 - car.y) < 0.1;
+        });
+        const curvedRoads = game.roads.filter(road => {
+          const first = game.network.pointOnRoad(road.id, road.length * 0.1), last = game.network.pointOnRoad(road.id, road.length * 0.9);
+          return Math.abs(Math.atan2(Math.sin(first.angle - last.angle), Math.cos(first.angle - last.angle))) > 0.08;
+        }).length;
+        const density = id => { const lots = game.blocks.filter(block => block.district === id); return lots.reduce((sum, lot) => sum + lot.density, 0) / lots.length; };
+        const connected = game.nodes.every(node => game.network.route(game.player, node).length > 0);
+        return { size: game.world.size, roads: game.roads.length, nodes: game.nodes.length, curvedRoads, connected,
+          blocks: game.blocks.length, buildings: game.buildings.length,
           districts: [...new Set(game.blocks.map(block => block.district))],
           footprints: [...new Set(game.buildings.map(building => `${building.w}x${building.h}`))],
-          heights: [...new Set(game.buildings.map(building => building.height))], collisionMatches,
+          orientations: [...new Set(game.buildings.map(building => (building.angle || 0).toFixed(2)))],
+          density: { market: density('market'), works: density('works'), willow: density('willow'), orchard: density('orchard') },
+          heights: [...new Set(game.buildings.map(building => building.height))], collisionMatches, renderMatches,
+          parking: { bays: bays.length, parkedSpawns: parkedSpawns.length, parkingRendered, parkingAligned },
           info: scene.worldInfo, playerClear: game._isFree(game.player.x, game.player.y, radius),
           starterClear: game._vehicleFree(game.cars[0]),
           starterDistance: Math.hypot(game.player.x - game.cars[0].x, game.player.y - game.cars[0].y) };
       });
-      assert.equal(world.blocks, 25);
-      assert.ok(world.buildings >= 40 && world.footprints.length >= 4, 'Different districts must have several actual footprint sizes and denser blocks.');
-      assert.equal(world.districts.length, 4);
+      assert.ok(world.size > 5000 && world.roads > 40 && world.nodes > 30 && world.curvedRoads > 10);
+      assert.equal(world.connected, true, 'Every real junction must be reachable from the starter road through the graph.');
+      assert.ok(world.buildings >= 90 && world.footprints.length >= 4 && world.orientations.length > 10, 'Street frontage must use varied footprints and orientations.');
+      assert.equal(world.districts.length, 6);
+      assert.ok(world.density.market > world.density.willow && world.density.works > world.density.orchard, 'Suburban gardens must occupy more space around each home than city lots.');
       assert.ok(world.heights.length >= 3);
       assert.ok(world.info.sidewalkWidth >= 1.5, 'Sidewalk geometry must be wider than the old narrow strip.');
       assert.equal(world.collisionMatches, true, 'Actual Cannon building bodies must follow the new varied footprints.');
+      assert.equal(world.renderMatches, true, 'Rendered footprint frames must share every building center, size and rotation with the actual physics.');
+      assert.equal(world.info.roads, world.roads); assert.equal(world.info.nodeCount, world.nodes);
+      assert.equal(world.info.parkingBays, world.parking.bays); assert.equal(world.parking.bays, world.parking.parkedSpawns);
+      assert.ok(world.parking.bays > 0 && world.parking.parkingRendered && world.parking.parkingAligned, 'Every parked spawn must sit in its actual rendered parking bay outside the traffic lanes.');
       assert.equal(world.playerClear, true); assert.equal(world.starterClear, true);
       assert.ok(world.starterDistance < 55, 'The starter car must remain within a useful entry distance.');
       diagnostics.worldLayout = world;
@@ -393,8 +559,9 @@ async function main() {
         const game = globalThis.__browserCheckGame, original = { x: game.player.x, y: game.player.y, angle: game.player.angle };
         const points = [];
         for (const district of Object.keys(globalThis.MayhemCore.DISTRICTS)) {
-          const block = game.blocks.find(candidate => candidate.district === district);
-          const point = { x: block.x + 20, y: block.y + 180 };
+          const road = game.roads.find(candidate => candidate.district === district && game.districtAt(game.network.pointOnRoad(candidate.id, candidate.length / 2)).id === district);
+          if (!road) throw new Error(`District ${district} must have a playable road position.`);
+          const point = game.network.pointOnRoad(road.id, road.length / 2);
           const districtInfo = game.districtAt(point);
           points.push({ ...point, id: districtInfo.id, name: districtInfo.name, display: districtInfo.name.toUpperCase() });
         }
@@ -632,9 +799,10 @@ async function main() {
     await check('Space still applies the driving handbrake', async () => {
       await page.evaluate(() => {
         const game = globalThis.__browserCheckGame, car = game.current;
-        Object.assign(car, { x: 900, y: 1080, angle: -Math.PI / 2 });
+        const lane = globalThis.__browserCheckLane();
+        Object.assign(car, { ...lane.point(), angle: lane.angle });
         game.vehiclePhysics.reset(car);
-        Object.assign(car, { speed: 100, vx: 0, vy: -100 });
+        Object.assign(car, { speed: 100, vx: lane.ux * 100, vy: lane.uy * 100 });
       });
       const before = await page.evaluate(() => Math.abs(globalThis.__browserCheckGame.current.speed));
       await page.keyboard.down('Space');
@@ -861,33 +1029,141 @@ async function main() {
         const wall = await wallPage.evaluate(() => {
           const game = globalThis.__browserCheckGame, radius = globalThis.MayhemPhysics.PLAYER_RADIUS;
           game.cars = []; game.peds = []; game.police = []; game.physics.clearAll();
-          const building = game.buildings.find(b => game._isFree(b.x + b.w + radius + 35, b.y + b.h / 2, radius));
-          if (!building) throw new Error('The generated town needs a clear building frontage for walking.');
-          Object.assign(game.player, { x: building.x + building.w + radius + 35, y: building.y + building.h / 2,
-            elevation: 0, verticalVelocity: 0, grounded: true, vehicleId: null, angle: Math.PI });
-          return { ...building, radius };
+          const wall = globalThis.__browserCheckWall(), point = wall.point(radius + 35);
+          if (!game._isFree(point.x, point.y, radius)) throw new Error('The generated town needs a clear rotated frontage for walking.');
+          Object.assign(game.player, { ...point, elevation: 0, verticalVelocity: 0, grounded: true, vehicleId: null, angle: wall.angle });
+          return { ...wall.building, radius, ux: wall.ux, uy: wall.uy, center: wall.center, angle: wall.angle };
         });
         await captureMouse(wallPage);
         await wallPage.keyboard.press('c');
-        await wallPage.waitForFunction(() => Math.abs(Math.abs(globalThis.__browserCheckScene.viewYaw) - Math.PI) < 0.05);
+        await wallPage.waitForFunction(expected => Math.abs(Math.atan2(Math.sin(globalThis.__browserCheckScene.viewYaw - expected), Math.cos(globalThis.__browserCheckScene.viewYaw - expected))) < 0.05, wall.angle);
+        const renderedWall = await wallPage.evaluate(fixture => {
+          const scene = globalThis.__browserCheckScene, T = scene.T, player = globalThis.__browserCheckGame.player;
+          const ray = new T.Raycaster(new T.Vector3(player.x / 20, 1.2, player.y / 20), new T.Vector3(fixture.ux, 0, fixture.uy));
+          const meshes = [];
+          scene.scene.traverse(object => {
+            if (!object.isMesh) return;
+            for (let ancestor = object; ancestor; ancestor = ancestor.parent) if (!ancestor.visible) return;
+            meshes.push(object);
+          });
+          const hit = ray.intersectObjects(meshes, false)[0];
+          return { distance: hit?.distance, expected: (fixture.radius + 35) / 20, angle: fixture.angle };
+        }, wall);
+        assert.ok(Math.abs(renderedWall.distance - renderedWall.expected) < 0.3, 'Visible rotated wall must lie at the same face as its physical collider.');
+        diagnostics.rotatedWallAlignment = renderedWall;
         await wallPage.keyboard.down('w');
         await wallPage.waitForTimeout(350);
         await wallPage.keyboard.up('w');
         const nearWall = await sceneState(wallPage);
-        assert.ok(nearWall.worldX >= wall.x + wall.w + wall.radius - 0.2 && nearWall.worldX < wall.x + wall.w + wall.radius + 8, 'The avatar should approach its live building wall without entering it.');
+        const wallGap = -((nearWall.worldX - wall.center.x) * wall.ux + (nearWall.worldY - wall.center.y) * wall.uy) - wall.w / 2;
+        assert.ok(wallGap >= wall.radius - 0.2 && wallGap < wall.radius + 8, 'The avatar should approach its rotated building wall without entering it.');
         for (let step = 0; step < 16; step++) {
           await lookCamera(wallPage, 100);
           const state = await sceneState(wallPage);
           assert.ok(state.cameraDistance > 0.4 && state.cameraDistance < 12, 'Camera boom length must remain usable.');
           assert.ok([state.cameraX, state.cameraY, state.cameraZ].every(Number.isFinite), 'Camera coordinates must stay finite.');
-          const insideBuilding = await wallPage.evaluate(view => globalThis.__browserCheckGame.buildings.some(b =>
-            view.cameraX * 20 > b.x + 0.1 && view.cameraX * 20 < b.x + b.w - 0.1 &&
-            view.cameraZ * 20 > b.y + 0.1 && view.cameraZ * 20 < b.y + b.h - 0.1 && view.cameraY < b.height), state);
+          const insideBuilding = await wallPage.evaluate(view => globalThis.__browserCheckGame.buildings.some(b => {
+            const dx = view.cameraX * 20 - b.x - b.w / 2, dy = view.cameraZ * 20 - b.y - b.h / 2;
+            const c = Math.cos(b.angle || 0), s = Math.sin(b.angle || 0);
+            return Math.abs(dx * c + dy * s) < b.w / 2 - 0.1 && Math.abs(-dx * s + dy * c) < b.h / 2 - 0.1 && view.cameraY < b.height;
+          }), state);
           assert.equal(insideBuilding, false, `Camera entered a live building footprint on orbit step ${step}.`);
         }
         await wallPage.screenshot({ path: path.join(evidence, 'desktop-near-wall-orbit.png'), fullPage: true });
       } finally { await closeTestContext(wallContext); }
     });
+    const networkContext = await createTestContext(browser, { viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
+    try {
+      await installEngineInspection(networkContext);
+      await networkContext.route('**/*', route => {
+        if (/^(file|data|blob):/.test(route.request().url())) return route.continue();
+        externalRequests.push(route.request().url()); return route.abort();
+      });
+      const networkPage = await networkContext.newPage();
+      networkPage.on('pageerror', error => errors.push(error.message));
+      networkPage.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+      await networkPage.goto(url);
+      await networkPage.locator('#play-button').click();
+      await waitForScene(networkPage, 'foot');
+      await check('traffic advances along curved graph routes with finite collision-free poses', async () => {
+        const before = await networkPage.evaluate(() => globalThis.__browserCheckGame.cars.filter(car => car.traffic).map(car => ({ id: car.id, x: car.x, y: car.y })));
+        assert.ok(before.length >= 4);
+        await networkPage.waitForTimeout(2200);
+        const after = await networkPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame;
+          return game.cars.filter(car => car.traffic).map(car => ({ id: car.id, x: car.x, y: car.y, speed: car.speed, free: game._vehicleFree(car),
+            roadDistance: game.network.project(car).distance, width: game.network.project(car).width, routePoints: car.route?.length || 0 }));
+        });
+        assert.ok(after.every(car => [car.x, car.y, car.speed, car.roadDistance].every(Number.isFinite) && car.free && car.roadDistance < car.width / 2 + 20));
+        assert.ok(after.filter(car => { const earlier = before.find(entry => entry.id === car.id); return earlier && Math.hypot(car.x - earlier.x, car.y - earlier.y) > 15; }).length >= before.length / 2);
+        assert.ok(after.some(car => car.routePoints > 4), 'Traffic must use sampled bend routes rather than jumping from junction to junction.');
+        diagnostics.graphTraffic = after;
+      });
+      await check('real keyboard steering follows bends into Willow Gardens and returns to town with suburb HUD, minimap and graph recovery intact', async () => {
+        const fixture = await networkPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame, car = game.cars[0];
+          game.cars = [car]; game.peds = []; game.police = []; game.physics.clearAll(); game.heat = 0;
+          const destination = game.world.missionAnchors.suburbs.find(point => game.districtAt(point).id === 'willow');
+          const route = game.network.route(car, destination, 0), forward = route.find(point => Math.hypot(point.x - car.x, point.y - car.y) > 55);
+          car.angle = Math.atan2(forward.y - car.y, forward.x - car.x); game.vehiclePhysics.reset(car);
+          return { origin: { x: car.x, y: car.y }, originDistrict: game.districtAt(car).id, destination };
+        });
+        assert.ok(fixture.destination);
+        await captureMouse(networkPage);
+        await networkPage.keyboard.press('e');
+        await waitForScene(networkPage, 'drive');
+        diagnostics.suburbanJourney = { outbound: {}, inbound: {} };
+        await driveNetworkRoute(networkPage, fixture.destination, diagnostics.suburbanJourney.outbound);
+        await networkPage.waitForFunction(() => document.getElementById('game-canvas').dataset.district === 'willow');
+        assert.equal(await networkPage.locator('#district-name').textContent(), 'WILLOW GARDENS');
+        await waitForMinimap(networkPage);
+        const farView = await sceneState(networkPage);
+        assert.ok(farView.worldY > 2850, 'The vehicle must physically enter the playable southern suburb.');
+        assert.ok(diagnostics.suburbanJourney.outbound.headingChange > 0.3 && diagnostics.suburbanJourney.outbound.steeringChanges > 4, 'The journey must include real steering through bends.');
+        await networkPage.keyboard.press('r');
+        await waitForFreshFrames(networkPage);
+        const recovery = await networkPage.evaluate(() => { const game = globalThis.__browserCheckGame, car = game.current, road = game.network.project(car);
+          return { roadId: road.roadId, distance: road.distance, roadAngle: road.angle, x: car.x, y: car.y,
+            free: game._vehicleFree(car), angle: car.angle, upright: car.upright, district: game.districtAt(car).id };
+        });
+        assert.ok(recovery.free && recovery.upright && recovery.distance < 1 && recovery.district === 'willow', 'R must recover onto an actual suburban road tangent.');
+        assert.ok(Math.min(Math.abs(angleDifference(recovery.angle, recovery.roadAngle)), Math.abs(angleDifference(recovery.angle, recovery.roadAngle + Math.PI))) < 0.2, 'Recovery heading must follow the actual road tangent.');
+        diagnostics.suburbanJourney.recovery = { x: recovery.x, y: recovery.y, roadId: recovery.roadId, distance: recovery.distance, angle: recovery.angle };
+        await unlockToUI(networkPage);
+        await networkPage.locator('[data-mission="delivery"]').click();
+        const navigation = await networkPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame, target = game.mission.targets[game.mission.targetIndex], car = game.current;
+          return { target, meters: Math.round(Math.hypot(target.x - car.x, target.y - car.y) / 20) };
+        });
+        assert.ok(navigation.meters > 60, 'Suburban navigation must point to an objective far beyond the immediate street.');
+        await networkPage.waitForFunction(meters => document.getElementById('target-distance').textContent === meters + 'm', navigation.meters);
+        assert.equal(await networkPage.locator('#target-compass').isVisible(), true);
+        assert.ok((await networkPage.locator('#mission-progress').textContent()).includes(navigation.meters + 'm'));
+        await waitForMinimap(networkPage);
+        const marker = await networkPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame, canvas = document.getElementById('minimap-canvas');
+          const x = Math.round(game.current.x / game.world.size * canvas.width), y = Math.round(game.current.y / game.world.size * canvas.width);
+          const pixels = canvas.getContext('2d').getImageData(x - 2, y - 2, 5, 5).data;
+          let white = 0;
+          for (let i = 0; i < pixels.length; i += 4) if (pixels[i] > 235 && pixels[i + 1] > 225 && pixels[i + 2] > 190) white++;
+          return { x, y, white, width: canvas.width, height: canvas.height };
+        });
+        assert.ok(marker.white > 3, 'The distant player marker must be drawn at the correct expanded-world minimap coordinates.');
+        diagnostics.suburbanJourney.navigation = { ...navigation, marker };
+        await captureMouse(networkPage);
+        await networkPage.keyboard.press('c'); await networkPage.waitForTimeout(300);
+        await networkPage.waitForFunction(() => Number(getComputedStyle(document.getElementById('toast')).opacity) === 0, null, { timeout: 6000 });
+        await networkPage.screenshot({ path: path.join(evidence, 'desktop-suburban-street.png'), fullPage: true });
+        await unlockToUI(networkPage); await networkPage.locator('#abandon-button').click(); await captureMouse(networkPage);
+        await driveNetworkRoute(networkPage, fixture.origin, diagnostics.suburbanJourney.inbound);
+        assert.ok(diagnostics.suburbanJourney.outbound.maxRoadDistance < 90 && diagnostics.suburbanJourney.inbound.maxRoadDistance < 90, 'Both real journeys must stay near the sampled road corridors.');
+        assert.equal((await sceneState(networkPage)).district, fixture.originDistrict);
+        await networkPage.keyboard.press('r'); await waitForFreshFrames(networkPage);
+        await networkPage.keyboard.press('c'); await networkPage.waitForTimeout(300);
+        await networkPage.screenshot({ path: path.join(evidence, 'desktop-curved-town-street.png'), fullPage: true });
+        await captureNetworkOverview(networkPage);
+      });
+    } finally { await closeTestContext(networkContext); }
     await check('rolling terrain and a winding river have real outside-town geometry visible from a safe riverfront overlook', async () => {
       const scenicContext = await createTestContext(browser, { viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
       try {
@@ -905,7 +1181,7 @@ async function main() {
         const overlook = await scenicPage.evaluate(() => {
           const game = globalThis.__browserCheckGame, scene = globalThis.__browserCheckScene;
           const riverPoint = scene._riverCurve.getPoint(0.32), size = globalThis.MayhemCore.SIZE;
-          const point = { x: Math.max(80, Math.min(size - 80, riverPoint.x * 20)), y: size - 55 };
+          const point = { x: size - 55, y: Math.max(80, Math.min(size - 80, riverPoint.z * 20)) };
           game.cars = []; game.peds = []; game.police = []; game.physics.clearAll();
           if (!game._isFree(point.x, point.y, globalThis.MayhemPhysics.PLAYER_RADIUS)) throw new Error('Riverfront overlook must be a clear playable position.');
           const angle = Math.atan2(riverPoint.z * 20 - point.y, riverPoint.x * 20 - point.x);
@@ -945,7 +1221,7 @@ async function main() {
             ray.setFromCamera(new T.Vector2(screen.x, screen.y), scene.camera);
             if (ray.intersectObjects(renderedMeshes, false)[0]?.object === water) unobstructedWaterTriangles++;
           }
-          return { info: scene.worldInfo, terrainVertices: terrainPosition.count, riverVertices: waterPosition.count,
+          return { info: scene.worldInfo, worldSize: size, terrainVertices: terrainPosition.count, riverVertices: waterPosition.count,
             terrainHeights: heights.size, terrainInView: frustum.intersectsObject(terrain),
             terrainBounds: { min: terrainBounds.min.toArray(), max: terrainBounds.max.toArray() },
             riverBounds: { min: riverBounds.min.toArray(), max: riverBounds.max.toArray() },
@@ -954,7 +1230,8 @@ async function main() {
         assert.ok(landscape.terrainVertices > 1000 && landscape.terrainHeights > 8, 'The hinterland must contain genuinely raised, varied terrain.');
         assert.ok(landscape.riverVertices > 200 && landscape.info.landscape.riverSamples > 100 && landscape.info.landscape.riverWidth > 7);
         assert.ok(landscape.info.landscape.treeCount > 20, 'The world edge should have a substantial backdrop of trees.');
-        assert.ok(landscape.terrainBounds.min[0] < 0 && landscape.terrainBounds.max[2] > 108, 'Real terrain must extend beyond the town boundary.');
+        assert.ok(landscape.terrainBounds.min[0] < 0 && landscape.terrainBounds.max[2] > landscape.worldSize, 'Real terrain must extend beyond the expanded playable boundary.');
+        assert.ok(landscape.riverBounds.min[0] > landscape.worldSize, 'The river must sit beyond the expanded playable world, without cutting a hidden hole in a suburb.');
         assert.equal(landscape.terrainInView, true);
         assert.ok(landscape.projectedWaterTriangles > 4 && landscape.unobstructedWaterTriangles > 0, 'Actual outside-town river triangles must be in the view and unobstructed.');
         assert.ok(landscape.renderCalls > 0);
@@ -1069,14 +1346,18 @@ async function main() {
           const game = globalThis.__browserCheckGame, ped = game.peds[0], car = game.cars[0];
           game.physics.clearAll(); game.peds = [ped]; game.cars = [car]; game.police = [];
           game.heat = 0; game._actionCooldown = 0;
-          Object.assign(car, { x: 1260, y: 180, speed: 0, vx: 0, vy: 0, traffic: false });
-          game.player.x = 884; game.player.y = 1080; game.player.angle = -Math.PI / 2;
-          ped.x = 884; ped.y = 1044; ped.homeX = ped.x; ped.homeY = ped.y; ped.stunned = 0; ped.ragdollGrace = 0; ped.pace = 0;
+          const lane = globalThis.__browserCheckLane();
+          Object.assign(car, { ...lane.point(-150, 25), angle: lane.angle, speed: 0, vx: 0, vy: 0, traffic: false });
+          game.vehiclePhysics.reset(car);
+          Object.assign(game.player, { ...lane.point(), angle: lane.angle, elevation: 0, verticalVelocity: 0, grounded: true, vehicleId: null });
+          Object.assign(ped, { ...lane.point(36), stunned: 0, ragdollGrace: 0, pace: 0 });
+          ped.homeX = ped.x; ped.homeY = ped.y;
+          globalThis.__browserCheckPopHeading = lane.angle;
           return ped.id;
         });
         await captureMouse(physicsPage);
         await physicsPage.keyboard.press('c');
-        await physicsPage.waitForFunction(() => Math.abs(globalThis.__browserCheckScene.viewYaw + Math.PI / 2) < 0.05, null, { timeout: 2500 });
+        await physicsPage.waitForFunction(() => Math.abs(Math.atan2(Math.sin(globalThis.__browserCheckScene.viewYaw - globalThis.__browserCheckPopHeading), Math.cos(globalThis.__browserCheckScene.viewYaw - globalThis.__browserCheckPopHeading))) < 0.05, null, { timeout: 2500 });
         await fireToy(physicsPage);
         await physicsPage.waitForFunction(pedId => {
           const body = globalThis.__browserCheckGame.physics.get(pedId);
@@ -1098,14 +1379,18 @@ async function main() {
       await check('driving into a resident launches a rendered physical body', async () => {
         await physicsPage.keyboard.press('r');
         await waitForFreshFrames(physicsPage);
-        const id = await physicsPage.evaluate(() => {
+        const fixture = await physicsPage.evaluate(() => {
           const game = globalThis.__browserCheckGame, car = game.cars[0], ped = game.peds[0];
           game.cars = [car]; game.police = []; game.peds = [ped];
-          Object.assign(car, { x: 900, y: 1080, angle: 0, speed: 0, vx: 0, vy: 0, traffic: false, health: 100 });
-          Object.assign(game.player, { x: 900, y: 1048, angle: 0, vehicleId: null });
-          Object.assign(ped, { x: 962, y: 1080, homeX: 962, homeY: 1080, stunned: 0, ragdollGrace: 0 });
-          return ped.id;
+          const lane = globalThis.__browserCheckLane();
+          Object.assign(car, { ...lane.point(), angle: lane.angle, speed: 0, vx: 0, vy: 0, traffic: false, health: 100 });
+          game.vehiclePhysics.reset(car);
+          Object.assign(game.player, { ...lane.point(0, -32), angle: lane.angle, vehicleId: null, elevation: 0, verticalVelocity: 0, grounded: true });
+          Object.assign(ped, { ...lane.point(62), stunned: 0, ragdollGrace: 0, pace: 0 });
+          ped.homeX = ped.x; ped.homeY = ped.y;
+          return { id: ped.id, ux: lane.ux, uy: lane.uy };
         });
+        const id = fixture.id;
         await physicsPage.keyboard.press('e');
         await waitForScene(physicsPage, 'drive');
         await physicsPage.keyboard.down('w');
@@ -1117,7 +1402,7 @@ async function main() {
         const moved = await bodyState(physicsPage, id);
         assertFiniteBody(moved);
         assert.notDeepEqual(moved.joints, early.joints, 'Vehicle impact must impart physical motion to the body.');
-        assert.ok(moved.joints.pelvis.x > early.joints.pelvis.x + 0.2, 'Body should move away from the front of the car.');
+        assert.ok((moved.joints.pelvis.x - early.joints.pelvis.x) * fixture.ux + (moved.joints.pelvis.z - early.joints.pelvis.z) * fixture.uy > 0.2, 'Body should move away from the front of the car.');
         assert.equal((await sceneState(physicsPage)).cameraMode, 'drive');
         diagnostics.vehicleRagdoll = moved;
         await physicsPage.screenshot({ path: path.join(evidence, 'desktop-vehicle-ragdoll.png'), fullPage: true });
@@ -1126,18 +1411,20 @@ async function main() {
       await check('a driven car collides with a parked rigid body and transfers momentum without passing through it', async () => {
         await physicsPage.keyboard.press('r');
         await waitForFreshFrames(physicsPage);
-        await physicsPage.evaluate(() => {
+        const fixture = await physicsPage.evaluate(() => {
           const game = globalThis.__browserCheckGame, car = game.cars[0];
           game.cars = [car]; game.peds = []; game.police = []; game.physics.clearAll(); game.heat = 0;
-          Object.assign(car, { x: 900, y: 900, angle: 0, traffic: false, health: 100 });
+          const lane = globalThis.__browserCheckLane();
+          Object.assign(car, { ...lane.point(), angle: lane.angle, traffic: false, health: 100 });
           game.vehiclePhysics.reset(car);
-          const blocker = game._addCar(970, 900, 0, 'compact', '#67d3c8', false);
+          const ahead = lane.point(70), blocker = game._addCar(ahead.x, ahead.y, lane.angle, 'compact', '#67d3c8', false);
           game.vehiclePhysics.sync(); game.vehiclePhysics.reset(blocker);
           globalThis.__browserCheckContacts = [];
           game.vehiclePhysics.bodies.get(car.id).body.addEventListener('collide', event => {
             if (event.body.entity) globalThis.__browserCheckContacts.push({ other: event.body.entity.id, closing: Math.abs(event.contact.getImpactVelocityAlongNormal()) });
           });
-          Object.assign(game.player, { x: 900, y: 868, elevation: 0, grounded: true, angle: 0, vehicleId: null });
+          Object.assign(game.player, { ...lane.point(0, -32), elevation: 0, grounded: true, angle: lane.angle, vehicleId: null });
+          return { x: lane.x, y: lane.y, ux: lane.ux, uy: lane.uy, nx: lane.nx, ny: lane.ny };
         });
         await physicsPage.keyboard.press('e');
         await waitForScene(physicsPage, 'drive');
@@ -1146,14 +1433,17 @@ async function main() {
         await physicsPage.keyboard.up('w');
         const contact = await physicsPage.evaluate(() => {
           const game = globalThis.__browserCheckGame, car = game.current, blocker = game.cars[1];
-          return { carX: car.x, carY: car.y, blockerX: blocker.x, blockerY: blocker.y, blockerVx: blocker.vx, carElevation: car.elevation, blockerElevation: blocker.elevation, health: car.health, contacts: [...globalThis.__browserCheckContacts] };
+          return { carX: car.x, carY: car.y, blockerX: blocker.x, blockerY: blocker.y, blockerVx: blocker.vx, blockerVy: blocker.vy, carElevation: car.elevation, blockerElevation: blocker.elevation, health: car.health, contacts: [...globalThis.__browserCheckContacts] };
         });
-        assert.ok(contact.carX < contact.blockerX, 'Driven car must not pass through the parked car.');
+        const carAlong = (contact.carX - fixture.x) * fixture.ux + (contact.carY - fixture.y) * fixture.uy;
+        const blockerAlong = (contact.blockerX - fixture.x) * fixture.ux + (contact.blockerY - fixture.y) * fixture.uy;
+        const sidewaysGap = (contact.carX - contact.blockerX) * fixture.nx + (contact.carY - contact.blockerY) * fixture.ny;
+        assert.ok(carAlong < blockerAlong, 'Driven car must not pass through the parked car.');
         assert.ok(contact.contacts.length > 0, 'The real Cannon solver must report a vehicle contact.');
-        assert.ok(contact.blockerX > 980 || contact.blockerVx > 10, 'The parked car must receive physical momentum.');
-        assert.ok(contact.blockerX - contact.carX > 35 || Math.abs(contact.carElevation - contact.blockerElevation) > 1.1, 'Cars must remain separated in space; airborne height can change their horizontal spacing.');
-        assert.ok(contact.carX > 915, 'Car should reach the obstacle under real throttle input.');
-        assert.ok(Math.abs(contact.carY - contact.blockerY) < 20, 'A straight bumper contact should not send cars sideways across a lane.');
+        assert.ok(blockerAlong > 80 || contact.blockerVx * fixture.ux + contact.blockerVy * fixture.uy > 10, 'The parked car must receive physical momentum.');
+        assert.ok(blockerAlong - carAlong > 35 || Math.abs(contact.carElevation - contact.blockerElevation) > 1.1, 'Cars must remain separated in space; airborne height can change their horizontal spacing.');
+        assert.ok(carAlong > 15, 'Car should reach the obstacle under real throttle input.');
+        assert.ok(Math.abs(sidewaysGap) < 20, 'A straight bumper contact should not send cars sideways across a lane.');
         diagnostics.parkedCarContact = contact;
       });
 
@@ -1161,14 +1451,12 @@ async function main() {
         const wall = await physicsPage.evaluate(() => {
           const game = globalThis.__browserCheckGame, car = game.cars[0];
           game.cars = [car]; game.peds = []; game.police = []; game.physics.clearAll(); game.abandonMission(); game.heat = 0;
-          const building = game.buildings.find(b => game._vehicleFree({ ...car, x: b.x - 70, y: b.y + b.h / 2, angle: 0 }) &&
-            game._vehicleFree({ ...car, x: b.x - 28, y: b.y + b.h / 2, angle: 0 }));
-          if (!building) throw new Error('The generated town needs a clear building frontage for vehicle collision checks.');
-          Object.assign(car, { x: building.x - 70, y: building.y + building.h / 2, angle: 0, traffic: false, health: 100 });
+          const wall = globalThis.__browserCheckWall();
+          Object.assign(car, { ...wall.point(70), angle: wall.angle, traffic: false, health: 100 });
           game.vehiclePhysics.reset(car);
           // This is an approach speed, not a fabricated collision outcome.
           // The normal fixed-step loop and Cannon wall contact produce flight.
-          Object.assign(car, { speed: 300, vx: 300, vy: 0 });
+          Object.assign(car, { speed: 300, vx: wall.ux * 300, vy: wall.uy * 300 });
           Object.assign(game.player, { vehicleId: car.id, x: car.x, y: car.y });
           globalThis.__browserCheckContacts = [];
           const startTime = game.time;
@@ -1185,20 +1473,22 @@ async function main() {
           game.vehiclePhysics.bodies.get(car.id).body.addEventListener('collide', event => {
             if (event.body.kind === 'building') globalThis.__browserCheckContacts.push({ kind: 'building', closing: Math.abs(event.contact.getImpactVelocityAlongNormal()) });
           });
-          return { ...building };
+          globalThis.__browserCheckWallNormal = { ux: wall.ux, uy: wall.uy };
+          return { ...wall.building, ux: wall.ux, uy: wall.uy, center: wall.center };
         });
         await waitForScene(physicsPage, 'drive');
         await physicsPage.keyboard.press('c');
         try {
           await physicsPage.waitForFunction(() => {
             const car = globalThis.__browserCheckGame.current;
-            return globalThis.__browserCheckContacts.length > 0 && car.elevation > 0.2 && car.vx < -10 && Math.abs(car.orientation.x) + Math.abs(car.orientation.z) > 0.015;
+            const wall = globalThis.__browserCheckWallNormal;
+            return globalThis.__browserCheckContacts.length > 0 && car.elevation > 0.2 && car.vx * wall.ux + car.vy * wall.uy < -10 && Math.abs(car.orientation.x) + Math.abs(car.orientation.z) > 0.015;
           }, null, { timeout: 3000 });
         } finally { diagnostics.airborneWallTrace = await physicsPage.evaluate(() => ({ ...globalThis.__browserCheckWallTrace, contacts: [...globalThis.__browserCheckContacts] })); }
         const airborne = await vehicleState(physicsPage);
         assertRenderedVehicle(airborne);
-        assert.ok(airborne.x < wall.x, 'The car must rebound outside the solid building frontage.');
-        assert.ok(airborne.vx < -10, 'An eastward approach must produce a westward bounce.');
+        assert.ok((airborne.x - wall.center.x) * wall.ux + (airborne.y - wall.center.y) * wall.uy < -wall.w / 2, 'The car must rebound outside the solid rotated building frontage.');
+        assert.ok(airborne.vx * wall.ux + airborne.vy * wall.uy < -10, 'The impact must reverse velocity along the rotated wall normal.');
         assert.ok(airborne.elevation > 0.2 && airborne.renderedHeight > 0.2, 'Physical and visible car must both leave the road.');
         assert.ok(Math.abs(airborne.orientation.x) + Math.abs(airborne.orientation.z) > 0.015, 'The impact must create real pitch or roll, not only a yaw turn.');
         diagnostics.airborneWallImpact = airborne;
@@ -1208,22 +1498,24 @@ async function main() {
       });
 
       await check('a fast bumper collision sends real car bodies into visible three-dimensional flight and they fall back down', async () => {
-        const struckId = await physicsPage.evaluate(() => {
+        const fixture = await physicsPage.evaluate(() => {
           const game = globalThis.__browserCheckGame, car = game.cars[0];
           game.cars = [car]; game.peds = []; game.police = []; game.physics.clearAll(); game.heat = 0;
-          Object.assign(car, { x: 900, y: 900, angle: 0, traffic: false, health: 100 });
+          const lane = globalThis.__browserCheckLane();
+          Object.assign(car, { ...lane.point(), angle: lane.angle, traffic: false, health: 100 });
           game.vehiclePhysics.reset(car);
-          const struck = game._addCar(1000, 900, Math.PI, 'compact', '#67d3c8', false);
+          const ahead = lane.point(100), struck = game._addCar(ahead.x, ahead.y, lane.angle + Math.PI, 'compact', '#67d3c8', false);
           game.vehiclePhysics.sync(); game.vehiclePhysics.reset(struck);
-          Object.assign(car, { speed: 290, vx: 290, vy: 0 });
-          Object.assign(struck, { speed: 180, vx: -180, vy: 0 });
+          Object.assign(car, { speed: 290, vx: lane.ux * 290, vy: lane.uy * 290 });
+          Object.assign(struck, { speed: 180, vx: -lane.ux * 180, vy: -lane.uy * 180 });
           Object.assign(game.player, { vehicleId: car.id, x: car.x, y: car.y });
           globalThis.__browserCheckContacts = [];
           game.vehiclePhysics.bodies.get(car.id).body.addEventListener('collide', event => {
             if (event.body.entity?.id === struck.id) globalThis.__browserCheckContacts.push({ other: struck.id, closing: Math.abs(event.contact.getImpactVelocityAlongNormal()) });
           });
-          return struck.id;
+          return { id: struck.id, x: ahead.x, y: ahead.y };
         });
+        const struckId = fixture.id;
         await physicsPage.keyboard.press('c');
         await physicsPage.waitForFunction(() => {
           const car = globalThis.__browserCheckGame.current;
@@ -1232,7 +1524,7 @@ async function main() {
         const airborne = await vehicleState(physicsPage), struck = await vehicleState(physicsPage, struckId);
         assertRenderedVehicle(airborne); assertRenderedVehicle(struck);
         assert.ok(airborne.elevation > 0.9, 'The actual collision must send the driven car clearly above the street.');
-        assert.ok(struck.x > 1000 || Math.hypot(struck.vx, struck.vy) > 10, 'The struck body must receive real momentum.');
+        assert.ok(Math.hypot(struck.x - fixture.x, struck.y - fixture.y) > 2 || Math.hypot(struck.vx, struck.vy) > 10, 'The struck body must receive real momentum.');
         diagnostics.airborneCarImpact = { driven: airborne, struck };
         await physicsPage.screenshot({ path: path.join(evidence, 'desktop-airborne-impact.png'), fullPage: true });
         await physicsPage.waitForFunction(() => {
@@ -1242,33 +1534,48 @@ async function main() {
         assertRenderedVehicle(await vehicleState(physicsPage));
       });
 
-      await check('an elastic collision with a fixed fountain rebounds without moving the obstacle', async () => {
-        const fountainBefore = await physicsPage.evaluate(() => {
-          const game = globalThis.__browserCheckGame, car = game.cars[0], fountain = game.staticObjects.find(object => object.kind === 'fountain');
+      await check('an elastic collision with a fixed tree trunk rebounds without moving the obstacle', async () => {
+        const obstacle = await physicsPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame, car = game.cars[0];
           game.cars = [car]; game.peds = []; game.police = []; game.physics.clearAll(); game.heat = 0;
-          Object.assign(car, { x: fountain.x - 115, y: fountain.y, angle: 0, traffic: false, health: 100 });
+          let fixture;
+          for (const tree of game.staticObjects.filter(object => object.kind === 'tree')) {
+            for (const angle of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+              const ux = Math.cos(angle), uy = Math.sin(angle);
+              if ([30, 50, 70, 95, 115].every(gap => game._vehicleFree({ ...car, x: tree.x - ux * gap, y: tree.y - uy * gap, angle, orientation: null, elevation: 0, upright: true }))) {
+                fixture = { id: tree.id, x: tree.x, y: tree.y, angle, ux, uy }; break;
+              }
+            }
+            if (fixture) break;
+          }
+          if (!fixture) throw new Error('The generated world needs one clear tree approach for elastic prop collision.');
+          Object.assign(car, { x: fixture.x - fixture.ux * 115, y: fixture.y - fixture.uy * 115, angle: fixture.angle, traffic: false, health: 100 });
           game.vehiclePhysics.reset(car);
-          Object.assign(car, { speed: 210, vx: 210, vy: 0 });
+          Object.assign(car, { speed: 210, vx: fixture.ux * 210, vy: fixture.uy * 210 });
           Object.assign(game.player, { vehicleId: car.id, x: car.x, y: car.y });
           globalThis.__browserCheckContacts = [];
           game.vehiclePhysics.bodies.get(car.id).body.addEventListener('collide', event => {
-            if (event.body.kind === 'fountain') globalThis.__browserCheckContacts.push({ kind: 'fountain', closing: Math.abs(event.contact.getImpactVelocityAlongNormal()) });
+            if (event.body.kind === 'tree') globalThis.__browserCheckContacts.push({ kind: 'tree', closing: Math.abs(event.contact.getImpactVelocityAlongNormal()) });
           });
-          return { x: fountain.x, y: fountain.y };
+          globalThis.__browserCheckPropNormal = fixture;
+          return fixture;
         });
-        await physicsPage.waitForFunction(() => globalThis.__browserCheckContacts.length > 0 && globalThis.__browserCheckGame.current.vx < -5, null, { timeout: 3000 });
+        await physicsPage.waitForFunction(() => { const car = globalThis.__browserCheckGame.current, prop = globalThis.__browserCheckPropNormal;
+          return globalThis.__browserCheckContacts.length > 0 && car.vx * prop.ux + car.vy * prop.uy < -5;
+        }, null, { timeout: 3000 });
         const bounced = await vehicleState(physicsPage);
         assertRenderedVehicle(bounced);
-        assert.ok(bounced.x < fountainBefore.x, 'The fixed fountain must stop the car on its approaching side.');
-        assert.ok(bounced.vx < -5, 'The prop must create a reverse impulse, not merely remove speed.');
-        assert.deepEqual(await physicsPage.evaluate(() => { const fountain = globalThis.__browserCheckGame.staticObjects.find(object => object.kind === 'fountain'); return { x: fountain.x, y: fountain.y }; }), fountainBefore, 'The static fountain must remain anchored.');
+        assert.ok((bounced.x - obstacle.x) * obstacle.ux + (bounced.y - obstacle.y) * obstacle.uy < 0, 'The fixed trunk must stop the car on its approaching side.');
+        assert.ok(bounced.vx * obstacle.ux + bounced.vy * obstacle.uy < -5, 'The prop must create a reverse impulse, not merely remove speed.');
+        assert.deepEqual(await physicsPage.evaluate(id => { const tree = globalThis.__browserCheckGame.staticObjects.find(object => object.id === id); return { x: tree.x, y: tree.y }; }, obstacle.id), { x: obstacle.x, y: obstacle.y }, 'The static trunk must remain anchored.');
         diagnostics.fixedPropBounce = bounced;
       });
 
       await check('R rights a flipped physical car, resets angular motion and returns usable real driving controls', async () => {
         await physicsPage.evaluate(() => {
           const game = globalThis.__browserCheckGame, car = game.current;
-          Object.assign(car, { x: 900, y: 1080, elevation: 0.8, verticalVelocity: 0, vx: 0, vy: 0, speed: 0,
+          const lane = globalThis.__browserCheckLane();
+          Object.assign(car, { ...lane.point(), angle: lane.angle, elevation: 0.8, verticalVelocity: 0, vx: 0, vy: 0, speed: 0,
             orientation: { x: 1, y: 0, z: 0, w: 0 } });
         });
         await waitForFreshFrames(physicsPage);
@@ -1375,8 +1682,10 @@ async function main() {
           const game = globalThis.__browserCheckGame, car = game.cars[0];
           globalThis.__inventoryCheckPed = game.peds[0];
           game.cars = [car]; game.peds = []; game.police = []; game.physics.clearAll();
-          Object.assign(car, { x: 900, y: 950, angle: -Math.PI / 2, speed: 0, vx: 0, vy: 0, traffic: false });
-          Object.assign(game.player, { x: 900, y: 900, angle: -Math.PI / 2, vehicleId: null });
+          const visit = globalThis.__browserCheckService();
+          Object.assign(car, { ...visit.car, speed: 0, vx: 0, vy: 0, traffic: false });
+          game.vehiclePhysics.reset(car);
+          Object.assign(game.player, { x: visit.garage.x, y: visit.garage.y, angle: visit.car.angle, vehicleId: null });
           game.money = 1500; game.heat = 0;
         });
         await openInventory(inventoryPage);
@@ -1418,7 +1727,9 @@ async function main() {
           const game = globalThis.__browserCheckGame;
           game.acceptMission('delivery');
           const ped = globalThis.__inventoryCheckPed;
-          Object.assign(ped, { x: 900, y: 840, angle: 0, homeX: 900, homeY: 840, pace: 0, stunned: 0, ragdollGrace: 0, bubble: '', bubbleTimer: 0 });
+          const lane = globalThis.__browserCheckLane();
+          Object.assign(ped, { ...lane.point(60), angle: lane.angle, pace: 0, stunned: 0, ragdollGrace: 0, bubble: '', bubbleTimer: 0 });
+          ped.homeX = ped.x; ped.homeY = ped.y;
           game.peds = [ped];
           game._knockDown(ped, { x: 2, y: 2.5, z: 0 });
         });
@@ -1483,15 +1794,19 @@ async function main() {
         const id = await inventoryPage.evaluate(() => {
           const game = globalThis.__browserCheckGame, ped = game.peds[0];
           game.physics.clearAll(); game.abandonMission(); game.heat = 0;
-          Object.assign(game.player, { x: 900, y: 1080, angle: -Math.PI / 2, vehicleId: null, ragdollGrace: 0 });
-          Object.assign(game.cars[0], { x: 1260, y: 180 });
-          Object.assign(ped, { x: 900, y: 1044, homeX: 900, homeY: 1044, stunned: 0, ragdollGrace: 0 });
+          const lane = globalThis.__browserCheckLane();
+          Object.assign(game.player, { ...lane.point(), angle: lane.angle, vehicleId: null, ragdollGrace: 0 });
+          Object.assign(game.cars[0], { ...lane.point(-150, 25), angle: lane.angle });
+          game.vehiclePhysics.reset(game.cars[0]);
+          Object.assign(ped, { ...lane.point(36), stunned: 0, ragdollGrace: 0, pace: 0 });
+          ped.homeX = ped.x; ped.homeY = ped.y;
+          globalThis.__browserCheckToyHeading = lane.angle;
           game._actionCooldown = 0;
           return ped.id;
         });
         await captureMouse(inventoryPage);
         await inventoryPage.keyboard.press('c');
-        await inventoryPage.waitForFunction(() => Math.abs(globalThis.__browserCheckScene.viewYaw + Math.PI / 2) < 0.05, null, { timeout: 2500 });
+        await inventoryPage.waitForFunction(() => Math.abs(Math.atan2(Math.sin(globalThis.__browserCheckScene.viewYaw - globalThis.__browserCheckToyHeading), Math.cos(globalThis.__browserCheckScene.viewYaw - globalThis.__browserCheckToyHeading))) < 0.05, null, { timeout: 2500 });
         const before = await inventoryState(inventoryPage);
         await fireToy(inventoryPage);
         await inventoryPage.waitForFunction(pedId => globalThis.__browserCheckGame.physics.get(pedId)?.phase === 'fall', id, { timeout: 2000 });
@@ -1504,8 +1819,11 @@ async function main() {
         const id = await inventoryPage.evaluate(() => {
           const game = globalThis.__browserCheckGame, ped = game.peds[0];
           game.physics.clearAll(); game.heat = 0; game._actionCooldown = 0;
-          Object.assign(game.player, { x: 900, y: 1080, angle: -Math.PI / 2 });
-          Object.assign(ped, { x: 900, y: 880, homeX: 900, homeY: 880, stunned: 0, ragdollGrace: 0 });
+          const lane = globalThis.__browserCheckLane();
+          Object.assign(game.player, { ...lane.point(-50), angle: lane.angle });
+          Object.assign(ped, { ...lane.point(150), stunned: 0, ragdollGrace: 0, pace: 0 });
+          ped.homeX = ped.x; ped.homeY = ped.y;
+          globalThis.__browserCheckToyHeading = lane.angle;
           return ped.id;
         });
         await equipWithWheel(inventoryPage, 3);
@@ -1514,7 +1832,7 @@ async function main() {
         assert.deepEqual(before.visibleToys, ['cannon']);
         await captureMouse(inventoryPage);
         await inventoryPage.keyboard.press('c');
-        await inventoryPage.waitForFunction(() => Math.abs(globalThis.__browserCheckScene.viewYaw + Math.PI / 2) < 0.05, null, { timeout: 2500 });
+        await inventoryPage.waitForFunction(() => Math.abs(Math.atan2(Math.sin(globalThis.__browserCheckScene.viewYaw - globalThis.__browserCheckToyHeading), Math.cos(globalThis.__browserCheckScene.viewYaw - globalThis.__browserCheckToyHeading))) < 0.05, null, { timeout: 2500 });
         await aimAtResident(inventoryPage, id);
         await inventoryPage.mouse.down({ button: 'left' });
         await inventoryPage.waitForFunction(() => globalThis.__browserCheckGame.projectiles.length > 0 && globalThis.__browserCheckScene._toyShots.count > 0, null, { timeout: 2000 });
@@ -1536,8 +1854,10 @@ async function main() {
         await inventoryPage.evaluate(() => {
           const game = globalThis.__browserCheckGame, car = game.cars[0];
           game.peds = []; game.police = []; game.physics.clearAll(); game.heat = 0;
-          Object.assign(car, { x: 900, y: 950, angle: -Math.PI / 2, speed: 0, vx: 0, vy: 0, traffic: false, health: 30 });
-          Object.assign(game.player, { x: 900, y: 918, angle: -Math.PI / 2, vehicleId: null });
+          const visit = globalThis.__browserCheckService();
+          Object.assign(car, { ...visit.car, speed: 0, vx: 0, vy: 0, traffic: false, health: 30 });
+          game.vehiclePhysics.reset(car);
+          Object.assign(game.player, { ...visit.player, vehicleId: null });
         });
         await inventoryPage.keyboard.press('e');
         await waitForScene(inventoryPage, 'drive');
@@ -1618,8 +1938,11 @@ async function main() {
       await check('releasing a collected ride frees its slot without deleting the world car or charging cash', async () => {
         const fixture = await inventoryPage.evaluate(() => {
           const game = globalThis.__browserCheckGame;
-          Object.assign(game.current, { x: 900, y: 900, speed: 0, vx: 0, vy: 0 });
-          const car = game._addCar(990, 900, 0, 'sports', '#fb8097', false);
+          const visit = globalThis.__browserCheckService();
+          Object.assign(game.current, { x: visit.garage.x, y: visit.garage.y, angle: visit.car.angle, speed: 0, vx: 0, vy: 0 });
+          game.vehiclePhysics.reset(game.current);
+          const other = game.network.pointOnRoad(visit.road.roadId, visit.road.s + visit.direction * 90);
+          const car = game._addCar(other.x, other.y, other.angle, 'sports', '#fb8097', false);
           car.garageId = 'ride-2';
           game.garage.cars.push({ id: 'ride-2', kind: car.kind, color: car.color, health: car.health });
           return { worldId: car.id, original: game.garage.cars[0].id, money: game.money };

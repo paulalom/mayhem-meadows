@@ -1,26 +1,26 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { Game, SIZE, ROAD_CENTERS } = require('../core.js');
+const { Game, SIZE } = require('../core.js');
 const { PLAYER_RADIUS, NPC_RADIUS } = require('../physics.js');
 const makeGame = () => new Game({ seed: 42 });
 const advance = (game, seconds, input = {}) => { for (let t = 0; t < seconds - 0.0001; t += 1 / 60) game.update(1 / 60, input); };
 
 test('town starts near a usable car and all contract targets are reachable', () => {
   const game = makeGame();
-  assert.equal(game.blocks.length, 25); assert.equal(game.buildings.length, 58);
+  assert.ok(game.buildings.length >= 90); assert.equal(game.world.size,SIZE);
   assert.equal(game.interact(), true);
   assert.equal(game.current.color, '#ffd15b');
   for (const type of ['delivery', 'dash', 'party']) {
     game.abandonMission(); assert.equal(game.acceptMission(type), true);
-    for (const point of game.mission.targets) { assert.ok(game._isFree(point.x, point.y, 20)); assert.ok(ROAD_CENTERS.includes(point.x) || ROAD_CENTERS.includes(point.y)); }
+    for (const point of game.mission.targets) { assert.ok(game._isFree(point.x, point.y, 20)); assert.ok(game.network.nearestRoad(point).distance<1); }
   }
 });
 
 test('movement is frame-rate independent, normalized diagonally, and ignores invalid dt', () => {
   const a = makeGame(), b = makeGame();
-  // Use an open road: the former park-centre fixture is now a solid fountain.
   a.player.x = b.player.x = 1080; a.player.y = b.player.y = 900;
+  for(const game of [a,b]) { game.buildings=[]; game.staticObjects=[]; game.peds=[]; game.cars=[]; game.police=[]; }
   a.update(0.25, { up: true, right: true }); advance(b, 0.25, { up: true, right: true });
   assert.ok(Math.hypot(a.player.x - b.player.x, a.player.y - b.player.y) < 0.00001);
   assert.ok(Math.abs(Math.hypot(a.player.x - 1080, a.player.y - 900) - 155 * 0.25) < 0.001);
@@ -41,6 +41,7 @@ test('on-foot movement follows the camera forward and right directions', () => {
   ];
   for (const { moveAngle, input, dx, dy } of cases) {
     const game = makeGame(); game.player.x = 1080; game.player.y = 900;
+    game.buildings=[]; game.staticObjects=[]; game.peds=[]; game.cars=[]; game.police=[];
     const start = { ...game.player };
     game.update(0.25, { ...input, moveAngle });
     assert.ok(Math.abs(game.player.x - start.x - dx * 155 * 0.25) < 0.00001);
@@ -52,6 +53,9 @@ test('on-foot movement follows the camera forward and right directions', () => {
 test('camera-relative diagonals keep walking and sprinting speed and face movement', () => {
   for (const moveAngle of [-Math.PI / 2, 0, Math.PI / 2, 0.7]) for (const boost of [false, true]) {
     const game = makeGame(); game.player.x = 1080; game.player.y = 900;
+    // Verify movement vectors on a controlled open floor, independent of lots
+    // and pedestrians along the new curved city streets.
+    game.buildings=[]; game.staticObjects=[]; game.peds=[]; game.cars=[];
     const start = { ...game.player };
     game.update(0.25, { up: true, right: true, boost, moveAngle });
     const dx = game.player.x - start.x, dy = game.player.y - start.y;
@@ -142,6 +146,7 @@ test('confetti startles residents without producing cash and particles are cappe
 
 test('police sight is blocked by buildings and a hidden player can cool heat', () => {
   const game = makeGame(); game.heat = 1; game.graceTimer = 0;
+  game.buildings=[{x:240,y:240,w:240,h:240,height:6,angle:0.3}]; game.staticObjects=[]; game.cars=[]; game.peds=[];
   game.player.x = 180; game.player.y = 350;
   const cop = game.police[0]; cop.x = 540; cop.y = 350; cop.routeTimer = 999; cop.route = [{ x: 540, y: 350 }];
   game.update(1 / 60); assert.equal(game.policeSeen, false); assert.ok(game.escapeTimer > 0);
@@ -189,7 +194,7 @@ test('garage purchases require proximity and use the displayed prices', () => {
 
 test('a stopped driver can wash without exiting; already clean rides can exit freely', () => {
   const game = makeGame(); game.interact(); const car = game.current;
-  car.x = 1620; car.y = 1980; car.speed = 0; car.health = 40; game.heat = 2;
+  const wash = game.services.find(service=>service.id==='wash'); car.x = wash.x; car.y = wash.y; car.speed = 0; car.health = 40; game.heat = 2;
   assert.equal(game.interact(), true); assert.equal(game.money, 75); assert.equal(game.heat, 0); assert.equal(car.health, game.maxHealth); assert.equal(game.player.vehicleId, car.id);
   assert.equal(game.interact(), true); assert.equal(game.player.vehicleId, null); assert.equal(game.money, 75);
 });
@@ -209,7 +214,9 @@ test('civilian traffic follows lanes and stops before a parked car', () => {
   assert.ok(Math.hypot(traffic.x - parked.x, traffic.y - parked.y) >= 37.9);
   assert.ok(traffic.y > parked.y);
   const route = game._wanderRoute({ x: 540, y: 540 });
-  assert.ok(route[0].x % 360 !== 180 || route[0].y % 360 !== 180, 'route is offset into a driving lane');
+  assert.ok(route.length>3);
+  assert.ok(route.some(point=>game.network.project(point).distance>5), 'route uses an actual driving lane');
+  assert.ok(route.every(point=>game.network.project(point).distance<point.width/2), 'lane samples stay within the rendered road');
 });
 
 test('save data clamps malicious values and round-trips only persistent progress', () => {
@@ -289,6 +296,7 @@ test('parked vehicles are solid on foot and standing residents cannot be walked 
   game.player.x = car.x - 60; game.player.y = car.y; advance(game, 0.8, { right: true });
   assert.equal(game._personVehicleContact(game.player, car), null); assert.ok(game.player.x <= car.x - 13.5 - PLAYER_RADIUS + 0.01);
   const ped = { id: 'test-resident', x: 1080, y: 900, angle: 0, homeX: 1080, homeY: 900, pace: 0, stunned: 0, bubbleTimer: 0 };
+  game.buildings=[]; game.staticObjects=[]; game.cars=[]; game.police=[];
   game.peds = [ped]; game.player.x = 1040; game.player.y = 900; advance(game, 0.4, { right: true });
   assert.ok(Math.hypot(game.player.x - ped.x, game.player.y - ped.y) >= PLAYER_RADIUS + NPC_RADIUS - 0.01); assert.ok(game.player.x < ped.x);
 });

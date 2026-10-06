@@ -270,7 +270,7 @@
         // worlds. Roof trim and flagpoles remain cosmetic details.
         const height = clamp(finite(building.height, [5.3, 7, 4.5, 6.2, 8.2][i % 5]), 0.4, 40);
         if (![building.x, building.y, building.w, building.h].every(Number.isFinite)) return;
-        boxes.push(prepareBox({ x: (building.x + building.w / 2) / UNIT, z: (building.y + building.h / 2) / UNIT, y: height / 2, hx: building.w / UNIT / 2, hy: height / 2, hz: building.h / UNIT / 2, angle: 0, dynamic: false }));
+        boxes.push(prepareBox({ x: (building.x + building.w / 2) / UNIT, z: (building.y + building.h / 2) / UNIT, y: height / 2, hx: building.w / UNIT / 2, hy: height / 2, hz: building.h / UNIT / 2, angle: finite(building.angle), dynamic: false }));
       });
       (environment.staticObjects || []).forEach(object => {
         if (!object || !Number.isFinite(object.x) || !Number.isFinite(object.y)) return;

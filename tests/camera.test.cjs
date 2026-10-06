@@ -7,11 +7,14 @@ const path = require('node:path');
 const vm = require('node:vm');
 const core = require('../core.js');
 
-const context = vm.createContext({ MayhemCore: core, MayhemPhysics: require('../physics.js'), console, AbortController });
+const context = vm.createContext({ MayhemCore: core, MayhemWorld: require('../world.js'), MayhemPhysics: require('../physics.js'), console, AbortController });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../vendor/three.min.js'), 'utf8'), context);
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../scene3d.js'), 'utf8'), context);
 const { THREE: T, MayhemScene: Scene3D } = context;
 const wrapped = value => Math.atan2(Math.sin(value), Math.cos(value));
+// A real open meadow in the expanded map isolates control behavior from the
+// deliberate wall-avoidance yaw tested at actual lot corners below.
+const OPEN_POINT = { x: core.SIZE - 500, y: core.SIZE - 500 };
 
 function makeScene() {
   const game = new core.Game({ seed: 42 });
@@ -26,13 +29,13 @@ function makeScene() {
     _lookTarget: new T.Vector3(), _viewDirection: new T.Vector3(),
     _ray: new T.Raycaster(), _pointer: new T.Vector2(),
     _ground: new T.Plane(new T.Vector3(0, 1, 0), 0), _aimPoint: new T.Vector3(),
-    _aimBox: new T.Box3(), _aimHit: new T.Vector3(), _residents: new Map(), _vehicles: new Map(),
+    _aimBox: new T.Box3(), _aimHit: new T.Vector3(), _localAimRay: new T.Ray(), _residents: new Map(), _vehicles: new Map(),
     _sun: new T.DirectionalLight(), _geometries: [], _buildingVolumes: [], _propVolumes: [], _cameraInfo: {}
   });
   scene.camera.position.set(game.current.x / 20, 3.4, game.current.y / 20 + 5.7);
   // Use the real town geometry to obtain collision envelopes. Only decoration
   // drawing is suppressed; vectors, camera transforms, and camera methods run.
-  for (const name of ['_staticBox', '_static', '_material', '_sign', '_park', '_services', '_lamp', '_tree', '_landscape']) scene[name] = () => {};
+  for (const name of ['_staticBox', '_static', '_material', '_sign', '_roads', '_park', '_services', '_lamp', '_tree', '_landscape']) scene[name] = () => {};
   scene._town();
   return scene;
 }
@@ -44,12 +47,7 @@ function assertSafeCamera(scene) {
   assert.equal(info.mode, scene.game.player.vehicleId ? 'drive' : 'foot');
   assert.ok(Math.abs(info.targetX - scene.game.current.x / 20) < 1e-9);
   assert.ok(Math.abs(info.targetZ - scene.game.current.y / 20) < 1e-9);
-  for (const box of scene._buildingVolumes) {
-    const inside = info.x > box.minX - 0.17 && info.x < box.maxX + 0.17
-      && info.z > box.minZ - 0.17 && info.z < box.maxZ + 0.17
-      && info.y > box.minY && info.y < box.maxY + 0.17;
-    assert.equal(inside, false, 'camera must stay outside buildings and their near-plane clearance');
-  }
+  assert.equal(scene._insideBuilding(info.x, info.y, info.z), false, 'camera must stay outside the actual rotated buildings and near-plane clearance');
   scene.camera.updateMatrixWorld();
   const direction = scene.camera.getWorldDirection(new T.Vector3());
   assert.ok(Math.abs(wrapped(info.viewYaw - Math.atan2(direction.z, direction.x))) < 1e-9,
@@ -85,8 +83,12 @@ test('camera stays finite and outside buildings across sampled streets, corners,
   const foot = makeScene();
   const points = [];
   for (const building of foot.game.buildings) {
-    for (const x of [building.x - 20, building.x + building.w + 20]) {
-      for (const y of [building.y - 20, building.y + building.h + 20]) if (foot.game._isFree(x, y, 18)) points.push({ x, y });
+    const cx = building.x + building.w / 2, cy = building.y + building.h / 2, cosine = Math.cos(building.angle || 0), sine = Math.sin(building.angle || 0);
+    for (const localX of [-building.w / 2 - 20, building.w / 2 + 20]) {
+      for (const localY of [-building.h / 2 - 20, building.h / 2 + 20]) {
+        const x = cx + localX * cosine - localY * sine, y = cy + localX * sine + localY * cosine;
+        if (foot.game._isFree(x, y, 18)) points.push({ x, y });
+      }
     }
   }
   let seed = 719;
@@ -139,7 +141,7 @@ test('large teleports, tight corner transitions, and actual recovery never colla
 
 test('orbit and recenter use smooth third-person headings and the driving camera settles behind the car', () => {
   const scene = makeScene();
-  place(scene, { x: 1080, y: 1080 }, -Math.PI / 2);
+  place(scene, OPEN_POINT, -Math.PI / 2);
   frames(scene, 1);
   const originalYaw = scene.viewYaw, originalPitch = scene.viewPitch;
   scene.orbit(100, 50);
@@ -150,7 +152,7 @@ test('orbit and recenter use smooth third-person headings and the driving camera
   scene.recenter(); frames(scene, 120);
   assert.ok(Math.abs(wrapped(scene.viewYaw - scene.game.player.angle)) < 0.0001);
 
-  scene.game.cars[0].x = 1080; scene.game.cars[0].y = 1080;
+  scene.game.cars[0].x = OPEN_POINT.x; scene.game.cars[0].y = OPEN_POINT.y;
   assert.equal(scene.game.interact(), true);
   frames(scene, 1);
   scene.game.current.angle = 0;
@@ -168,7 +170,7 @@ test('orbit and recenter use smooth third-person headings and the driving camera
 
 test('mouse up looks upward, invert Y reverses it, and sensitivity scales real free-look', () => {
   const normal = makeScene(), slow = makeScene(), inverted = makeScene();
-  for (const scene of [normal, slow, inverted]) { place(scene, { x: 1080, y: 1080 }, -Math.PI / 2); frames(scene, 1); }
+  for (const scene of [normal, slow, inverted]) { place(scene, OPEN_POINT, -Math.PI / 2); frames(scene, 1); }
   const initialYaw = normal.viewYaw, initialPitch = normal.viewPitch;
   normal.orbit(120, -140); slow.orbit(120, -140, { sensitivity: 0.55 }); inverted.orbit(0, -140, { invertY: true });
   for (const scene of [normal, slow, inverted]) frames(scene, 120);
@@ -182,7 +184,7 @@ test('mouse up looks upward, invert Y reverses it, and sensitivity scales real f
 
 test('shoulder aiming moves closer, narrows FOV smoothly, and faces ahead of the player', () => {
   const scene = makeScene();
-  place(scene, { x: 1080, y: 1080 }, -Math.PI / 2); frames(scene, 120);
+  place(scene, OPEN_POINT, -Math.PI / 2); frames(scene, 120);
   const distance = scene.cameraInfo.distance, fov = scene.camera.fov;
   scene.setAiming(true); frames(scene, 1);
   assert.equal(scene.cameraInfo.aiming, true);
@@ -191,10 +193,10 @@ test('shoulder aiming moves closer, narrows FOV smoothly, and faces ahead of the
   assert.ok(scene.cameraInfo.distance < distance - 1.5);
   assert.ok(Math.abs(scene.cameraInfo.fov - 48) < 0.01);
   assert.ok(scene.cameraInfo.x > scene.cameraInfo.targetX + 0.65, 'view is over the right shoulder');
-  const playerHead = new T.Vector3(54, 1.48, 54).project(scene.camera);
+  const playerHead = new T.Vector3(OPEN_POINT.x / 20, 1.48, OPEN_POINT.y / 20).project(scene.camera);
   assert.ok(playerHead.x < -0.1, 'the player must leave the centre crosshair unobstructed');
   const forward = scene.camera.getWorldDirection(new T.Vector3());
-  const toPlayer = new T.Vector3(54, 1.03, 54).sub(scene.camera.position).normalize();
+  const toPlayer = new T.Vector3(OPEN_POINT.x / 20, 1.03, OPEN_POINT.y / 20).sub(scene.camera.position).normalize();
   assert.ok(forward.angleTo(toPlayer) > 0.15, 'the centre ray must not remain locked onto the player');
   scene.setAiming(false); frames(scene, 180);
   assert.equal(scene.cameraInfo.aiming, false);
@@ -203,15 +205,15 @@ test('shoulder aiming moves closer, narrows FOV smoothly, and faces ahead of the
 
 test('aim direction converges from the muzzle onto the centre subject and points upward into empty sky', () => {
   const scene = makeScene();
-  place(scene, { x: 1080, y: 1080 }, -Math.PI / 2); frames(scene, 1);
+  place(scene, OPEN_POINT, -Math.PI / 2); frames(scene, 1);
   scene.setAiming(true); scene.orbit(0, -69); frames(scene, 180);
   scene._buildingVolumes = [];
   const resident = new T.Mesh(new T.BoxGeometry(0.5, 1.8, 0.5), new T.MeshBasicMaterial());
-  resident.position.set(scene.camera.position.x, 1.0, 49); resident.updateMatrixWorld();
+  resident.position.set(scene.camera.position.x, 1.0, OPEN_POINT.y / 20 - 5); resident.updateMatrixWorld();
   scene._residents.set('target', { group: resident });
   const direction = scene.aimDirection();
   assert.ok(direction.angle > scene.viewYaw + 0.1, 'right shoulder ray must converge toward the subject');
-  const impactX = 54 + (49.25 - 54) / Math.sin(direction.angle) * Math.cos(direction.angle);
+  const impactX = OPEN_POINT.x / 20 - 4.75 / Math.sin(direction.angle) * Math.cos(direction.angle);
   assert.ok(Math.abs(impactX - resident.position.x) < 0.01, 'horizontal toy trajectory reaches the crosshair subject');
   assert.ok(Number.isFinite(direction.pitch));
   scene._residents.clear(); scene.orbit(0, -250); frames(scene, 180);
@@ -237,9 +239,9 @@ test('aiming and extreme pitch preserve wall clearance, and driving restores its
 
 test('ground aiming uses real camera projection and near-feet or sky clicks keep the view heading', () => {
   const scene = makeScene();
-  place(scene, { x: 1080, y: 1080 }, -Math.PI / 2);
+  place(scene, OPEN_POINT, -Math.PI / 2);
   frames(scene, 1);
-  const feet = new T.Vector3(54, 0, 54);
+  const feet = new T.Vector3(OPEN_POINT.x / 20, 0, OPEN_POINT.y / 20);
   const aimAt = point => {
     const projected = point.clone().project(scene.camera);
     return scene.aimAngle((projected.x + 1) * scene.width / 2, (1 - projected.y) * scene.height / 2);
@@ -286,4 +288,21 @@ test('the driving camera follows airborne height and rooftop landings without in
     scene.recenter(); frames(scene, 30);
     assert.ok(Math.abs(scene.cameraInfo.targetY - building.height - 1.17) < 0.000001);
   }
+});
+
+test('rotated buildings leave their empty enclosing-box corners clear for the camera and aim ray', () => {
+  const scene = makeScene(), rotation = Math.PI / 4;
+  const cosine = Math.cos(rotation), sine = Math.sin(rotation), extent = cosine * 2 + sine * .6;
+  scene._buildingVolumes = [{ cx: 0, cz: 0, halfX: 2, halfZ: .6, cosine, sine, angle: rotation, minX: -extent, maxX: extent, minZ: -extent, maxZ: extent, minY: 0, maxY: 3 }];
+  assert.equal(scene._insideBuilding(1.7, 1, -1.7), false, 'the enclosing AABB corner is physically empty');
+  assert.equal(scene._insideBuilding(.7, 1, .7), true, 'the rotated wall still blocks the camera');
+  assert.equal(scene._boomFraction(1.7, 1, -1.7, 1.7, 1, -1.2), 1, 'camera can move through the empty corner');
+  assert.ok(scene._boomFraction(-3, 1, -3, 3, 1, 3) < 1, 'a boom crossing the real diagonal wall is shortened');
+  scene.camera.position.set(1.7, 1, -1.2); scene.camera.lookAt(1.7, 1, -4);
+  scene.camera.updateMatrixWorld(true);
+  assert.equal(scene._aimWorldPoint(scene.width / 2, scene.height / 2), false, 'empty corner does not catch an otherwise clear centre-screen ray');
+  scene.camera.position.set(-3, 1, -3); scene.camera.lookAt(0, 1, 0);
+  scene.camera.updateMatrixWorld(true);
+  assert.equal(scene._aimWorldPoint(scene.width / 2, scene.height / 2), true, 'the same ray solver hits the actual rotated wall');
+  assert.ok(Math.abs(scene._aimPoint.x - scene._aimPoint.z) < .000001);
 });

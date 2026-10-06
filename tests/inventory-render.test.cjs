@@ -7,7 +7,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const core = require('../core.js');
 
-const context = vm.createContext({ MayhemCore: core, MayhemPhysics: require('../physics.js'), console, AbortController });
+const context = vm.createContext({ MayhemCore: core, MayhemWorld: require('../world.js'), MayhemPhysics: require('../physics.js'), console, AbortController });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../vendor/three.min.js'), 'utf8'), context);
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../scene3d.js'), 'utf8'), context);
 const { THREE: T, MayhemScene: Scene3D } = context;
@@ -123,12 +123,17 @@ test('solid street props are rendered once from the shared compound shapes and p
   let index = 0;
   for (const object of scene.game.staticObjects) for (const part of object.parts) {
     const mesh = scene._propAimMeshes[index++];
-    assert.ok(Math.abs(mesh.position.x - object.x / 20 - part.offset[0]) < 0.000001);
-    assert.ok(Math.abs(mesh.position.y - object.elevation - part.offset[1]) < 0.000001);
-    assert.ok(Math.abs(mesh.position.z - object.y / 20 - part.offset[2]) < 0.000001);
-    const bounds = new T.Box3().setFromObject(mesh), size = bounds.getSize(new T.Vector3());
+    const cosine = Math.cos(object.angle || 0), sine = Math.sin(object.angle || 0);
+    assert.ok(Math.abs(mesh.position.x - object.x / 20 - cosine * part.offset[0] + sine * part.offset[2]) < 0.000001);
+    assert.ok(Math.abs(mesh.position.y - (object.elevation || 0) - part.offset[1]) < 0.000001);
+    assert.ok(Math.abs(mesh.position.z - object.y / 20 - sine * part.offset[0] - cosine * part.offset[2]) < 0.000001);
+    assert.ok(Math.abs(mesh.rotation.y + (object.angle || 0)) < 0.000001);
+    const bounds = new T.Box3().setFromObject(mesh, true), size = bounds.getSize(new T.Vector3());
     assert.ok(Math.abs(size.y - part.half[1] * 2) < 0.00001, 'visual collider height uses the map shape');
-    assert.ok(Math.abs(size.x - part.half[0] * 2) < 0.025, 'visible cylinder/box uses the physical footprint');
+    const expectedWidth = part.shape === 'cylinder'
+      ? Math.max(...Array.from({ length: 12 }, (_, i) => Math.abs(cosine * Math.sin(i / 12 * Math.PI * 2) * part.half[0] - sine * Math.cos(i / 12 * Math.PI * 2) * part.half[2]))) * 2
+      : (Math.abs(cosine) * part.half[0] + Math.abs(sine) * part.half[2]) * 2;
+    assert.ok(Math.abs(size.x - expectedWidth) < 0.025, 'rotated visible cylinder/box uses the physical footprint');
   }
 });
 
@@ -145,20 +150,67 @@ test('people use the shared smaller scale while vehicles keep their original dim
 
 test('district facades follow real footprints and cottage roofs face outward', () => {
   const scene = makeScene();
-  scene._staticParts = new Map(); scene._buildingVolumes = []; scene._sign = () => {};
+  scene._staticParts = new Map(); scene._buildingVolumes = []; scene._buildingFrames = new Map(); scene._sign = () => {};
   const styles = new Set();
   scene.game.buildings.forEach((building, i) => { styles.add(building.style); scene._building(building, i); });
   assert.equal(scene._buildingVolumes.length, scene.game.buildings.length);
   assert.ok(styles.has('cottage') && styles.has('warehouse') && styles.has('shop') && styles.has('cafe'));
   scene.game.buildings.forEach((building, i) => {
     const volume = scene._buildingVolumes[i];
-    assert.ok(Math.abs(volume.minX - building.x / 20 + 0.12) < 0.000001);
-    assert.ok(Math.abs(volume.maxX - (building.x + building.w) / 20 - 0.12) < 0.000001);
+    assert.ok(Math.abs(volume.cx - (building.x + building.w / 2) / 20) < 0.000001);
+    assert.ok(Math.abs(volume.cz - (building.y + building.h / 2) / 20) < 0.000001);
+    assert.ok(Math.abs(volume.halfX - building.w / 40 - 0.12) < 0.000001);
+    assert.ok(Math.abs(volume.halfZ - building.h / 40 - 0.12) < 0.000001);
+    assert.equal(volume.angle, building.angle || 0);
     assert.ok(Math.abs(volume.maxY - building.height - 0.45) < 0.000001);
+    const frame = scene._buildingFrames.get(building.id);
+    assert.equal(frame.yaw, -(building.angle || 0));
+    assert.ok(Math.abs(Math.atan2(frame.front.z - volume.cz, frame.front.x - volume.cx) - building.frontAngle) < 0.000001);
   });
   const normals = scene._roofGeometry().attributes.normal;
   for (let vertex = 0; vertex < 12; vertex++) assert.ok(normals.getY(vertex) > 0, 'roof slopes are visible from above');
   assert.ok(normals.getZ(12) < 0 && normals.getZ(15) > 0, 'gable faces point outward');
+  const rotated = scene.game.buildings.find(b => Math.abs(Math.sin(2 * b.angle)) > .2);
+  assert.ok(rotated, 'the physical map contains diagonal frontages');
+  scene._staticParts.clear();
+  scene._building(rotated, 0);
+  const wall = scene._staticParts.values().next().value.parts[0];
+  const corners = require('../world.js').footprintCorners(rotated);
+  for (const [i, local] of [[0, [-.5, -.5]], [1, [.5, -.5]], [2, [.5, .5]], [3, [-.5, .5]]]) {
+    const actual = new T.Vector3(local[0], 0, local[1]).applyMatrix4(wall.matrix);
+    assert.ok(Math.hypot(actual.x - corners[i].x / 20, actual.z - corners[i].y / 20) < .000001, 'actual batched wall vertices match the rotated physical footprint');
+  }
+});
+
+test('curved road surfaces and continuous sidewalks follow the shared graph in three batches', () => {
+  const scene = makeScene();
+  scene._staticParts = new Map(); scene._worldInfo = { districts: {}, landscape: {} };
+  scene._roads();
+  assert.equal(scene._roadGroup.children.length, 3, 'the whole road graph uses only three surface draws');
+  assert.equal(scene.worldInfo.roads, scene.game.roads.length);
+  assert.ok(scene.worldInfo.curvedRoads > 10 && scene.worldInfo.suburbanHomes > 25);
+  assert.equal(scene.worldInfo.worldSize, core.SIZE / 20);
+  const asphalt = scene._roadGroup.getObjectByName('Curved roads'), sidewalk = scene._roadGroup.getObjectByName('Continuous sidewalks');
+  const ray = new T.Raycaster();
+  let checked = 0;
+  scene._roadGroup.updateMatrixWorld(true);
+  for (const mesh of scene._roadGroup.children) {
+    const normals = mesh.geometry.attributes.normal;
+    for (let i = 0; i < normals.count; i++) assert.ok(normals.getY(i) > .99, 'all road surfaces face upward');
+  }
+  for (const road of scene.game.roads) {
+    for (let i = 1; i < road.points.length; i++) {
+      const a = road.points[i - 1], b = road.points[i], heading = Math.atan2(b.y - a.y, b.x - a.x);
+      const x = (a.x + b.x) / 40, z = (a.y + b.y) / 40;
+      ray.set(new T.Vector3(x, 4, z), new T.Vector3(0, -1, 0));
+      assert.ok(ray.intersectObject(asphalt).length > 0, 'actual road mesh covers every graph segment');
+      const side = road.width / 40 + scene.worldInfo.sidewalkWidth / 2;
+      ray.set(new T.Vector3(x - Math.sin(heading) * side, 4, z + Math.cos(heading) * side), new T.Vector3(0, -1, 0));
+      assert.ok(ray.intersectObject(sidewalk).length > 0, 'sidewalk extends continuously outside the road edge');
+      checked++;
+    }
+  }
+  assert.ok(checked > 150);
 });
 
 test('the landscape contains real rolling terrain and a winding river outside active town roads', () => {
@@ -171,10 +223,25 @@ test('the landscape contains real rolling terrain and a winding river outside ac
   let low=Infinity, high=-Infinity;
   for(let i=0;i<vertices.count;i++){ low=Math.min(low,vertices.getY(i));high=Math.max(high,vertices.getY(i)); }
   assert.ok(high-low > 5, 'the backdrop has true height variation');
+  const indices = terrain.geometry.index;
+  for (let face = 0; face < indices.count; face += 3) {
+    const x = [0, 1, 2].reduce((sum, offset) => sum + vertices.getX(indices.getX(face + offset)), 0) / 3;
+    const z = [0, 1, 2].reduce((sum, offset) => sum + vertices.getZ(indices.getX(face + offset)), 0) / 3;
+    assert.ok(x <= 0 || x >= core.SIZE / 20 || z <= 0 || z >= core.SIZE / 20, 'rolling terrain never covers the flat playable ground');
+  }
+  let hills = 0;
+  for (const batch of scene._staticParts.values()) if (['a4bcb0', 'b0c5bb'].includes(batch.material.color.getHexString())) {
+    for (const part of batch.parts) {
+      const bounds = new T.Box3().setFromBufferAttribute(part.geometry.attributes.position).applyMatrix4(part.matrix);
+      assert.ok(bounds.max.x <= 0 || bounds.min.x >= core.SIZE / 20 || bounds.max.z <= 0 || bounds.min.z >= core.SIZE / 20, 'scenic hill meshes stay entirely beyond the playable boundary');
+      hills++;
+    }
+  }
+  assert.ok(hills >= 3);
   const water = scene._riverGroup.getObjectByName('River water');
   assert.ok(water?.isMesh && water.geometry.attributes.position.count > 200);
   const river = water.geometry.attributes.position;
-  for(let i=0;i<river.count;i++) assert.ok(river.getX(i)<0 || river.getX(i)>108 || river.getZ(i)<0 || river.getZ(i)>108, 'water stays beyond the playable city');
+  for(let i=0;i<river.count;i++) assert.ok(river.getX(i)<0 || river.getX(i)>core.SIZE/20 || river.getZ(i)<0 || river.getZ(i)>core.SIZE/20, 'water stays beyond the playable city');
   assert.ok(scene.worldInfo.landscape.treeCount > 30);
   scene.reducedMotion=true;scene._landscapeStep(0);
   const calm=Array.from(scene._riverFlow.instanceMatrix.array);scene._landscapeStep(20);

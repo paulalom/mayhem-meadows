@@ -5,7 +5,7 @@
   const CHARACTER_SCALE = root.MayhemPhysics?.CHARACTER_SCALE ?? 0.86;
   const MUZZLE_HEIGHT = root.MayhemPhysics?.MUZZLE_HEIGHT ?? 1.15 * CHARACTER_SCALE;
   const FOOT_PIVOT = 1.03 * CHARACTER_SCALE;
-  const SIDEWALK_WIDTH = 1.52;
+  const SIDEWALK_WIDTH = (root.MayhemWorld?.SIDEWALK_WIDTH ?? 32) / UNIT;
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   const angle = v => Math.atan2(Math.sin(v), Math.cos(v));
   const mix = (a, b, f) => a + (b - a) * f;
@@ -26,8 +26,8 @@
       this.renderer.shadowMap.type = T.PCFSoftShadowMap;
       this.renderer.setClearColor('#c4dce5');
       this.scene = new T.Scene();
-      this.scene.fog = new T.Fog('#c4dce5', 65, 205);
-      this.camera = new T.PerspectiveCamera(57, 1, 0.06, 275);
+      this.scene.fog = new T.Fog('#c4dce5', 85, 330);
+      this.camera = new T.PerspectiveCamera(57, 1, 0.06, 460);
       this.camera.position.set(game.current.x / UNIT, 3.4, game.current.y / UNIT + 5.7);
       this._yaw = -Math.PI / 2;
       this._requestedYaw = this._yaw;
@@ -53,6 +53,7 @@
       this._aimPoint = new T.Vector3();
       this._aimBox = new T.Box3();
       this._aimHit = new T.Vector3();
+      this._localAimRay = new T.Ray();
       this._dummy = new T.Object3D();
       this._color = new T.Color();
       this._staticParts = new Map();
@@ -60,6 +61,7 @@
       this._geometries = [];
       this._textures = [];
       this._buildingVolumes = [];
+      this._buildingFrames = new Map();
       this._propVolumes = [];
       this._propAimMeshes = [];
       this._vehicles = new Map();
@@ -202,64 +204,157 @@
     }
 
     _town() {
-      const T = this.T, core = root.MayhemCore;
-      const size = core.SIZE / UNIT, centers = core.ROAD_CENTERS.map(v => v / UNIT), roadWidth = core.ROAD_WIDTH / UNIT;
+      const size = root.MayhemCore.SIZE / UNIT;
       this._staticBox('#a7c991', size / 2, -0.15, size / 2, size + 6, 0.3, size + 6, false);
-      const asphalt = this._material('#627789'), curb = this._material('#e9e5d6'), sidewalk = this._material('#d4d7cc');
-      const sidewalkGaps = [];
-      let gapStart = 0;
-      for (const center of centers) {
-        sidewalkGaps.push([gapStart, center - roadWidth / 2 - 0.1]);
-        gapStart = center + roadWidth / 2 + 0.1;
-      }
-      sidewalkGaps.push([gapStart, size]);
-      for (const center of centers) {
-        this._staticBox(asphalt, center, 0.008, size / 2, roadWidth, 0.03, size + 3, false);
-        this._staticBox(asphalt, size / 2, 0.011, center, size + 3, 0.03, roadWidth, false);
-        for (const side of [-1, 1]) for (const gap of sidewalkGaps) {
-          const along = (gap[0] + gap[1]) / 2, length = gap[1] - gap[0];
-          this._staticBox(sidewalk, center + side * (roadWidth / 2 + SIDEWALK_WIDTH / 2 + 0.02), 0.065, along, SIDEWALK_WIDTH, 0.13, length, false);
-          this._staticBox(sidewalk, along, 0.069, center + side * (roadWidth / 2 + SIDEWALK_WIDTH / 2 + 0.02), length, 0.13, SIDEWALK_WIDTH, false);
-          this._staticBox(curb, center + side * (roadWidth / 2 + 0.02), 0.10, along, 0.09, 0.15, length, false);
-          this._staticBox(curb, along, 0.104, center + side * (roadWidth / 2 + 0.02), length, 0.15, 0.09, false);
-        }
-        for (let along = 1; along < size; along += 2.2) {
-          if (centers.some(v => Math.abs(v - along) < roadWidth / 2 + 0.4)) continue;
-          this._staticBox('#f7e5a2', center, 0.035, along, 0.08, 0.012, 0.95, false);
-          this._staticBox('#f7e5a2', along, 0.039, center, 0.95, 0.012, 0.08, false);
-        }
-      }
-      // Crosswalks break up the street grid and make turns readable from a car.
-      for (const x of centers) for (const z of centers) {
-        for (let i = -2; i <= 2; i++) for (const side of [-1, 1]) {
-          this._staticBox('#f3f0db', x + i * 0.64, 0.046, z + side * 3.10, 0.40, 0.015, 0.75, false);
-          this._staticBox('#f3f0db', x + side * 3.10, 0.048, z + i * 0.64, 0.75, 0.015, 0.40, false);
-        }
-      }
+      this._roads();
       this._blockGrounds();
       for (let i = 0; i < this.game.buildings.length; i++) this._building(this.game.buildings[i], i);
       this._park();
       this._physicalProps();
       this._services();
-      for (let i = 0; i < 26; i++) {
-        const border = i % 4, at = 2 + Math.floor(i / 4) * 17;
-        this._tree(border === 0 ? -5 : border === 1 ? size + 5 : at, border === 2 ? -5 : border === 3 ? size + 5 : at, 1.2, i);
-      }
       this._landscape(size);
+    }
+
+    _roads() {
+      const T = this.T, group = new T.Group(), roads = this.game.roads || [];
+      group.name = 'Organic street network';
+      this._roadGroup = group;
+      this.scene.add(group);
+      const batches = new Map();
+      const surface = (name, color) => {
+        if (!batches.has(name)) batches.set(name, { color, positions: [], indices: [] });
+        return batches.get(name);
+      };
+      const paving = surface('Continuous sidewalks', '#d5d4c6');
+      const asphalt = surface('Curved roads', '#647b87');
+      const curbs = surface('Curb edges', '#eee7d3');
+      const ribbon = (batch, points, inside, outside, height) => {
+        const start = batch.positions.length / 3;
+        for (let i = 0; i < points.length; i++) {
+          const previous = points[Math.max(0, i - 1)], next = points[Math.min(points.length - 1, i + 1)];
+          const before = points[i].clone().sub(previous).normalize(), after = next.clone().sub(points[i]).normalize();
+          if (i === 0) before.copy(after);
+          if (i === points.length - 1) after.copy(before);
+          const normal = new T.Vector2(-before.y - after.y, before.x + after.x).normalize();
+          const divisor = Math.max(0.35, normal.dot(new T.Vector2(-after.y, after.x)));
+          for (const offset of [inside, outside]) {
+            batch.positions.push(points[i].x + normal.x * offset / divisor, height, points[i].y + normal.y * offset / divisor);
+          }
+          if (i < points.length - 1) {
+            const a = start + i * 2;
+            if (inside < outside) batch.indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+            else batch.indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+          }
+        }
+      };
+      const disk = (batch, point, radius, height) => {
+        const start = batch.positions.length / 3, sides = 24;
+        batch.positions.push(point.x, height, point.y);
+        for (let i = 0; i <= sides; i++) batch.positions.push(point.x + Math.cos(i / sides * TAU) * radius, height, point.y + Math.sin(i / sides * TAU) * radius);
+        for (let i = 0; i < sides; i++) batch.indices.push(start, start + i + 2, start + i + 1);
+      };
+      const junctions = new Map();
+      const incident = (id, point, half) => {
+        if (!junctions.has(id)) junctions.set(id, { point, half, roads: 0 });
+        const node = junctions.get(id);
+        node.half = Math.max(node.half, half);
+        node.roads++;
+      };
+      for (const road of roads) {
+        const points = road.points.map(p => new T.Vector2(p.x / UNIT, p.y / UNIT));
+        const half = road.width / UNIT / 2;
+        if (points.length < 2) continue;
+        ribbon(paving, points, -half - SIDEWALK_WIDTH, half + SIDEWALK_WIDTH, 0.032);
+        ribbon(asphalt, points, -half, half, 0.043);
+        for (const side of [-1, 1]) ribbon(curbs, points, side * (half + 0.04), side * (half + 0.12), 0.051);
+        incident(road.a, points[0], half);
+        incident(road.b, points[points.length - 1], half);
+        let travelled = 0;
+        for (let i = 1; i < points.length; i++) {
+          const a = points[i - 1], b = points[i], length = a.distanceTo(b), heading = Math.atan2(b.y - a.y, b.x - a.x);
+          for (let at = 2.4 - travelled % 2.4; at < length; at += 2.4) {
+            if (i === 1 && at < half + 0.9 || i === points.length - 1 && at > length - half - 0.9) continue;
+            const p = a.clone().lerp(b, at / length);
+            this._static(this._cube, this._material('#f4df9e'), p.x, 0.059, p.y, 0.85, 0.01, 0.07, [0, -heading, 0], false);
+          }
+          travelled += length;
+        }
+      }
+      for (const [id, junction] of junctions) {
+        disk(paving, junction.point, junction.half + SIDEWALK_WIDTH, 0.033);
+        disk(asphalt, junction.point, junction.half + 0.13, 0.054);
+        if (junction.roads < 3) continue;
+        for (const road of roads.filter(r => r.a === id || r.b === id)) {
+          if (road.district === 'willow' || road.district === 'orchard') continue;
+          const start = road.a === id, points = road.points;
+          const a = points[start ? 0 : points.length - 1], b = points[start ? 1 : points.length - 2];
+          const heading = Math.atan2(b.y - a.y, b.x - a.x), along = junction.half + 0.7;
+          for (let stripe = -2; stripe <= 2; stripe++) {
+            const across = stripe * 0.65;
+            const x = a.x / UNIT + Math.cos(heading) * along - Math.sin(heading) * across;
+            const z = a.y / UNIT + Math.sin(heading) * along + Math.cos(heading) * across;
+            this._static(this._cube, this._material('#f3efd9'), x, 0.066, z, 0.65, 0.012, 0.36, [0, -heading, 0], false);
+          }
+        }
+      }
+      for (const [name, batch] of batches) {
+        const geometry = this._geometry(new T.BufferGeometry());
+        geometry.setAttribute('position', new T.Float32BufferAttribute(batch.positions, 3));
+        geometry.setIndex(batch.indices);
+        geometry.computeVertexNormals();
+        geometry.computeBoundingSphere();
+        const mesh = new T.Mesh(geometry, this._material(batch.color));
+        mesh.name = name;
+        mesh.receiveShadow = true;
+        group.add(mesh);
+      }
+      if (this._worldInfo) Object.assign(this._worldInfo, {
+        worldSize: root.MayhemCore.SIZE / UNIT, sidewalkWidth: SIDEWALK_WIDTH, roads: roads.length, nodeCount: junctions.size,
+        roadGraph: roads.map(r => ({ id: r.id, a: r.a, b: r.b, width: r.width / UNIT, district: r.district, points: r.points.map(p => ({ x: p.x / UNIT, z: p.y / UNIT })) })),
+        curvedRoads: roads.filter(r => {
+          const a = r.points[0], b = r.points[r.points.length - 1], length = Math.hypot(b.x - a.x, b.y - a.y);
+          return r.points.some(p => Math.abs((p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x)) / Math.max(1, length) > 5);
+        }).length,
+        suburbanHomes: this.game.buildings.filter(b => b.district === 'willow' || b.district === 'orchard').length,
+        rotatedBuildings: this.game.buildings.filter(b => Math.abs(b.angle || 0) > 0.01).length
+      });
     }
 
     _blockGrounds() {
       for (const block of this.game.blocks || []) {
         const court = block.courtyard, paved = block.district === 'works' || block.district === 'market';
-        if (court) this._staticBox(paved ? '#b5ada0' : '#acd29f', (court.x + court.w / 2) / UNIT, 0.028, (court.y + court.h / 2) / UNIT, court.w / UNIT, 0.035, court.h / UNIT, false);
-        if (block.district === 'works' && court) for (let i = 0; i < 3; i++) {
-          this._staticBox('#e6dbc0', (court.x + 18 + i * 27) / UNIT, 0.054, (court.y + court.h / 2) / UNIT, 0.055, 0.012, Math.min(2.8, court.h / UNIT), false);
+        if (court) this._groundRect(court, paved ? '#b5ada0' : '#acd29f', 0.025);
+        const frontageColor = block.district === 'works' ? '#a8aaa0' : paved ? '#d4c8b3' : '#a1c58b';
+        if (block.garden) this._groundRect(block.garden, frontageColor, 0.019);
+        if (block.driveway) {
+          this._groundRect(block.driveway, block.district === 'works' ? '#9caca9' : '#d7ccba', 0.030);
+          if (block.district === 'willow' || block.district === 'orchard') {
+            const drive = block.driveway, yaw = drive.angle || 0, cosine = Math.cos(yaw), sine = Math.sin(yaw);
+            const cx = (drive.x + drive.w / 2) / UNIT, cz = (drive.y + drive.h / 2) / UNIT;
+            for (const side of [-1, 1]) {
+              const offset = side * drive.w / UNIT * .27;
+              this._static(this._cube, this._material('#b6b7a3'), cx + cosine * offset, .034, cz + sine * offset, .21, .008, drive.h / UNIT, [0, -yaw, 0], false);
+            }
+          }
         }
         if (this._worldInfo) this._worldInfo.districts[block.district] = (this._worldInfo.districts[block.district] || 0) + 1;
       }
-      // A paved lookout follows the southern city edge; the distant river
-      // stays beyond the playable boundary rather than cutting through roads.
-      this._staticBox('#e6d7b8', 54, 0.035, 105.5, 102, 0.05, 1.2, false);
+      for (const bay of this.game.world?.parkingBays || []) {
+        if (bay.access) this._groundRect(bay.access, '#d7ccba', 0.022);
+        this._groundRect(bay, '#9caca9', 0.028);
+        const yaw = bay.angle || 0, c = Math.cos(yaw), s = Math.sin(yaw);
+        const cx = (bay.x + bay.w / 2) / UNIT, cz = (bay.y + bay.h / 2) / UNIT;
+        for (const side of [-1, 1]) {
+          const offset = side * (bay.h / 2 - 2) / UNIT;
+          this._static(this._cube, this._material('#f3efd9'), cx - s * offset, 0.039, cz + c * offset,
+            bay.w / UNIT - 0.12, 0.008, 0.05, [0, -yaw, 0], false);
+        }
+      }
+      if (this._worldInfo) this._worldInfo.parkingBays = this.game.world?.parkingBays?.length || 0;
+    }
+
+    _groundRect(rect, color, height) {
+      this._static(this._cube, this._material(color), (rect.x + rect.w / 2) / UNIT, height, (rect.y + rect.h / 2) / UNIT, rect.w / UNIT, 0.012, rect.h / UNIT, [0, -(rect.angle || 0), 0], false);
     }
 
     _roofGeometry() {
@@ -281,13 +376,31 @@
       const cx = x + w / 2, cz = z + d / 2, cottage = style === 'cottage';
       const wallHeight = cottage ? Math.max(1.8, height - 1.0) : height - 0.18;
       const roofColor = cottage ? ['#8c746c', '#6a8583', '#ad7e72'][index % 3] : '#778b91';
-      this._buildingVolumes.push({ minX: x - 0.12, maxX: x + w + 0.12, minZ: z - 0.12, maxZ: z + d + 0.12, minY: -.2, maxY: height + 0.45 });
-      this._staticBox(building.color, cx, wallHeight / 2, cz, w, wallHeight, d);
-      this._staticBox('#f1ead8', cx, 0.18, cz, w + .08, .36, d + .08);
-      if (cottage) this._static(this._roofGeometry(), this._material(roofColor), cx, wallHeight, cz, w + .22, height - wallHeight, d + .22);
+      const rotation = building.angle || 0, cosine = Math.cos(rotation), sine = Math.sin(rotation);
+      const point = (px, pz) => ({ x: cx + (px - cx) * cosine - (pz - cz) * sine, z: cz + (px - cx) * sine + (pz - cz) * cosine });
+      const box = (color, px, py, pz, sx, sy, sz, shadow = true) => {
+        const p = point(px, pz);
+        this._static(this._cube, typeof color === 'string' ? this._material(color) : color, p.x, py, p.z, sx, sy, sz, [0, -rotation, 0], shadow);
+      };
+      const sign = (text, px, py, pz, width, signHeight) => {
+        const p = point(px, pz);
+        this._sign(text, p.x, py, p.z, -rotation, '#fff4d6', '#425963', width, signHeight);
+      };
+      const halfX = w / 2 + .12, halfZ = d / 2 + .12;
+      const extentX = Math.abs(cosine) * halfX + Math.abs(sine) * halfZ, extentZ = Math.abs(sine) * halfX + Math.abs(cosine) * halfZ;
+      this._buildingVolumes.push({
+        id: building.id, cx, cz, halfX, halfZ, physicalHalfX: w / 2, physicalHalfZ: d / 2, height, angle: rotation, cosine, sine,
+        minX: cx - extentX, maxX: cx + extentX, minZ: cz - extentZ, maxZ: cz + extentZ, minY: -.2, maxY: height + .45
+      });
+      if (this._buildingFrames) this._buildingFrames.set(building.id ?? index, {
+        center: { x: cx, y: height / 2, z: cz }, yaw: -rotation, front: point(cx, z + d), width: w, depth: d, height, style
+      });
+      box(building.color, cx, wallHeight / 2, cz, w, wallHeight, d);
+      box('#f1ead8', cx, 0.18, cz, w + .08, .36, d + .08);
+      if (cottage) this._static(this._roofGeometry(), this._material(roofColor), cx, wallHeight, cz, w + .22, height - wallHeight, d + .22, [0, -rotation, 0]);
       else {
-        this._staticBox('#ddd9cc', cx, height - .09, cz, w + .15, .20, d + .15);
-        this._staticBox(roofColor, cx, height + .025, cz, Math.max(.2, w - .18), .045, Math.max(.2, d - .18));
+        box('#ddd9cc', cx, height - .09, cz, w + .15, .20, d + .15);
+        box(roofColor, cx, height + .025, cz, Math.max(.2, w - .18), .045, Math.max(.2, d - .18));
       }
       const warehouse = style === 'warehouse', floors = cottage ? 1 : Math.max(1, Math.floor((wallHeight - .5) / (warehouse ? 2.2 : 1.8)));
       const alongX = Math.max(1, Math.floor(w / 1.6)), alongZ = Math.max(1, Math.floor(d / 1.6));
@@ -296,46 +409,51 @@
         for (const side of [-1, 1]) {
           for (let column = 0; column < alongX; column++) {
             const px = x + (column + .5) * w / alongX;
-            this._staticBox('#f3eddc', px, y, cz + side * (d / 2 + .02), Math.min(.9, w / alongX * .65), .88, .05, false);
-            this._staticBox(warehouse ? '#708a91' : '#7396a3', px, y, cz + side * (d / 2 + .055), Math.min(.72, w / alongX * .5), .69, .025, false);
+            box('#f3eddc', px, y, cz + side * (d / 2 + .02), Math.min(.9, w / alongX * .65), .88, .05, false);
+            box(warehouse ? '#708a91' : '#7396a3', px, y, cz + side * (d / 2 + .055), Math.min(.72, w / alongX * .5), .69, .025, false);
           }
           for (let column = 0; column < alongZ; column++) {
             const pz = z + (column + .5) * d / alongZ;
-            this._staticBox('#f3eddc', cx + side * (w / 2 + .02), y, pz, .05, .88, Math.min(.9, d / alongZ * .65), false);
-            this._staticBox(warehouse ? '#708a91' : '#7396a3', cx + side * (w / 2 + .055), y, pz, .025, .69, Math.min(.72, d / alongZ * .5), false);
+            box('#f3eddc', cx + side * (w / 2 + .02), y, pz, .05, .88, Math.min(.9, d / alongZ * .65), false);
+            box(warehouse ? '#708a91' : '#7396a3', cx + side * (w / 2 + .055), y, pz, .025, .69, Math.min(.72, d / alongZ * .5), false);
           }
         }
       }
       if (warehouse) {
-        for (let y = .5; y < wallHeight; y += .42) this._staticBox('#aa8475', x - .022, y, cz, .022, .018, d - .12, false);
-        this._staticBox('#607481', x - .035, 1.1, cz, .05, 2.0, Math.min(2.6, d * .5), false);
-        for (let y = .3; y < 2.1; y += .2) this._staticBox('#8d9fa4', x - .07, y, cz, .025, .025, Math.min(2.5, d * .48), false);
-      } else this._staticBox('#426674', x - .04, .8, cz, .04, 1.5, Math.min(.75, d * .2), false);
+        for (let y = .5; y < wallHeight; y += .42) box('#aa8475', cx, y, z + d + .022, w - .12, .018, .022, false);
+        box('#607481', cx, 1.1, z + d + .035, Math.min(2.6, w * .5), 2.0, .05, false);
+        for (let y = .3; y < 2.1; y += .2) box('#8d9fa4', cx, y, z + d + .07, Math.min(2.5, w * .48), .025, .025, false);
+      } else box('#426674', cx, .8, z + d + .04, Math.min(.75, w * .2), 1.5, .04, false);
       if (cottage) {
-        this._staticBox('#ddcfb1', x - .4, .065, cz, .8, .065, Math.min(1.6, d * .6), false);
-        this._staticBox('#f1dbb1', x - .14, 1.9, cz, .32, .1, Math.min(1.6, d * .6));
+        box('#ddcfb1', cx, .065, z + d + .4, Math.min(1.6, w * .6), .065, .8, false);
+        box('#f1dbb1', cx, 1.9, z + d + .14, Math.min(1.6, w * .6), .1, .32);
       } else {
-        const frontage = Math.min(3.2, d * .86), awning = style === 'cafe' ? '#7ba89d' : '#e89988';
-        this._staticBox(awning, x - .32, 2.05, cz, .65, .13, frontage);
-        for (let i = 0; i < 6; i++) this._staticBox('#faedcf', x - .33, 2.125, cz - frontage / 2 + (i + .5) * frontage / 6, .67, .015, frontage / 12, false);
-        this._sign(building.name, x - .11, Math.min(wallHeight - .35, 2.72), cz, -Math.PI / 2, '#fff4d6', '#425963', Math.min(3.5, d * .88), .55);
+        const frontage = Math.min(3.2, w * .86), awning = style === 'cafe' ? '#7ba89d' : '#e89988';
+        box(awning, cx, 2.05, z + d + .32, frontage, .13, .65);
+        for (let i = 0; i < 6; i++) box('#faedcf', cx - frontage / 2 + (i + .5) * frontage / 6, 2.125, z + d + .33, frontage / 12, .015, .67, false);
+        sign(building.name, cx, Math.min(wallHeight - .35, 2.72), z + d + .11, Math.min(3.5, w * .88), .55);
       }
       if (style === 'tower') {
-        this._sign('12 : 00', x - .13, height - 1.15, cz, -Math.PI / 2, '#f1dfaf', '#51626a', Math.min(2.5, d * .8), .8);
-        this._staticBox('#d6b276', cx, height + .18, cz, .12, .35, .12);
+        sign('12 : 00', cx, height - 1.15, z + d + .13, Math.min(2.5, w * .8), .8);
+        box('#d6b276', cx, height + .18, cz, .12, .35, .12);
       }
     }
 
     _landscape(size) {
       const T = this.T, landscape = new T.Group(), river = new T.Group();
+      const layout = this.game.world?.landscape || this.game.landscape || {};
       landscape.name = 'Meadows hinterland';
       river.name = 'Winding river';
       this._landscapeGroup = landscape;
       this._riverGroup = river;
       this.scene.add(landscape, river);
-      const curve = new T.CatmullRomCurve3([
-        [-55, 133], [3, 125], [43, 130], [82, 120], [124, 130], [144, 98], [132, 54], [146, 8], [170, -38]
-      ].map(([x, z]) => new T.Vector3(x, -0.34, z)));
+      const riverPath = layout.riverPath || [
+        { x: (size + 18) * UNIT, y: -450 }, { x: (size + 30) * UNIT, y: size * UNIT * .15 },
+        { x: (size + 15) * UNIT, y: size * UNIT * .43 }, { x: (size + 27) * UNIT, y: size * UNIT * .7 },
+        { x: (size + 18) * UNIT, y: (size + 35) * UNIT }
+      ];
+      const riverWidth = (layout.riverWidth || 142) / UNIT;
+      const curve = new T.CatmullRomCurve3(riverPath.map(p => new T.Vector3(p.x / UNIT, -0.34, p.y / UNIT)));
       const samples = curve.getPoints(120);
       const riverDistance = (x, z) => Math.sqrt(Math.min(...samples.map(p => (x - p.x) ** 2 + (z - p.z) ** 2)));
       const terrainHeight = (x, z) => {
@@ -346,7 +464,7 @@
         if (distance < 9) y = mix(-0.64, y, clamp((distance - 3.6) / 5.4, 0, 1));
         return y;
       };
-      const positions = [], colors = [], indices = [], count = 51, start = -96, step = 6;
+      const positions = [], colors = [], indices = [], start = -96, step = 8, count = Math.ceil((size + 192) / step) + 1;
       for (let row = 0; row < count; row++) for (let col = 0; col < count; col++) {
         const x = start + col * step, z = start + row * step, y = terrainHeight(x, z);
         positions.push(x, y, z);
@@ -355,7 +473,9 @@
       }
       for (let row = 0; row < count - 1; row++) for (let col = 0; col < count - 1; col++) {
         const x = start + (col + 0.5) * step, z = start + (row + 0.5) * step;
-        if (x >= 0 && x <= size && z >= 0 && z <= size) continue;
+        // Skip any tile which overlaps the flat playable map, including edge
+        // tiles. Scenic slopes must never show through the drivable ground.
+        if (x + step / 2 > 0 && x - step / 2 < size && z + step / 2 > 0 && z - step / 2 < size) continue;
         const a = row * count + col;
         indices.push(a, a + count, a + 1, a + 1, a + count, a + count + 1);
       }
@@ -387,8 +507,8 @@
         river.add(mesh);
         return mesh;
       };
-      ribbon(9.6, -0.40, '#d9cba6', 'River bank');
-      this._riverSurface = ribbon(7.1, -0.31, '#79bac7', 'River water');
+      ribbon(riverWidth + 2.5, -0.40, '#d9cba6', 'River bank');
+      this._riverSurface = ribbon(riverWidth, -0.31, '#79bac7', 'River water');
       this._riverCurve = curve;
       this._riverFlow = new T.InstancedMesh(this._cube, this._material('#b8dde0', { unlit: true }), 18);
       this._riverFlow.name = 'Water glints';
@@ -401,23 +521,43 @@
         rail.rotation.y = -across;
       }
       let treeCount = 0;
-      for (let i = 0; i < 64; i++) {
-        const a = i / 64 * TAU, radius = 65 + (i % 5) * 8, x = size / 2 + Math.cos(a) * radius, z = size / 2 + Math.sin(a) * radius;
+      for (let i = 0; i < 150; i++) {
+        const a = i / 150 * TAU + Math.sin(i * 3.1) * .04;
+        const edgeRadius = size / 2 / Math.max(Math.abs(Math.cos(a)), Math.abs(Math.sin(a)));
+        const radius = edgeRadius + 8 + (i % 7) * 4;
+        const x = size / 2 + Math.cos(a) * radius, z = size / 2 + Math.sin(a) * radius;
         if (x > -3 && x < size + 3 && z > -3 && z < size + 3 || riverDistance(x, z) < 7) continue;
         const y = terrainHeight(x, z);
         treeCount++;
         this._static(this._cylinder, this._material('#987d62'), x, y + 0.8, z, 0.16, 1.6, 0.16);
         this._static(this._cone, this._material(i % 2 ? '#719b84' : '#89ad87'), x, y + 2.8, z, 1.4, 4.5, 1.4);
       }
-      for (let i = 0; i < 12; i++) {
-        const a = i / 12 * TAU, x = size / 2 + Math.cos(a) * 154, z = size / 2 + Math.sin(a) * 154;
-        this._static(this._sphere, this._material(i % 2 ? '#a4bcb0' : '#b0c5bb'), x, 1, z, 35, 12 + i % 3 * 4, 28, null, false);
+      const hills = layout.hills || Array.from({ length: 12 }, (_, i) => {
+        const a = i / 12 * TAU, radius = size * .75 + 85;
+        return { x: (size / 2 + Math.cos(a) * radius) * UNIT, y: (size / 2 + Math.sin(a) * radius) * UNIT, radius: 700, height: 14 + i % 3 * 4 };
+      });
+      for (let i = 0; i < hills.length; i++) {
+        const hill = hills[i], radius = hill.radius / UNIT;
+        let x = hill.x / UNIT, z = hill.y / UNIT;
+        const depth = radius * .8;
+        if (x + radius > 0 && x - radius < size && z + depth > 0 && z - depth < size) {
+          const exits = [
+            { distance: x + radius + 2, x: -radius - 2 }, { distance: size + radius + 2 - x, x: size + radius + 2 },
+            { distance: z + depth + 2, z: -depth - 2 }, { distance: size + depth + 2 - z, z: size + depth + 2 }
+          ];
+          const exit = exits.reduce((best, value) => value.distance < best.distance ? value : best);
+          x = exit.x ?? x; z = exit.z ?? z;
+        }
+        this._static(this._sphere, this._material(i % 2 ? '#a4bcb0' : '#b0c5bb'), x, 1, z, radius, hill.height, depth, null, false);
       }
       for (let i = 0; i < 10; i++) {
-        const x = -30 + i * 20, z = i % 2 ? -32 : 138;
+        const x = -30 + i * (size + 60) / 10, z = i % 2 ? -32 : size + 30;
         this._static(this._sphere, this._material('#edf2e9', { unlit: true }), x, 22 + i % 3 * 3, z, 6, 1.3, 2.1, null, false);
       }
-      this._worldInfo.landscape = { terrainVertices: positions.length / 3, riverSamples: samples.length, riverWidth: 7.1, treeCount };
+      this._worldInfo.landscape = {
+        terrainVertices: positions.length / 3, riverSamples: samples.length, riverWidth, treeCount,
+        riverPath: riverPath.map(p => ({ x: p.x / UNIT, z: p.y / UNIT })), hillCount: hills.length
+      };
       this._landscapeStep(0);
     }
 
@@ -474,13 +614,16 @@
     }
 
     _park() {
-      this._staticBox('#94c99b', 54, 0.075, 54, 12.0, 0.14, 12.0, false);
-      this._staticBox('#e6d8b2', 54, 0.155, 54, 1.5, 0.04, 11.9, false);
-      this._staticBox('#e6d8b2', 54, 0.157, 54, 11.9, 0.04, 1.5, false);
-      this._sign('MAYHEM MEADOWS', 48.05, 1.0, 54, -Math.PI / 2, '#f3e5ad', '#40785f', 3.5, 0.6);
-      for (let i = 0; i < 8; i++) {
-        const x = 49 + i * 1.2;
-        this._static(this._sphere, this._material(palette[i % palette.length]), x, 0.32, 59.55, 0.19, 0.19, 0.19, null, false);
+      const layout = this.game.world?.landscape || this.game.landscape || {};
+      for (const meadow of layout.meadow || []) this._groundRect(meadow, '#adc893', .011);
+      for (const green of layout.greens || []) {
+        const x = (green.x + green.w / 2) / UNIT, z = (green.y + green.h / 2) / UNIT;
+        this._groundRect(green, '#95be8b', .019);
+        this._staticBox('#e4d7b2', x, .036, z, 1.1, .014, green.h / UNIT, false);
+        this._staticBox('#e4d7b2', x, .038, z, green.w / UNIT, .014, 1.1, false);
+        const district = root.MayhemWorld?.DISTRICTS[green.district];
+        this._sign(district?.name || 'VILLAGE GREEN', x, 1.05, z - green.h / UNIT / 2 + .2, 0, '#f3e5ad', '#40785f', 2.4, .48);
+        for (let i = 0; i < 8; i++) this._static(this._sphere, this._material(palette[i % palette.length]), x - 2.1 + i * .6, .12, z + green.h / UNIT / 2 - .7, .12, .12, .12, null, false);
       }
     }
 
@@ -491,11 +634,14 @@
         tree: ['#a88462', '#67af91'], lamp: ['#536d74', '#536d74', '#fcf1be'],
         bench: ['#cf9771'], fountain: ['#eee7d3', '#f3eddc', '#f3eddc'],
         garage: ['#b8a1e0', '#ffe0b1'], wash: ['#89d7d1'], planter: ['#b08d77'],
-        bollard: ['#5c7781'], wayfinding: ['#687d74', '#f1ddae']
+        bollard: ['#5c7781'], wayfinding: ['#687d74', '#f1ddae'], fence: ['#e7ddbd'], hedge: ['#78a578']
       };
       for (const object of this.game.staticObjects || []) {
         const x = object.x / UNIT, z = object.y / UNIT, elevation = object.elevation || 0;
         const yaw = -(object.angle || 0), cosine = Math.cos(yaw), sine = Math.sin(yaw);
+        const sign = (text, offset, height, facing, background, ink, width, signHeight) => {
+          this._sign(text, x + sine * offset, elevation + height, z + cosine * offset, yaw + facing, background, ink, width, signHeight);
+        };
         for (let i = 0; i < (object.parts || []).length; i++) {
           const part = object.parts[i], offset = part.offset || [0, object.height / 2, 0];
           const half = part.half || [object.width / UNIT / 2, object.height / 2, object.depth / UNIT / 2];
@@ -525,9 +671,9 @@
           this._static(this._cylinder, this._material('#7dd9e6'), x, elevation + 0.63, z, 1.43, 0.07, 1.43, null, false);
           this._static(this._sphere, this._material('#a3e5eb'), x, elevation + 1.70, z, 0.18, 0.55, 0.18, null, false);
         }
-        if (object.kind === 'garage') this._sign('SPRINKLE GARAGE', x, elevation + 1.26, z - 0.68, 0, '#fff1c8', '#775688', 1.75, 0.5);
-        if (object.kind === 'wash') this._sign('COOL-DOWN CAR WASH', x, elevation + 2.62, z - 0.35, Math.PI, '#dcfff1', '#3c827d', 4.5, 0.48);
-        if (object.kind === 'wayfinding') this._sign(object.label, x, elevation + 1.3, z - 0.045, Math.PI, '#f1ddae', '#425e5c', 0.94, 0.37);
+        if (object.kind === 'garage') sign('SPRINKLE GARAGE', -.68, 1.26, 0, '#fff1c8', '#775688', 1.75, .5);
+        if (object.kind === 'wash') sign('COOL-DOWN CAR WASH', -.35, 2.62, Math.PI, '#dcfff1', '#3c827d', 4.5, .48);
+        if (object.kind === 'wayfinding') sign(object.label, -.045, 1.3, Math.PI, '#f1ddae', '#425e5c', .94, .37);
         if (object.kind === 'planter') {
           this._static(this._sphere, this._material('#7da676'), x, elevation + 0.62, z, 0.48, 0.23, 0.26);
           for (const side of [-1, 1]) this._static(this._sphere, this._material('#e8b393'), x + side * 0.27, elevation + 0.76, z, 0.08, 0.09, 0.08, null, false);
@@ -536,9 +682,7 @@
     }
 
     _services() {
-      this._serviceRing(45, 45, '#c9a5ff');
-      const x = 81, z = 99;
-      this._serviceRing(x, z, '#78eee2');
+      for (const service of this.game.services) this._serviceRing(service.x / UNIT, service.y / UNIT, service.id === 'garage' ? '#c9a5ff' : '#78eee2');
     }
 
     _serviceRing(x, z, color) {
@@ -794,13 +938,25 @@
         const distance = point.distanceToSquared(this._ray.ray.origin);
         if (distance < nearest) { nearest = distance; this._aimPoint.copy(point); }
       };
-      // Buildings use the same collision envelope as the camera. People and
-      // vehicles use their rendered meshes, so shoulder offset can converge on
-      // the crosshair's subject rather than merely firing parallel to the view.
+      // Rotated building rays use their physical footprint, without the extra
+      // camera clearance. People and vehicles use their actual rendered meshes
+      // so the shoulder shot converges on the crosshair's subject.
       for (const box of this._buildingVolumes) {
-        this._aimBox.min.set(box.minX, box.minY, box.minZ);
-        this._aimBox.max.set(box.maxX, box.maxY, box.maxZ);
-        if (this._ray.ray.intersectBox(this._aimBox, this._aimHit)) saveHit(this._aimHit);
+        const cx = box.cx ?? (box.minX + box.maxX) / 2, cz = box.cz ?? (box.minZ + box.maxZ) / 2;
+        const cosine = box.cosine ?? 1, sine = box.sine ?? 0;
+        const halfX = box.physicalHalfX ?? box.halfX ?? (box.maxX - box.minX) / 2, halfZ = box.physicalHalfZ ?? box.halfZ ?? (box.maxZ - box.minZ) / 2;
+        const origin = this._ray.ray.origin, direction = this._ray.ray.direction;
+        this._localAimRay.origin.set(
+          (origin.x - cx) * cosine + (origin.z - cz) * sine, origin.y, -(origin.x - cx) * sine + (origin.z - cz) * cosine
+        );
+        this._localAimRay.direction.set(direction.x * cosine + direction.z * sine, direction.y, -direction.x * sine + direction.z * cosine);
+        this._aimBox.min.set(-halfX, box.height ? 0 : box.minY, -halfZ);
+        this._aimBox.max.set(halfX, box.height ?? box.maxY, halfZ);
+        if (this._localAimRay.intersectBox(this._aimBox, this._aimHit)) {
+          const px = this._aimHit.x, pz = this._aimHit.z;
+          this._aimHit.set(cx + px * cosine - pz * sine, this._aimHit.y, cz + px * sine + pz * cosine);
+          saveHit(this._aimHit);
+        }
       }
       const subjects = [...(this._propAimMeshes || [])];
       for (const model of this._residents?.values() || []) if (model.group.visible) subjects.push(model.group);
@@ -971,8 +1127,15 @@
       let nearest = 1;
       const dx = endX - x, dy = endY - y, dz = endZ - z, margin = 0.22;
       for (const box of this._buildingVolumes) {
+        const cx = box.cx ?? (box.minX + box.maxX) / 2, cz = box.cz ?? (box.minZ + box.maxZ) / 2;
+        const cosine = box.cosine ?? 1, sine = box.sine ?? 0;
+        const halfX = box.halfX ?? (box.maxX - box.minX) / 2, halfZ = box.halfZ ?? (box.maxZ - box.minZ) / 2;
         let near = 0, far = 1;
-        const values = [[x, dx, box.minX - margin, box.maxX + margin], [y, dy, box.minY, box.maxY + margin], [z, dz, box.minZ - margin, box.maxZ + margin]];
+        const values = [
+          [(x - cx) * cosine + (z - cz) * sine, dx * cosine + dz * sine, -halfX - margin, halfX + margin],
+          [y, dy, box.minY, box.maxY + margin],
+          [-(x - cx) * sine + (z - cz) * cosine, -dx * sine + dz * cosine, -halfZ - margin, halfZ + margin]
+        ];
         let intersects = true;
         for (const v of values) {
           if (Math.abs(v[1]) < 0.000001) { if (v[0] < v[2] || v[0] > v[3]) { intersects = false; break; } }
@@ -989,7 +1152,13 @@
     }
 
     _insideBuilding(x, y, z) {
-      return this._buildingVolumes.some(box => x > box.minX - 0.17 && x < box.maxX + 0.17 && z > box.minZ - 0.17 && z < box.maxZ + 0.17 && y < box.maxY + 0.17 && y > box.minY);
+      return this._buildingVolumes.some(box => {
+        const cx = box.cx ?? (box.minX + box.maxX) / 2, cz = box.cz ?? (box.minZ + box.maxZ) / 2;
+        const cosine = box.cosine ?? 1, sine = box.sine ?? 0;
+        const halfX = box.halfX ?? (box.maxX - box.minX) / 2, halfZ = box.halfZ ?? (box.maxZ - box.minZ) / 2;
+        const localX = (x - cx) * cosine + (z - cz) * sine, localZ = -(x - cx) * sine + (z - cz) * cosine;
+        return Math.abs(localX) < halfX + .17 && Math.abs(localZ) < halfZ + .17 && y < box.maxY + .17 && y > box.minY;
+      });
     }
 
     _cameraStep(dt) {
@@ -1005,17 +1174,23 @@
         // including bodies resting on roofs, to avoid a zero-length camera.
         const margin = 0.27;
         for (const box of this._buildingVolumes) {
-          if (x <= box.minX - margin || x >= box.maxX + margin || z <= box.minZ - margin || z >= box.maxZ + margin || targetHeight >= box.maxY + margin) continue;
+          const cx = box.cx ?? (box.minX + box.maxX) / 2, cz = box.cz ?? (box.minZ + box.maxZ) / 2;
+          const cosine = box.cosine ?? 1, sine = box.sine ?? 0;
+          const halfX = box.halfX ?? (box.maxX - box.minX) / 2, halfZ = box.halfZ ?? (box.maxZ - box.minZ) / 2;
+          let localX = (x - cx) * cosine + (z - cz) * sine, localZ = -(x - cx) * sine + (z - cz) * cosine;
+          if (Math.abs(localX) >= halfX + margin || Math.abs(localZ) >= halfZ + margin || targetHeight >= box.maxY + margin) continue;
           const exits = [
-            { distance: x - box.minX + margin, x: box.minX - margin },
-            { distance: box.maxX + margin - x, x: box.maxX + margin },
-            { distance: z - box.minZ + margin, z: box.minZ - margin },
-            { distance: box.maxZ + margin - z, z: box.maxZ + margin },
+            { distance: localX + halfX + margin, x: -halfX - margin },
+            { distance: halfX + margin - localX, x: halfX + margin },
+            { distance: localZ + halfZ + margin, z: -halfZ - margin },
+            { distance: halfZ + margin - localZ, z: halfZ + margin },
             { distance: box.maxY + margin - targetHeight, y: box.maxY + margin }
           ];
           let exit = exits[0];
           for (let i = 1; i < exits.length; i++) if (exits[i].distance < exit.distance) exit = exits[i];
-          x = exit.x ?? x; z = exit.z ?? z; targetHeight = exit.y ?? targetHeight;
+          localX = exit.x ?? localX; localZ = exit.z ?? localZ;
+          x = cx + localX * cosine - localZ * sine; z = cz + localX * sine + localZ * cosine;
+          targetHeight = exit.y ?? targetHeight;
         }
       }
       const mode = driving ? 'drive' : 'foot';
