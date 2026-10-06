@@ -71,6 +71,10 @@ The [story campaign design](CAMPAIGN.md) specifies **Operation Unboring**, a pro
 
 The [police balance design](POLICE.md) proposes a forgiving mischief buildup, explicit chase reasons, announced reinforcement waves, and a capped four-car swarm. These rules are planned for a gameplay update; the current prototype retains its existing three-patrol heat system.
 
+## Texture library
+
+The [generic texture library](assets/textures/README.md) contains eight softly painted building and environment materials, with a contact sheet, repeat previews, and generation prompts. These standalone assets are prepared for later application during the map rework.
+
 ## Development
 
 The checked-in engine bundle is ready to play. You do not need npm or a build step to open the game.

@@ -1,0 +1,153 @@
+{
+  "version": 1,
+  "title": "Mayhem Meadows generic texture library",
+  "created": "2026-10-06",
+  "status": "unapplied",
+  "format": "PNG",
+  "colorSpace": "sRGB",
+  "mapType": "base-color",
+  "wrap": [
+    "repeat",
+    "repeat"
+  ],
+  "generation": {
+    "tool": "built-in image_gen",
+    "commonPrompt": "Use case: stylized-concept\nAsset type: reusable seamless base-color texture for a colorful low-poly 3D browser game, Mayhem Meadows.\nPrimary request: create ONE square tileable material texture, 1024 by 1024 pixels, covering the entire canvas edge to edge.\nStyle/medium: softly hand-painted cartoon game material, restrained chunky shapes and subtle brushwork, readable at a distance, low to medium contrast and modest surface detail. Matte, diffuse albedo only.\nComposition/framing: orthographic straight-on flat surface scan. Flat even color distribution across the whole tile. Seamlessly repeat horizontally and vertically; continue patterns across opposite edges with matching scale and no perimeter lines.\nLighting: neutral perfectly uniform ambient illumination; no baked directional light, ambient occlusion, cast shadows, shiny highlights, vignette, gradient, or bright center.\nConstraints: material surface only; no scene, perspective, objects, borders, labels, lettering, logos, watermark, UI, or contact sheet. Avoid photorealistic noise, dramatic cracks, distinctive focal motifs, high-frequency detail, and visible repeating stains. Opaque background."
+  },
+  "textures": [
+    {
+      "id": "brick-terracotta",
+      "file": "buildings/brick-terracotta.png",
+      "category": "building",
+      "repeatMeters": [
+        2.4,
+        1.2
+      ],
+      "subjectPrompt": "Warm muted terracotta brick wall in a tidy running bond. Approximately eight horizontal courses of softly irregular rectangular brick, roughly four full bricks wide per course. Thin warm gray mortar, flat subtle brush mottling, softly eased painted edges without bevel shadows. Calm neighborhood masonry.",
+      "sourceFilename": "exec-1e00d71a-1415-40e9-954a-2357b16c7f7d.png",
+      "resolution": [
+        1254,
+        1254
+      ],
+      "sha256": "c7fc5c3ea597dad8f68d8f9c00204be32f4e57de2359ae395d5c5a21f7ea2d4c"
+    },
+    {
+      "id": "plaster-cream",
+      "file": "buildings/plaster-cream.png",
+      "category": "building",
+      "repeatMeters": [
+        3,
+        3
+      ],
+      "subjectPrompt": "Warm off-white cream painted plaster wall. Quiet soft broad mottling and sparse subtle plaster trowel variation, nearly uniform and tint-friendly. No cracks, grime, chips, brush strokes with strong direction, or masonry lines.",
+      "sourceFilename": "exec-a06c87e0-6669-45b1-a0e9-5542444c6177.png",
+      "resolution": [
+        1254,
+        1254
+      ],
+      "sha256": "9e0ccc871ebc0b902e07d237322c000ee878b821fb8873d55b7fa77d25941f98"
+    },
+    {
+      "id": "timber-honey",
+      "file": "buildings/timber-honey.png",
+      "category": "building",
+      "repeatMeters": [
+        2,
+        2
+      ],
+      "subjectPrompt": "Honey tan wooden horizontal plank siding. Eight horizontal plank bands, narrow dark tan joins, subtle elongated stylized wood grain and tiny subdued knots. The planks continue completely across the texture, no vertical seams, no nail heads, no hard highlights or bevel shadows.",
+      "sourceFilename": "exec-402d1f05-5b39-4866-b9e5-5e4ba9e07c1d.png",
+      "resolution": [
+        1254,
+        1254
+      ],
+      "sha256": "bc5a6cb288c7955f0f90f4580dc5e3b4916dcd86665b6f039552066ee182a594"
+    },
+    {
+      "id": "roof-slate",
+      "file": "buildings/roof-slate-v2.png",
+      "category": "building",
+      "repeatMeters": [
+        2.4,
+        2.4
+      ],
+      "subjectPrompt": "Muted blue-gray roof shingles for a cozy cartoon town. Eight tidy staggered horizontal rows of simple rectangular slate shingles, approximately six shingles across. Very subtle shape and color variation, narrow seams. A flat material pattern, no 3D perspective, no baked overlapping shadow bands.",
+      "sourceFilename": "exec-cbd20329-8060-4762-90f7-c4e4be4a65a4.png",
+      "edits": [
+        {
+          "prompt": "Use case: precise-object-edit\nAsset type: tileable base-color roof texture for a colorful low-poly game.\nInput image: edit target, roof-slate original tile.\nPrimary request: refine this exact slate texture to improve horizontal and vertical tiling. Preserve the muted blue-gray palette, eight staggered rows, hand-painted slate surface, rectangular shingle shapes, square composition, and detail level. Change only the joints/edge continuation necessary to make it tile seamlessly.\nCorrection: make the top edge and bottom edge meet with one narrow seam of the same thickness and color as the internal row joints. Remove the extra thick dark boundary band and bright edge bevel. Make corresponding left/right rows and patterns meet cleanly too. Opposite edges should match, with the same evenly spaced row cadence continuing over the tile boundary.\nLighting: uniform neutral ambient, diffuse color only. Narrow joint colors, no dimensional bevel shading, directional light, shadow band, highlight, or vignette.\nConstraints: one single opaque square texture, full canvas, no labels, borders, perspective, scene, added objects, UI, watermark, or contact sheet.",
+          "inputSourceFilename": "exec-7e848f5b-7176-4e54-8fba-61492f1f5890.png"
+        }
+      ],
+      "resolution": [
+        1254,
+        1254
+      ],
+      "sha256": "a63ab6a7cd2e2e09b6d57484f86494584a5498d401a450c42d47b4453b941daa"
+    },
+    {
+      "id": "asphalt-charcoal",
+      "file": "environment/asphalt-charcoal.png",
+      "category": "environment",
+      "repeatMeters": [
+        4,
+        4
+      ],
+      "subjectPrompt": "Muted cool charcoal gray asphalt roadway. Fine sparse stylized aggregate flecks and soft low contrast broad mottling. Calm smooth asphalt at game scale. No road markings, cracks, potholes, oil stains, litter, curbs, or directional lighting.",
+      "sourceFilename": "exec-9117bee1-c35e-4b4f-aac3-ab579677eeb5.png",
+      "resolution": [
+        1254,
+        1254
+      ],
+      "sha256": "770d2a8f1f696e83680ac6564db5fb3101768c6bacf86d07f98690ac245c9b8a"
+    },
+    {
+      "id": "concrete-warm",
+      "file": "environment/concrete-warm.png",
+      "category": "environment",
+      "repeatMeters": [
+        2,
+        2
+      ],
+      "subjectPrompt": "Warm light-gray sidewalk concrete, a continuous concrete surface without slab divisions. Soft flat broad mottling with faint sparse rounded speckles. Very low contrast, clean but softly worn. No expansion joints, cracks, stains, litter, curb, or shadow.",
+      "sourceFilename": "exec-6b8ad081-056f-455d-a079-5528dc5ad00e.png",
+      "resolution": [
+        1254,
+        1254
+      ],
+      "sha256": "b76551131d779ba95fc10bb9ac1e31256f494a8dd64888ba98e11797a01ecb13"
+    },
+    {
+      "id": "grass-meadow",
+      "file": "environment/grass-meadow.png",
+      "category": "environment",
+      "repeatMeters": [
+        4,
+        4
+      ],
+      "subjectPrompt": "Muted fresh meadow-green ground turf, seen directly from above. Soft interlocking chunky short grass strokes and low contrast moss-green and yellow-green tufts, evenly distributed. A dense flat turf material, no individual tall blades, flowers, rocks, dirt paths, bare patches, tree shadows, or scene features.",
+      "sourceFilename": "exec-2a20c991-fc63-4eb9-9550-cd409d793cb0.png",
+      "resolution": [
+        1254,
+        1254
+      ],
+      "sha256": "456c06c88079f53a61418ad16092d2819e438c1ff30175e48d16e3839a3fe80c"
+    },
+    {
+      "id": "dirt-path",
+      "file": "environment/dirt-path.png",
+      "category": "environment",
+      "repeatMeters": [
+        3,
+        3
+      ],
+      "subjectPrompt": "Warm sandy ochre-brown packed dirt ground, seen directly from above. Soft broad earth mottling with sparse small stylized rounded tan pebbles embedded flush in the ground. Even distribution and low contrast. No footprints, tracks, large rocks, grass, roots, cracks, focal stains, or cast shadows.",
+      "sourceFilename": "exec-3708e2d7-24b6-4298-865c-c05ea1ad9745.png",
+      "resolution": [
+        1254,
+        1254
+      ],
+      "sha256": "1f105dd2ecdebb1cdccf07773a9182d82b1adee49e5300fa5537162b63f88eec"
+    }
+  ]
+}
