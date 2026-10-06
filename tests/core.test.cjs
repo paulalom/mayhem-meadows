@@ -18,9 +18,11 @@ test('town starts near a usable car and all contract targets are reachable', () 
 
 test('movement is frame-rate independent, normalized diagonally, and ignores invalid dt', () => {
   const a = makeGame(), b = makeGame();
+  // Keep the speed check in open space; the nearby starter car is now solid.
+  a.player.x = b.player.x = 1080;
   a.update(0.25, { up: true, right: true }); advance(b, 0.25, { up: true, right: true });
   assert.ok(Math.hypot(a.player.x - b.player.x, a.player.y - b.player.y) < 0.00001);
-  assert.ok(Math.abs(Math.hypot(a.player.x - 884, a.player.y - 1080) - 155 * 0.25) < 0.001);
+  assert.ok(Math.abs(Math.hypot(a.player.x - 1080, a.player.y - 1080) - 155 * 0.25) < 0.001);
   const before = { ...a.player }; a.update(NaN, { up: true }); a.update(-1, { up: true });
   assert.deepEqual(a.player, before);
 });
@@ -82,7 +84,7 @@ test('vehicle acceleration, braking, and steering ignore camera heading', () => 
 
 test('building collisions do not leave a car clipping or stuck inside a building', () => {
   const game = makeGame(); game.interact(); game.graceTimer = 0;
-  const car = game.current; car.x = 215; car.y = 350; car.angle = 0;
+  const car = game.current; car.x = 180; car.y = 350; car.angle = 0;
   advance(game, 2, { up: true });
   assert.ok(game._isFree(game.current.x, game.current.y, 17.9));
   assert.ok(Number.isFinite(game.current.x));
@@ -216,4 +218,116 @@ test('save data clamps malicious values and round-trips only persistent progress
   assert.equal(game.loadSave(null), false); assert.equal(game.loadSave({ version: 99 }), false);
   const copy = makeGame(); assert.equal(copy.loadSave(game.exportSave()), true); assert.deepEqual(copy.exportSave(), game.exportSave());
   assert.equal(copy.player.vehicleId, null); assert.equal(copy.heat, 0); assert.ok(copy.player.x >= 0 && copy.player.x <= SIZE);
+});
+
+test('voluntary flop creates a jointed body and blocks walking, popping, and entering cars until get-up', () => {
+  const idle = makeGame(), walking = makeGame();
+  for (const game of [idle, walking]) { game.player.x = 1080; assert.equal(game.flop(), true); }
+  const body = walking.physics.get('player');
+  assert.equal(walking.physics, walking.ragdolls); assert.equal(Object.keys(body.joints).length, 15); assert.equal(body.phase, 'fall');
+  assert.equal(walking.flop(), false); assert.equal(walking.action(), false); assert.equal(walking.interact(), false);
+  advance(idle, 1); advance(walking, 1, { up: true, right: true, boost: true });
+  assert.equal(walking.player.x, idle.player.x); assert.equal(walking.player.y, idle.player.y);
+  assert.deepEqual(walking.physics.get('player').joints, idle.physics.get('player').joints);
+  advance(walking, 2.1); assert.equal(walking.physics.get('player').phase, 'recover');
+  advance(walking, 0.9); assert.equal(walking.physics.get('player'), undefined); assert.equal(walking.player.stunned, 0);
+  assert.ok(walking._personFree(walking.player.x, walking.player.y));
+  const start = { ...walking.player }; advance(walking, 0.1, { up: true }); assert.ok(walking.player.y < start.y - 10);
+});
+
+test('recovery and capture clear a fallen player, preserve progress, and leave ragdolls out of saves', () => {
+  const game = makeGame(); game.player.x = 1080; game.acceptMission('delivery'); game.money = 250; game.heat = 2; game.score = 50;
+  assert.equal(game.flop(), true); const saved = game.exportSave();
+  assert.deepEqual(Object.keys(saved).sort(), ['bestScore', 'completed', 'money', 'score', 'upgrades', 'version']);
+  const copy = makeGame(); copy.loadSave(saved); assert.equal(copy.physics.bodies.size, 0);
+  game.recover(); assert.equal(game.physics.get('player'), undefined); assert.equal(game.money, 250); assert.equal(game.heat, 2); assert.ok(game.mission);
+  assert.equal(game.score, 30); assert.ok(game._personFree(game.player.x, game.player.y));
+  game.player.ragdollGrace = 0; assert.equal(game.flop(), true); game._caught();
+  assert.equal(game.physics.get('player'), undefined); assert.equal(game.money, 200); assert.ok(game.mission); assert.equal(game.player.composure, 100);
+});
+
+test('confetti popper produces one physical resident tumble without rewarding cash or perpetual retriggers', () => {
+  const game = makeGame(), ped = game.peds[0]; game.player.x = ped.x - 44; game.player.y = ped.y;
+  const cash = game.money; assert.equal(game.action(0), true); const body = game.physics.get(ped.id); assert.ok(body);
+  game.update(1 / 60); const age = body.age;
+  game._actionCooldown = 0; game.action(0); assert.equal(game.physics.get(ped.id), body); assert.ok(body.age >= age); assert.equal(game.money, cash);
+  advance(game, 4); assert.equal(game.physics.get(ped.id), undefined); assert.equal(ped.stunned, 0); assert.ok(ped.ragdollGrace > 0);
+});
+
+test('player cars, civilian traffic, and patrol cars knock standing residents into ragdolls', () => {
+  for (const mode of ['player', 'traffic', 'police']) {
+    const game = makeGame(), ped = game.peds[0];
+    Object.assign(ped, { x: 932, y: 1080, homeX: 932, homeY: 1080, pace: 0 }); game.peds = [ped];
+    game.cars = []; game.player.x = 1080; game.player.y = 1200;
+    if (mode === 'police') {
+      const cop = game.police[0]; Object.assign(cop, { x: 900, y: 1080, angle: 0, speed: 100, route: [{ x: 1260, y: 1080 }], routeTimer: 100 });
+    } else {
+      const car = game._addCar(900, 1080, 0, 'compact', '#ffd15b', mode === 'traffic');
+      Object.assign(car, { speed: 100, vx: 100, vy: 0, route: [{ x: 1260, y: 1080 }] });
+      if (mode === 'player') { game.player.vehicleId = car.id; game.player.x = car.x; game.player.y = car.y; }
+    }
+    const cash = game.money; advance(game, 0.25, mode === 'player' ? { up: true } : {});
+    assert.ok(game.physics.get(ped.id), mode + ' car must trigger the resident body'); assert.equal(game.money, cash);
+    assert.ok(ped.bubble); assert.ok(game.particles.length > 0);
+    if (mode === 'player') assert.ok(game.heat > 0);
+  }
+});
+
+test('moving traffic can knock the player down but post-recovery grace prevents immediate repeat falls', () => {
+  const game = makeGame(); game.cars = []; game.peds = []; game.graceTimer = 0; game.player.x = 932;
+  const car = game._addCar(900, 1080, 0, 'compact', '#ffd15b', true); car.speed = 100; car.route = [{ x: 1260, y: 1080 }];
+  advance(game, 0.15); assert.ok(game.physics.get('player'));
+  game.recover(); assert.equal(game.physics.get('player'), undefined);
+  game.player.x = car.x + 28; game.player.y = car.y;
+  game._vehiclePeople(car, 150, 0); assert.equal(game.physics.get('player'), undefined);
+  assert.equal(game._personVehicleContact(game.player, car), null);
+});
+
+test('parked vehicles are solid on foot and standing residents cannot be walked through', () => {
+  const game = makeGame(), car = game.cars[0]; game.peds = [];
+  game.player.x = car.x - 60; game.player.y = car.y; advance(game, 0.8, { right: true });
+  assert.equal(game._personVehicleContact(game.player, car), null); assert.ok(game.player.x <= car.x - 23.49);
+  const ped = { id: 'test-resident', x: 1080, y: 1080, angle: 0, homeX: 1080, homeY: 1080, pace: 0, stunned: 0, bubbleTimer: 0 };
+  game.peds = [ped]; game.player.x = 1040; game.player.y = 1080; advance(game, 0.4, { right: true });
+  assert.ok(Math.hypot(game.player.x - ped.x, game.player.y - ped.y) >= 16.99); assert.ok(game.player.x < ped.x);
+});
+
+test('vehicle OBB contacts detect front bumpers while leaving genuinely clear side gaps alone', () => {
+  const game = makeGame(); game.cars = []; game.police = []; game.peds = [];
+  const a = game._addCar(900, 1080, 0, 'sports', '#ffd15b'), b = game._addCar(940, 1080, 0, 'compact', '#fb8097');
+  assert.ok(game._vehicleContact(a, b)); game._resolveVehicle(a); assert.equal(game._vehicleContact(a, b), null);
+  assert.ok(b.x - a.x >= 47.499);
+  a.x = b.x = 900; a.y = 1080; b.y = 1110;
+  const before = { x: a.x, y: a.y }; assert.equal(game._resolveVehicle(a).collided, false); assert.deepEqual({ x: a.x, y: a.y }, before);
+});
+
+test('a bumper collision does not award the close-shave bonus, while a clear fast pass does', () => {
+  for (const offset of [0, 40]) {
+    const game = makeGame(); game.cars = []; game.peds = []; game.police = []; game.graceTimer = 0;
+    const car = game._addCar(900, 1080, 0, 'compact', '#ffd15b'); game._addCar(940, 1080 + offset, 0, 'compact', '#fb8097');
+    game.player.vehicleId = car.id; car.speed = car.vx = 300;
+    game._drive(car, 1 / 60, { up: true });
+    assert.equal(game.score, offset ? 8 : 0); assert.equal(car.health < game.maxHealth, !offset);
+  }
+});
+
+test('rotated vehicle footprints resolve building corners and boosted movement cannot tunnel through walls or people', () => {
+  const game = makeGame(); game.cars = []; game.police = []; game.peds = [];
+  const car = game._addCar(225, 225, Math.PI / 4, 'van', '#ffd15b');
+  assert.equal(game._vehicleFree(car), false); game._resolveVehicle(car); assert.ok(game._vehicleFree(car));
+  Object.assign(car, { x: 180, y: 350, angle: 0 }); game._moveVehicle(car, 200, 0, 900, 0);
+  assert.ok(game._vehicleFree(car)); assert.ok(car.x + 27.5 <= 240.001);
+  Object.assign(car, { x: 900, y: 1080, angle: 0 });
+  const ped = { id: 'swept-resident', x: 970, y: 1080, angle: 0, homeX: 970, homeY: 1080, pace: 0, stunned: 0, bubbleTimer: 0 }; game.peds = [ped];
+  game._moveVehicle(car, 140, 0, 900, 0); assert.ok(game.physics.get(ped.id));
+  for (const joint of Object.values(game.physics.get(ped.id).joints)) for (const key of ['x', 'y', 'z']) assert.ok(Number.isFinite(joint[key]));
+});
+
+test('downed bodies pause with the simulation and get up once even after repeated vehicle contacts', () => {
+  const game = makeGame(); game.player.x = 1080; game.flop(); const body = game.physics.get('player');
+  game.update(0); game.update(NaN); assert.equal(body.age, 0);
+  const car = game.cars[0];
+  for (let i = 0; i < 180; i++) { car.x = game.player.x; car.y = game.player.y; game._vehiclePeople(car, 200, 0); game.update(1 / 60); }
+  advance(game, 2);
+  assert.equal(game.physics.get('player'), undefined); assert.ok(game._personFree(game.player.x, game.player.y));
 });

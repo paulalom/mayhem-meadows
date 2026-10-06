@@ -31,7 +31,7 @@ const diagnostics = {};
 
 async function sceneState(page) {
   return page.locator('#game-canvas').evaluate(canvas => {
-    const numeric = ['cameraYaw', 'cameraDistance', 'worldX', 'worldY', 'frames', 'renderCalls', 'cameraX', 'cameraY', 'cameraZ', 'cameraTargetX', 'cameraTargetY', 'cameraTargetZ'];
+    const numeric = ['cameraYaw', 'cameraDistance', 'worldX', 'worldY', 'frames', 'renderCalls', 'cameraX', 'cameraY', 'cameraZ', 'cameraTargetX', 'cameraTargetY', 'cameraTargetZ', 'ragdollCount', 'playerRagdollAge', 'renderedRagdolls'];
     const state = { ...canvas.dataset };
     for (const key of numeric) state[key] = Number(state[key]);
     state.targetX = state.cameraTargetX; state.targetY = state.cameraTargetY; state.targetZ = state.cameraTargetZ;
@@ -80,6 +80,59 @@ async function waitForFreshFrames(page) {
   const before = (await sceneState(page)).frames;
   await page.waitForFunction(previous => Number(document.getElementById('game-canvas').dataset.frames) > previous + 2, before, { timeout: 10000 });
   return sceneState(page);
+}
+
+// Only this isolated test context captures the engine. Normal game pages never
+// expose a debug instance. Wrapping constructors leaves the real simulation,
+// renderer, controls and fixed-step loop in charge of every tested outcome.
+async function installEngineInspection(context) {
+  await context.addInitScript(() => {
+    let core, Scene;
+    Object.defineProperty(globalThis, 'MayhemCore', {
+      configurable: true,
+      get() { return core; },
+      set(value) {
+        core = { ...value, Game: class extends value.Game {
+          constructor(...args) { super(...args); globalThis.__browserCheckGame = this; }
+        } };
+      },
+    });
+    Object.defineProperty(globalThis, 'MayhemScene', {
+      configurable: true,
+      get() { return Scene; },
+      set(value) {
+        Scene = class extends value {
+          constructor(...args) { super(...args); globalThis.__browserCheckScene = this; }
+        };
+      },
+    });
+  });
+}
+
+async function bodyState(page, id = 'player') {
+  return page.evaluate(bodyId => {
+    const game = globalThis.__browserCheckGame, scene = globalThis.__browserCheckScene;
+    const body = game.physics.get(bodyId);
+    if (!body) return null;
+    return {
+      age: body.age, phase: body.phase, recovery: body.recovery,
+      joints: Object.fromEntries(Object.entries(body.joints).map(([name, point]) => [name, { x: point.x, y: point.y, z: point.z }])),
+      normalVisible: bodyId === 'player' ? scene._player.group.visible : scene._residents.get(bodyId)?.group.visible,
+      renderedBodies: scene.ragdollCount, renderedHeads: scene._ragdollHeads.count,
+      renderedSegments: scene._ragdollCubes.count,
+      matrices: Array.from(scene._ragdollCubes.instanceMatrix.array.slice(0, scene._ragdollCubes.count * 16)),
+      playerAngle: game.player.angle, vehicleId: game.player.vehicleId, actionCooldown: game._actionCooldown,
+    };
+  }, id);
+}
+
+function assertFiniteBody(body) {
+  assert.ok(body, 'Expected a physical ragdoll body.');
+  assert.equal(Object.keys(body.joints).length, 15, 'Every body needs fifteen simulated joints.');
+  assert.ok(Object.values(body.joints).every(point => Object.values(point).every(Number.isFinite)), 'All joint coordinates must be finite.');
+  assert.ok(body.matrices.every(Number.isFinite), 'Rendered joint transforms must be finite.');
+  assert.equal(body.normalVisible, false, 'Standing avatar must give way to the articulated physical pose.');
+  assert.ok(body.renderedHeads > 0 && body.renderedSegments >= 18, 'Renderer must draw physical head and limb segments.');
 }
 
 async function check(name, action) {
@@ -431,6 +484,191 @@ async function main() {
         await wallPage.screenshot({ path: path.join(evidence, 'desktop-near-wall-orbit.png'), fullPage: true });
       } finally { await wallContext.close(); }
     });
+    const physicsContext = await browser.newContext({ viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
+    try {
+      await physicsContext.route('**/*', route => {
+        if (/^(file|data|blob):/.test(route.request().url())) return route.continue();
+        externalRequests.push(route.request().url());
+        return route.abort();
+      });
+      await installEngineInspection(physicsContext);
+      const physicsPage = await physicsContext.newPage();
+      physicsPage.on('pageerror', error => errors.push(error.message));
+      physicsPage.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+      await physicsPage.goto(url);
+      await physicsPage.locator('#play-button').click();
+      await waitForScene(physicsPage, 'foot');
+
+      await check('F creates a rendered fifteen-joint player ragdoll that falls under gravity', async () => {
+        await physicsPage.keyboard.press('f');
+        await physicsPage.waitForFunction(() => {
+          const data = document.getElementById('game-canvas').dataset;
+          return data.playerRagdoll === 'fall' && Number(data.renderedRagdolls) > 0;
+        }, null, { timeout: 2000 });
+        const early = await bodyState(physicsPage);
+        assertFiniteBody(early);
+        await physicsPage.waitForFunction(() => globalThis.__browserCheckGame.physics.get('player')?.age >= 1.7, null, { timeout: 3000 });
+        const fallen = await bodyState(physicsPage);
+        assertFiniteBody(fallen);
+        assert.notDeepEqual(fallen.joints, early.joints, 'Joint positions must evolve through physical motion.');
+        assert.notDeepEqual(fallen.matrices, early.matrices, 'Rendered segments must follow the moving physical joints.');
+        assert.ok(fallen.joints.head.y < 1.25, 'Gravity should bring the head below standing height.');
+        assert.equal((await sceneState(physicsPage)).cameraMode, 'foot');
+        diagnostics.playerRagdoll = fallen;
+        await physicsPage.screenshot({ path: path.join(evidence, 'desktop-player-ragdoll.png'), fullPage: true });
+      });
+
+      await check('pausing freezes every ragdoll joint and its recovery clock', async () => {
+        await physicsPage.keyboard.press('p');
+        await physicsPage.locator('#pause-screen').waitFor({ state: 'visible' });
+        const before = await bodyState(physicsPage);
+        assertFiniteBody(before);
+        await physicsPage.waitForTimeout(550);
+        const after = await bodyState(physicsPage);
+        assert.equal(after.age, before.age, 'Paused physics must not consume recovery time.');
+        assert.deepEqual(after.joints, before.joints, 'Paused joints must remain exactly fixed.');
+        await physicsPage.locator('#resume-button').click();
+        await physicsPage.locator('#pause-screen').waitFor({ state: 'hidden' });
+      });
+
+      await check('fallen player cannot walk, borrow a car, pop confetti, or restart the fall', async () => {
+        const before = await bodyState(physicsPage);
+        assertFiniteBody(before);
+        await physicsPage.keyboard.press('e');
+        await physicsPage.keyboard.press('Space');
+        await physicsPage.keyboard.press('f');
+        await physicsPage.keyboard.down('d');
+        await physicsPage.waitForTimeout(200);
+        await physicsPage.keyboard.up('d');
+        const after = await bodyState(physicsPage);
+        assertFiniteBody(after);
+        assert.equal(after.vehicleId, null, 'E must not enter a car while fallen.');
+        assert.equal(after.actionCooldown, 0, 'Space must not fire the popper while fallen.');
+        assert.equal(after.playerAngle, before.playerAngle, 'Walking input must not steer the fallen avatar.');
+        assert.ok(after.age > before.age + 0.1, 'F must not reset an existing ragdoll recovery clock.');
+      });
+
+      await check('player ragdoll blends into getting up and automatically restores walking', async () => {
+        await physicsPage.waitForFunction(() => document.getElementById('game-canvas').dataset.playerRagdoll === 'recover', null, { timeout: 4000 });
+        const recovering = await bodyState(physicsPage);
+        assertFiniteBody(recovering);
+        assert.ok(recovering.recovery >= 0 && recovering.recovery < 1, 'Getting up must interpolate a physical pose.');
+        await physicsPage.waitForFunction(() => document.getElementById('game-canvas').dataset.playerRagdoll === 'none', null, { timeout: 2500 });
+        await waitForFreshFrames(physicsPage);
+        assert.equal(await bodyState(physicsPage), null);
+        assert.equal(await physicsPage.evaluate(() => globalThis.__browserCheckScene._player.group.visible), true);
+        const before = await sceneState(physicsPage);
+        await physicsPage.keyboard.down('w');
+        await physicsPage.waitForTimeout(180);
+        await physicsPage.keyboard.up('w');
+        const after = await sceneState(physicsPage);
+        assert.ok(Math.hypot(after.worldX - before.worldX, after.worldY - before.worldY) > 3, 'Walking must resume after getting up.');
+        await physicsPage.screenshot({ path: path.join(evidence, 'desktop-recovered.png'), fullPage: true });
+      });
+
+      await check('R immediately clears a fall and returns the player to usable controls', async () => {
+        await physicsPage.waitForFunction(() => globalThis.__browserCheckGame.player.ragdollGrace <= 0, null, { timeout: 2500 });
+        await physicsPage.keyboard.press('f');
+        await physicsPage.waitForFunction(() => document.getElementById('game-canvas').dataset.playerRagdoll === 'fall', null, { timeout: 2000 });
+        await physicsPage.keyboard.press('r');
+        await physicsPage.waitForFunction(() => {
+          const data = document.getElementById('game-canvas').dataset;
+          return data.playerRagdoll === 'none' && globalThis.__browserCheckScene._player.group.visible;
+        }, null, { timeout: 2000 });
+        assert.equal(await bodyState(physicsPage), null);
+        const before = await sceneState(physicsPage);
+        await physicsPage.keyboard.down('w');
+        await physicsPage.waitForTimeout(180);
+        await physicsPage.keyboard.up('w');
+        const after = await sceneState(physicsPage);
+        assert.ok(Math.hypot(after.worldX - before.worldX, after.worldY - before.worldY) > 3, 'R must restore movement immediately.');
+      });
+
+      await check('a real Space pop gives a nearby resident a physical confetti tumble', async () => {
+        // Arrange a clear, close target only in this isolated test page. Fire
+        // through the real keyboard handler, fixed step and WebGL renderer.
+        const id = await physicsPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame, ped = game.peds[0];
+          game.player.x = 884; game.player.y = 1080; game.player.angle = -Math.PI / 2;
+          ped.x = 884; ped.y = 1044; ped.homeX = ped.x; ped.homeY = ped.y; ped.stunned = 0; ped.ragdollGrace = 0;
+          return ped.id;
+        });
+        await physicsPage.mouse.move(8, 8);
+        await physicsPage.keyboard.press('c');
+        await physicsPage.waitForTimeout(250);
+        await physicsPage.keyboard.press('Space');
+        await physicsPage.waitForFunction(pedId => {
+          const body = globalThis.__browserCheckGame.physics.get(pedId);
+          return body?.phase === 'fall' && Number(document.getElementById('game-canvas').dataset.renderedRagdolls) > 0;
+        }, id, { timeout: 2500 });
+        assert.ok(await physicsPage.evaluate(() => globalThis.__browserCheckGame.particles.length > 0), 'Impact should burst confetti.');
+        await physicsPage.waitForFunction(pedId => globalThis.__browserCheckGame.physics.get(pedId)?.age >= 0.85, id, { timeout: 2000 });
+        const resident = await bodyState(physicsPage, id);
+        assertFiniteBody(resident);
+        assert.equal(resident.vehicleId, null);
+        assert.equal(await physicsPage.evaluate(() => globalThis.__browserCheckScene._player.group.visible), true);
+        diagnostics.residentRagdoll = resident;
+        await physicsPage.screenshot({ path: path.join(evidence, 'desktop-resident-ragdoll.png'), fullPage: true });
+        await physicsPage.waitForFunction(pedId => !globalThis.__browserCheckGame.physics.get(pedId), id, { timeout: 4000 });
+        await waitForFreshFrames(physicsPage);
+        assert.equal(await physicsPage.evaluate(pedId => globalThis.__browserCheckScene._residents.get(pedId).group.visible, id), true, 'Resident must return to the standing model after getting up.');
+      });
+
+      await check('driving into a resident launches a rendered physical body', async () => {
+        await physicsPage.keyboard.press('r');
+        await waitForFreshFrames(physicsPage);
+        const id = await physicsPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame, car = game.cars[0], ped = game.peds[0];
+          game.cars = [car]; game.police = []; game.peds = [ped];
+          Object.assign(car, { x: 900, y: 1080, angle: 0, speed: 0, vx: 0, vy: 0, traffic: false, health: 100 });
+          Object.assign(game.player, { x: 900, y: 1048, angle: 0, vehicleId: null });
+          Object.assign(ped, { x: 962, y: 1080, homeX: 962, homeY: 1080, stunned: 0, ragdollGrace: 0 });
+          return ped.id;
+        });
+        await physicsPage.keyboard.press('e');
+        await waitForScene(physicsPage, 'drive');
+        await physicsPage.keyboard.down('w');
+        try {
+          await physicsPage.waitForFunction(pedId => globalThis.__browserCheckGame.physics.get(pedId)?.phase === 'fall', id, { timeout: 3000 });
+        } finally { await physicsPage.keyboard.up('w'); }
+        const early = await bodyState(physicsPage, id);
+        await physicsPage.waitForTimeout(300);
+        const moved = await bodyState(physicsPage, id);
+        assertFiniteBody(moved);
+        assert.notDeepEqual(moved.joints, early.joints, 'Vehicle impact must impart physical motion to the body.');
+        assert.ok(moved.joints.pelvis.x > early.joints.pelvis.x + 0.2, 'Body should move away from the front of the car.');
+        assert.equal((await sceneState(physicsPage)).cameraMode, 'drive');
+        diagnostics.vehicleRagdoll = moved;
+        await physicsPage.screenshot({ path: path.join(evidence, 'desktop-vehicle-ragdoll.png'), fullPage: true });
+      });
+
+      await check('a parked car blocks the driven car at their rendered rectangular footprints', async () => {
+        await physicsPage.keyboard.press('r');
+        await waitForFreshFrames(physicsPage);
+        await physicsPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame, car = game.cars[0];
+          game.peds = []; game.police = []; game.physics.clearAll();
+          Object.assign(car, { x: 900, y: 1080, angle: 0, speed: 0, vx: 0, vy: 0, traffic: false, health: 100 });
+          const blocker = game._addCar(970, 1080, 0, 'compact', '#67d3c8', false);
+          blocker.speed = 0;
+          Object.assign(game.player, { x: 900, y: 1048, angle: 0, vehicleId: null });
+        });
+        await physicsPage.keyboard.press('e');
+        await waitForScene(physicsPage, 'drive');
+        await physicsPage.keyboard.down('w');
+        await physicsPage.waitForTimeout(1500);
+        await physicsPage.keyboard.up('w');
+        const contact = await physicsPage.evaluate(() => {
+          const game = globalThis.__browserCheckGame, car = game.current, blocker = game.cars[1];
+          return { carX: car.x, carY: car.y, blockerX: blocker.x, blockerY: blocker.y, health: car.health };
+        });
+        assert.ok(contact.carX < contact.blockerX, 'Driven car must not pass through the parked car.');
+        assert.ok(contact.blockerX - contact.carX >= 45.99, 'Compact car centers must respect both 46-unit rendered lengths.');
+        assert.ok(contact.carX > 915, 'Car should reach the obstacle under real throttle input.');
+        assert.ok(Math.abs(contact.carY - contact.blockerY) < 0.1);
+        diagnostics.parkedCarContact = contact;
+      });
+    } finally { await physicsContext.close(); }
     await check('no external network requests', async () => assert.deepEqual(externalRequests, []));
     await check('no page or console errors', async () => assert.deepEqual(errors, []));
     fs.writeFileSync(path.join(evidence, 'browser-check.json'), JSON.stringify({ url, checks, diagnostics, errors, externalRequests }, null, 2) + '\n');

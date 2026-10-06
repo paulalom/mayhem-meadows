@@ -48,7 +48,7 @@
   }
   function sound(name) {
     if (muted || !audioContext || audioContext.state !== 'running') return;
-    const tones = { horn: [180, 0.18, 'sawtooth'], confetti: [650, 0.1, 'triangle'], crash: [75, 0.13, 'square'], pickup: [660, 0.14, 'sine'], complete: [880, 0.32, 'triangle'], bust: [120, 0.32, 'sawtooth'], upgrade: [1040, 0.2, 'sine'] };
+    const tones = { horn: [180, 0.18, 'sawtooth'], confetti: [650, 0.1, 'triangle'], flop: [260, 0.22, 'triangle'], crash: [75, 0.13, 'square'], pickup: [660, 0.14, 'sine'], complete: [880, 0.32, 'triangle'], bust: [120, 0.32, 'sawtooth'], upgrade: [1040, 0.2, 'sine'] };
     const [frequency, duration, type] = tones[name] || [420, 0.1, 'triangle'];
     const oscillator = audioContext.createOscillator(), gain = audioContext.createGain();
     const t = audioContext.currentTime;
@@ -160,7 +160,7 @@
       event.preventDefault(); if (!event.repeat) setPause(!paused); return;
     }
     if (paused || graphicsFailed || document.activeElement !== canvas) return;
-    const controlled = ['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight','Space','KeyE','KeyH','KeyR','KeyC'];
+    const controlled = ['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight','Space','KeyE','KeyH','KeyR','KeyC','KeyF'];
     if (!controlled.includes(event.code)) return;
     event.preventDefault(); keys.add(event.code);
     if (!event.repeat) {
@@ -168,6 +168,7 @@
       if (event.code === 'KeyH') game.horn();
       if (event.code === 'KeyR') { game.recover(); scene?.recenter(); }
       if (event.code === 'KeyC') scene?.recenter();
+      if (event.code === 'KeyF') { if (game.flop()) keys.clear(); }
       if (event.code === 'Space' && !game.player.vehicleId) {
         const angle = aim.active && scene ? scene.aimAngle(aim.x, aim.y, width, height) : scene?.viewYaw ?? game.player.angle;
         game.action(angle);
@@ -229,6 +230,11 @@
   }
   function hud() {
     drawMinimap();
+    const fallen = game.physics?.get('player');
+    canvas.dataset.ragdollCount = String(game.physics?.bodies.size || 0);
+    canvas.dataset.playerRagdoll = fallen?.phase || 'none';
+    canvas.dataset.playerRagdollAge = Number(fallen?.age || 0).toFixed(4);
+    canvas.dataset.renderedRagdolls = String(scene?.ragdollCount || 0);
     const camera = scene?.cameraInfo;
     if (camera) {
       canvas.dataset.cameraMode = camera.mode;
@@ -240,11 +246,11 @@
     }
     canvas.dataset.worldX = game.current.x.toFixed(3); canvas.dataset.worldY = game.current.y.toFixed(3);
     canvas.dataset.frames = String(renderedFrames);
-    $('aim-reticle').hidden = !started || paused || !!game.player.vehicleId || !$('help-screen').hidden || graphicsFailed;
+    $('aim-reticle').hidden = !started || paused || !!game.player.vehicleId || !!fallen || !$('help-screen').hidden || graphicsFailed;
     if (aim.active) { $('aim-reticle').style.left = aim.x + 'px'; $('aim-reticle').style.top = aim.y + 'px'; }
     else { $('aim-reticle').style.left = '50%'; $('aim-reticle').style.top = '50%'; }
-    $('speed-value').textContent = game.player.vehicleId ? Math.round(Math.abs(game.current.speed || 0) * 0.28) + ' KM/H' : 'ON FOOT';
-    $('speed-caption').textContent = game.player.vehicleId ? 'SHIFT BOOST · SPACE DRIFT' : 'RIGHT DRAG LOOK · C RESET';
+    $('speed-value').textContent = game.player.vehicleId ? Math.round(Math.abs(game.current.speed || 0) * 0.28) + ' KM/H' : fallen ? (fallen.phase === 'recover' ? 'GETTING UP' : 'WHOOPS!') : 'ON FOOT';
+    $('speed-caption').textContent = game.player.vehicleId ? 'SHIFT BOOST · SPACE DRIFT' : fallen ? 'R · SKIP THE DRAMA' : 'F · DRAMATIC FLOP';
     const t = target();
     $('target-compass').hidden = !t;
     if (t) {
@@ -280,8 +286,9 @@
     $('armor-price').textContent = game.upgrades.armor >= 3 ? 'MAXED' : money(150 + game.upgrades.armor * 125);
     const hint = nearest ? (nearest.id === 'wash' ? 'E · wash & cool off ($75)' : 'Garage · choose a tune-up on the right') : car ? (Math.abs(car.speed) < 45 ? 'E · hop out   H · honk   SPACE · drift' : 'SPACE · drift   SHIFT · boost   H · honk') : game.cars.some(c => dist(c, game.player) < 65) ? 'E · borrow this ride' : 'WASD · walk   SPACE · confetti popper';
     $('interaction-hint').textContent = hint;
+    if (fallen) $('interaction-hint').textContent = fallen.phase === 'recover' ? 'Just finding my feet…  R · recover now' : 'Oh, crumbs! Getting up shortly…  R · recover now';
     $('interaction-hint').hidden = !started;
-    if (game.heat > 0) {
+    if (game.heat > 0 && !fallen) {
       const chase = game.policeSeen ? 'FUN POLICE · CHASED' : `LAY LOW · ${Math.max(0, Math.ceil((game.escapeGoal || 8 + game.heat * 6) - game.escapeTimer))}s TO COOL`;
       $('interaction-hint').textContent = chase + '  /  ' + hint;
     }

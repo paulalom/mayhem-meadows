@@ -51,6 +51,7 @@
       this._buildingVolumes = [];
       this._vehicles = new Map();
       this._residents = new Map();
+      this._ragdollRenderedCount = 0;
       this._cameraInfo = { x: 0, y: 0, z: 0, targetX: 0, targetY: 0, targetZ: 0, mode: 'foot', distance: 0, obstructed: false, viewYaw: this._yaw };
       this._cube = this._geometry(new T.BoxGeometry(1, 1, 1));
       this._cylinder = this._geometry(new T.CylinderGeometry(1, 1, 1, 10));
@@ -224,7 +225,7 @@
       for (let i = 0; i < this.game.buildings.length; i++) {
         const building = this.game.buildings[i];
         const x = building.x / UNIT, z = building.y / UNIT, w = building.w / UNIT, d = building.h / UNIT;
-        const height = [5.3, 7.0, 4.5, 6.2, 8.2][i % 5];
+        const height = building.height ?? [5.3, 7.0, 4.5, 6.2, 8.2][i % 5];
         const centerX = x + w / 2, centerZ = z + d / 2;
         this._buildingVolumes.push({ minX: x, maxX: x + w, minZ: z, maxZ: z + d, minY: -0.2, maxY: height + 0.8 });
         this._staticBox(building.color, centerX, height / 2, centerZ, w, height, d);
@@ -384,7 +385,7 @@
       }
       for (const limb of [leftLeg, rightLeg, leftArm, rightArm]) this._mergeColored(limb);
       this._mergeColored(group);
-      return { group, leftLeg, rightLeg, leftArm, rightArm, torso, phase: 0 };
+      return { group, leftLeg, rightLeg, leftArm, rightArm, torso, phase: 0, color, player };
     }
 
     _vehicle(entity, police) {
@@ -549,6 +550,134 @@
 
     get viewYaw() { return this._cameraInfo.viewYaw; }
     get cameraInfo() { return { ...this._cameraInfo }; }
+    get ragdollCount() { return this._ragdollRenderedCount; }
+
+    _bodyFor(entity) { return this.game.ragdolls?.get(entity.id || 'player'); }
+
+    // All fallen people share two instance buffers. Bone matrices follow the
+    // physical joints, so repeated flops need no new geometry or draw batches.
+    _makeRagdollInstances() {
+      if (this._ragdollCubes) return;
+      const T = this.T, material = this._material('#ffffff');
+      this._ragdollCubes = new T.InstancedMesh(this._cube, material, 24 * 26);
+      this._ragdollHeads = new T.InstancedMesh(this._sphere, material, 24);
+      for (const mesh of [this._ragdollCubes, this._ragdollHeads]) {
+        mesh.instanceMatrix.setUsage(T.DynamicDrawUsage);
+        mesh.castShadow = true; mesh.receiveShadow = true;
+        mesh.frustumCulled = false; mesh.count = 0;
+        this.scene.add(mesh);
+      }
+      this._ragdollDummy = new T.Object3D();
+      this._ragdollScratch = {
+        a: new T.Vector3(), b: new T.Vector3(), midpoint: new T.Vector3(),
+        up: new T.Vector3(), right: new T.Vector3(), forward: new T.Vector3(),
+        headUp: new T.Vector3(), headRight: new T.Vector3(), headForward: new T.Vector3(),
+        offset: new T.Vector3(), matrix: new T.Matrix4(),
+        torsoQuaternion: new T.Quaternion(), headQuaternion: new T.Quaternion(),
+        limbQuaternion: new T.Quaternion(), vertical: new T.Vector3(0, 1, 0)
+      };
+    }
+
+    _ragdollBox(position, quaternion, sx, sy, sz, color, ox = 0, oy = 0, oz = 0) {
+      const dummy = this._ragdollDummy, scratch = this._ragdollScratch;
+      dummy.position.copy(position);
+      if (ox || oy || oz) dummy.position.add(scratch.offset.set(ox, oy, oz).applyQuaternion(quaternion));
+      dummy.quaternion.copy(quaternion); dummy.scale.set(sx, sy, sz); dummy.updateMatrix();
+      const index = this._ragdollCubeIndex++;
+      this._ragdollCubes.setMatrixAt(index, dummy.matrix);
+      this._color.set(color); this._ragdollCubes.setColorAt(index, this._color);
+    }
+
+    _ragdollBone(joints, from, to, width, depth, color) {
+      const s = this._ragdollScratch;
+      s.a.set(joints[from].x, joints[from].y, joints[from].z);
+      s.b.set(joints[to].x, joints[to].y, joints[to].z).sub(s.a);
+      const length = Math.max(0.025, s.b.length());
+      s.midpoint.copy(s.a).addScaledVector(s.b, 0.5);
+      if (s.b.lengthSq() > 0.000001) s.limbQuaternion.setFromUnitVectors(s.vertical, s.b.normalize());
+      else s.limbQuaternion.copy(s.torsoQuaternion);
+      this._ragdollBox(s.midpoint, s.limbQuaternion, depth, length, width, color);
+    }
+
+    _ragdollFrame(up, rightHint, quaternion) {
+      const s = this._ragdollScratch;
+      if (up.lengthSq() < 0.000001) up.copy(s.vertical); else up.normalize();
+      s.right.copy(rightHint).addScaledVector(up, -rightHint.dot(up));
+      if (s.right.lengthSq() < 0.000001) {
+        s.right.set(Math.abs(up.x) < 0.85 ? 1 : 0, 0, Math.abs(up.x) < 0.85 ? 0 : 1);
+        s.right.addScaledVector(up, -s.right.dot(up));
+      }
+      s.right.normalize(); s.forward.crossVectors(up, s.right).normalize();
+      s.right.crossVectors(s.forward, up).normalize();
+      s.matrix.makeBasis(s.forward, up, s.right); quaternion.setFromRotationMatrix(s.matrix);
+    }
+
+    _ragdollPose(body, model) {
+      const j = body.joints, s = this._ragdollScratch;
+      const shirt = model.color, skin = model.player ? '#f9c68f' : '#edbd93';
+      const pants = model.player ? '#355267' : '#647386';
+      const point = (vector, name) => vector.set(j[name].x, j[name].y, j[name].z);
+      point(s.a, 'pelvis'); point(s.b, 'chest');
+      s.up.copy(s.b).sub(s.a);
+      const torsoLength = Math.max(0.12, s.up.length());
+      point(s.right, 'rightShoulder').sub(point(s.forward, 'leftShoulder'));
+      this._ragdollFrame(s.up, s.right, s.torsoQuaternion);
+      s.midpoint.copy(s.a).add(s.b).multiplyScalar(0.5);
+      this._ragdollBox(s.midpoint, s.torsoQuaternion, 0.36, torsoLength + 0.22, 0.48, shirt);
+      point(s.a, 'pelvis');
+      this._ragdollBox(s.a, s.torsoQuaternion, 0.30, 0.16, 0.38, pants, 0, -0.03, 0);
+      if (model.player) {
+        point(s.a, 'chest');
+        this._ragdollBox(s.a, s.torsoQuaternion, 0.22, 0.43, 0.36, '#e48b83', -0.25, -0.13, 0);
+        this._ragdollBox(s.a, s.torsoQuaternion, 0.035, 0.25, 0.23, '#f4d180', -0.375, -0.13, 0);
+        for (const side of [-1, 1]) this._ragdollBox(s.a, s.torsoQuaternion, 0.04, 0.35, 0.04, '#fff1bd', -0.18, 0.10, side * 0.22);
+      }
+      for (const side of ['left', 'right']) {
+        this._ragdollBone(j, side + 'Shoulder', side + 'Elbow', 0.18, 0.19, shirt);
+        this._ragdollBone(j, side + 'Elbow', side + 'Hand', 0.15, 0.16, skin);
+        point(s.a, side + 'Hand');
+        this._ragdollBox(s.a, s.limbQuaternion, 0.15, 0.13, 0.16, skin);
+        this._ragdollBone(j, side + 'Hip', side + 'Knee', 0.19, 0.18, pants);
+        this._ragdollBone(j, side + 'Knee', side + 'Foot', 0.18, 0.18, pants);
+        // The shoe frame uses the calf direction and the torso's side axis.
+        point(s.up, side + 'Knee').sub(point(s.a, side + 'Foot'));
+        s.right.set(0, 0, 1).applyQuaternion(s.torsoQuaternion);
+        this._ragdollFrame(s.up, s.right, s.limbQuaternion);
+        this._ragdollBox(s.a, s.limbQuaternion, 0.33, 0.14, 0.22, '#f2efdf', 0.075, 0, 0);
+      }
+      point(s.a, 'head'); point(s.b, 'chest');
+      s.headUp.copy(s.a).sub(s.b);
+      s.headRight.set(0, 0, 1).applyQuaternion(s.torsoQuaternion);
+      this._ragdollFrame(s.headUp, s.headRight, s.headQuaternion);
+      const dummy = this._ragdollDummy;
+      dummy.position.copy(s.a); dummy.quaternion.copy(s.headQuaternion); dummy.scale.set(0.235, 0.26, 0.23); dummy.updateMatrix();
+      this._ragdollHeads.setMatrixAt(this._ragdollHeadIndex, dummy.matrix);
+      this._color.set(skin); this._ragdollHeads.setColorAt(this._ragdollHeadIndex++, this._color);
+      const hat = model.player ? '#f1cf5d' : '#6f5b55';
+      this._ragdollBox(s.a, s.headQuaternion, 0.37, 0.10, 0.42, hat, -0.02, 0.18, 0);
+      this._ragdollBox(s.a, s.headQuaternion, 0.30, 0.055, 0.38, hat, 0.18, 0.16, 0);
+      for (const side of [-1, 1]) this._ragdollBox(s.a, s.headQuaternion, 0.035, 0.055, 0.045, '#384657', 0.22, 0.01, side * 0.08);
+    }
+
+    _ragdollPeople() {
+      const world = this.game.ragdolls;
+      this._ragdollRenderedCount = 0;
+      this._ragdollCubeIndex = 0; this._ragdollHeadIndex = 0;
+      if (world && world.bodies.size) {
+        this._makeRagdollInstances();
+        for (const body of world.bodies.values()) {
+          if (this._ragdollRenderedCount >= 24) break;
+          const model = body.id === 'player' ? this._player : this._residents.get(body.id);
+          if (!model) continue;
+          this._ragdollPose(body, model); this._ragdollRenderedCount++;
+        }
+      }
+      if (this._ragdollCubes) for (const [mesh, count] of [[this._ragdollCubes, this._ragdollCubeIndex], [this._ragdollHeads, this._ragdollHeadIndex]]) {
+        mesh.count = count; mesh.visible = count > 0;
+        mesh.instanceMatrix.needsUpdate = true;
+        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      }
+    }
 
     // Slab intersection includes a small margin for the camera's near plane.
     _boomFraction(x, y, z, endX, endY, endZ) {
@@ -578,7 +707,28 @@
 
     _cameraStep(dt) {
       const current = this.game.current, driving = Boolean(this.game.player.vehicleId);
-      const x = current.x / UNIT, z = current.y / UNIT, targetHeight = driving ? 1.0 : 1.03;
+      const fallen = !driving && this._bodyFor(this.game.player);
+      let x = current.x / UNIT, z = current.y / UNIT;
+      let targetHeight = fallen ? Math.max(0.55, (fallen.joints.pelvis.y + fallen.joints.chest.y) / 2 + 0.15) : driving ? 1.0 : 1.03;
+      if (fallen) {
+        // A physical pelvis is smaller than the camera clearance envelope.
+        // Move the look-at pivot out of that envelope before solving the boom,
+        // including bodies resting on roofs, to avoid a zero-length camera.
+        const margin = 0.27;
+        for (const box of this._buildingVolumes) {
+          if (x <= box.minX - margin || x >= box.maxX + margin || z <= box.minZ - margin || z >= box.maxZ + margin || targetHeight >= box.maxY + margin) continue;
+          const exits = [
+            { distance: x - box.minX + margin, x: box.minX - margin },
+            { distance: box.maxX + margin - x, x: box.maxX + margin },
+            { distance: z - box.minZ + margin, z: box.minZ - margin },
+            { distance: box.maxZ + margin - z, z: box.maxZ + margin },
+            { distance: box.maxY + margin - targetHeight, y: box.maxY + margin }
+          ];
+          let exit = exits[0];
+          for (let i = 1; i < exits.length; i++) if (exits[i].distance < exit.distance) exit = exits[i];
+          x = exit.x ?? x; z = exit.z ?? z; targetHeight = exit.y ?? targetHeight;
+        }
+      }
       const mode = driving ? 'drive' : 'foot';
       if (this._lastVehicleId !== this.game.player.vehicleId) {
         if (driving) this._driveOffset = angle(this._yaw - current.angle);
@@ -606,7 +756,8 @@
       // putting the player's head directly against the camera lens.
       if (fraction < 0.33) {
         let bestFraction = fraction, bestYaw = cameraYaw;
-        for (const offset of [0.48, -0.48, 0.96, -0.96, 1.40, -1.40]) {
+        const shoulders = fallen ? [0.48, -0.48, 0.96, -0.96, 1.40, -1.40, 2.2, -2.2, Math.PI] : [0.48, -0.48, 0.96, -0.96, 1.40, -1.40];
+        for (const offset of shoulders) {
           const testYaw = angle(this._yaw + offset);
           const testFraction = this._boomFraction(x, targetY, z, x - Math.cos(testYaw) * distance, endY, z - Math.sin(testYaw) * distance);
           if (testFraction > bestFraction) { bestFraction = testFraction; bestYaw = testYaw; }
@@ -658,7 +809,8 @@
 
     _people(dt) {
       const game = this.game, player = game.player, model = this._player;
-      model.group.visible = !player.vehicleId;
+      const playerBody = this._bodyFor(player);
+      model.group.visible = !player.vehicleId && !playerBody;
       model.group.position.set(player.x / UNIT, 0.03, player.y / UNIT);
       model.group.rotation.y = -player.angle;
       const movement = Math.hypot(player.x - this._lastPlayerX, player.y - this._lastPlayerY) / UNIT;
@@ -672,14 +824,25 @@
       for (const ped of game.peds) {
         const resident = this._residents.get(ped.id);
         if (!resident) continue;
+        const body = this._bodyFor(ped);
+        resident.group.visible = !body;
         resident.group.position.set(ped.x / UNIT, 0.03, ped.y / UNIT);
         resident.group.rotation.y = -ped.angle;
         const walk = !this.reducedMotion && ped.stunned <= 0 ? Math.sin(game.time * ped.pace / UNIT * 5 + Number(ped.id.split('-')[1])) * 0.30 : 0;
         resident.leftLeg.rotation.z = walk; resident.rightLeg.rotation.z = -walk;
         resident.leftArm.rotation.z = -walk * 0.8; resident.rightArm.rotation.z = walk * 0.8;
-        resident.group.rotation.z = ped.stunned > 0 && !this.reducedMotion ? Math.sin(game.time * 16) * 0.10 : 0;
+        resident.group.rotation.z = 0;
+        const bubble = resident.bubble.sprite;
+        if (body) {
+          if (bubble.parent !== this.scene) this.scene.add(bubble);
+          bubble.position.set(body.joints.pelvis.x, Math.max(body.joints.head.y, body.joints.pelvis.y) + 0.95, body.joints.pelvis.z);
+        } else {
+          if (bubble.parent !== resident.group) resident.group.add(bubble);
+          bubble.position.set(0, 2.27, 0);
+        }
         this._bubbleText(resident.bubble, ped.bubbleTimer > 0 ? ped.bubble : '');
       }
+      this._ragdollPeople();
     }
 
     _cars(dt) {
@@ -754,6 +917,8 @@
     }
 
     dispose() {
+      this._ragdollCubes?.dispose();
+      this._ragdollHeads?.dispose();
       for (const geometry of this._geometries) geometry.dispose();
       for (const material of this._materials.values()) material.dispose();
       for (const texture of this._textures) texture.dispose();

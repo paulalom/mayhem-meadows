@@ -28,8 +28,10 @@ The player can ignore contracts and play freely. There is no mandatory story seq
 - **Three recognizable rides:** a forgiving compact, a fast but loose sports car, and a slower, sturdy van. Their silhouettes and colors explain their character.
 - **On foot:** camera-relative movement, sprint, car entry, and a short-range confetti popper aimed into the 3D world with the pointer. Confetti can startle residents and distract police; it is a toy, not a realistic weapon system.
 - **Immediate recovery:** a dedicated unstuck action returns you to a safe nearby road with a small score penalty. No long walk back after a bad crash.
+- **Physical tumbles:** moving cars and confetti bursts send residents into jointed ragdolls. On foot, the player tumbles after a vehicle impact or can press F for a voluntary dramatic flop. Gravity, connected limbs, bouncing contacts, and street friction produce a different little mishap each time. Everyone gets up after a few seconds; R skips the player's recovery wait.
+- **Solid bodies:** vehicle contacts use rotated car footprints, and standing people cannot walk through cars or each other. Ragdoll joints and limbs contact the ground, building walls, and moving cars. Hits create confetti and fake curses, with no cash reward for hitting people.
 
-Prototype controls: WASD/arrow keys to move or drive; right mouse drag to orbit the camera; C to recenter; E to enter/exit or use a nearby service; Space for handbrake while driving or a confetti burst on foot; Shift for boost/sprint; H for horn; Esc/P to pause; R for recovery. Contract buttons live in the HUD so accepting a gig never depends on finding a tiny interaction point.
+Prototype controls: WASD/arrow keys to move or drive; right mouse drag to orbit the camera; C to recenter; E to enter/exit or use a nearby service; Space for handbrake while driving or a confetti burst on foot; Shift for boost/sprint; H for horn; F for an on-foot flop; Esc/P to pause; R for recovery. Contract buttons live in the HUD so accepting a gig never depends on finding a tiny interaction point.
 
 ## Third-person presentation
 
@@ -39,7 +41,7 @@ The camera makes the town feel like a place you can run through. Keep the player
 - **Driving chase:** the camera follows behind the car with enough height to read an intersection. Let the player look around; return smoothly toward the travel direction so steering and view stay connected.
 - **Safe camera distance:** shorten the camera boom when buildings obstruct the view, then ease it back out in open space. The camera must not spend a chase inside a wall.
 - **Readable objectives:** glowing ground rings and upright markers reveal mission targets in perspective. A HUD compass supplies bearing and distance when the target is around a corner; the overhead minimap shows routes, services, and patrols.
-- **Ground-plane simulation:** preserve the original arcade movement, handling, and collision rules beneath the 3D presentation. Characters and cars move on flat streets; roofs, curbs, and trees provide depth, with no stair, jump, or elevated-road physics in this milestone.
+- **Street movement and ragdolls:** upright characters and cars use the flat arcade streets. Fallen characters use a separate three-dimensional joint solver with vertical gravity, limb constraints, and solid contacts. Decorative trees, curbs, and lamps provide depth; there are no stairs, jumps, or elevated roads in this milestone.
 - **Local rendering:** Three.js uses real perspective meshes and WebGL 2, with the engine bundled beside the game. No runtime asset download or service is needed. A friendly failure overlay explains when the browser cannot create a 3D view.
 
 ## Trouble and the Fun Police
@@ -134,5 +136,7 @@ No multiplayer, huge procedural city, interiors, stairs, jumping, elevated drivi
 - Can players turn a corner, borrow a car, and aim confetti without fighting the camera?
 - Does the view stay outside buildings, and do markers plus minimap keep destinations easy to find?
 - Do file-open play, full screen, camera recentering, and the WebGL failure overlay behave predictably?
+- Do falling bodies retain connected limbs and stay outside walls, vehicles, and the ground? Can both residents and the player get up in a safe position?
+- Do pause and recovery work during a tumble, and can a crowd of fallen residents stay playable without unbounded physics work?
 
 Tune driving and heat first. More content cannot rescue an unpleasant steering model.
