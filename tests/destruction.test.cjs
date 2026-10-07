@@ -66,7 +66,7 @@ test('popper chips scenery with its normal cooldown and hammer destroys a nearby
   assert.equal(game.action(0), false); assert.equal(fence.health, 15);
   advance(game, .6); assert.equal(game.action(0), true); assert.equal(fence.health, 5);
   advance(game, .6); game.inventory.unlocked.push('hammer'); game.inventory.equipped = 'hammer';
-  assert.equal(game.action(0), true); assert.equal(fence.destroyed, true); assert.ok(game.heat > 0);
+  assert.equal(game.action(0), true); assert.equal(fence.destroyed, true); assert.equal(game.heat, 0);
 });
 
 test('strikes respect facing, pitch and walls, and can reach the near edge of a long rotated fence', () => {

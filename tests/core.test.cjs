@@ -277,7 +277,9 @@ test('player cars, civilian traffic, and patrol cars knock standing residents in
     const cash = game.money; advance(game, 0.25, mode === 'player' ? { up: true } : {});
     assert.ok(game.physics.get(ped.id), mode + ' car must trigger the resident body'); assert.equal(game.money, cash);
     assert.ok(ped.bubble); assert.ok(game.particles.length > 0);
-    if (mode === 'player') assert.ok(game.heat > 0);
+    if (mode === 'player') {
+      assert.equal(game.heat, 0); game._updateWitnessReports(2); assert.ok(game.heat > 0);
+    } else assert.equal(game._witnessReports.length, 0);
   }
 });
 

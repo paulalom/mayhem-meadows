@@ -75,7 +75,8 @@ test('inflatable hammer has a short forward cone, a physical shove, and a distin
   assert.equal(game.action(0), true); assert.ok(game.physics.get(game.peds[0].id));
   assert.equal(game.physics.get(game.peds[1].id), undefined); assert.equal(game.physics.get(game.peds[2].id), undefined);
   assert.equal(game._actionCooldown, 0.9); assert.equal(game.action(0), false); assert.equal(game.money, cash);
-  assert.equal(game.heat, 1); assert.ok(game.peds[0].bubble.length > 0);
+  assert.equal(game.heat, 0); assert.ok(game.peds[0].bubble.length > 0);
+  game._updateWitnessReports(2); assert.equal(game.heat, 1);
 });
 
 test('Party Cannon travels before bursting, expends ammo, tumbles a crowd, and stops at obstacles', () => {
@@ -90,7 +91,7 @@ test('Party Cannon travels before bursting, expends ammo, tumbles a crowd, and s
   assert.equal(game.physics.bodies.size, 0); advance(game, 0.1);
   assert.ok(game.projectiles[0].x > 1105); assert.ok(game.projectiles[0].height > MUZZLE_HEIGHT);
   advance(game, 0.55); assert.equal(game.projectiles.length, 0); assert.equal(game.physics.bodies.size, 2);
-  assert.equal(game.heat, 1);
+  assert.equal(game.heat, 0); game._updateWitnessReports(2); assert.equal(game.heat, 1);
   game._actionCooldown = 0; game.inventory.ammo.cannon = 0;
   assert.equal(game.action(0), false); assert.equal(game._actionCooldown, 0);
   game.inventory.ammo.cannon = 1; game.peds = []; game.physics.clearAll();
@@ -140,7 +141,8 @@ test('close-range toys hit along a slightly downward aim and block obstructed sh
     game.buildings = [{ x: 1100, y: 1083, w: 12, h: 30, height: 4 }];
     assert.equal(game.action(0, { pitch: -0.2 }), true);
     assert.ok(game.physics.get(game.peds[0].id));
-    assert.equal(game.physics.get(game.peds[1].id), undefined); assert.equal(game.heat, 1);
+    assert.equal(game.physics.get(game.peds[1].id), undefined); assert.equal(game.heat, 0);
+    game._updateWitnessReports(2); assert.equal(game.heat, 1);
   }
 });
 
@@ -159,7 +161,8 @@ test('aimed Party Cannon follows vertical pitch, hits at body height, and leaves
   advance(sky, 0.7); advance(level, 0.35);
   assert.equal(sky.projectiles.length, 0); assert.equal(sky.physics.bodies.size, 0); assert.equal(sky.heat, 0);
   assert.ok(sky.particles.some(particle => particle.height > 10));
-  assert.equal(level.projectiles.length, 0); assert.ok(level.physics.get(level.peds[0].id)); assert.equal(level.heat, 1);
+  assert.equal(level.projectiles.length, 0); assert.ok(level.physics.get(level.peds[0].id)); assert.equal(level.heat, 0);
+  level._updateWitnessReports(2); assert.equal(level.heat, 1);
   const ground = makeShot(-0.4); advance(ground, 0.1);
   assert.equal(ground.projectiles.length, 0); assert.ok(ground.particles.some(particle => particle.height === 0.12));
 });
@@ -179,6 +182,7 @@ test('aimed cannon passes above short obstacles and bounds extreme or invalid pi
 
 test('garage ownership persists condition and paint without duplicating or healing deployed cars', () => {
   const game = makeGame(), car = driveToGarage(game); game.money = 500;
+  game.heat = 1;
   car.health = 72; assert.equal(game.garageStore(), true); const id = car.garageId;
   assert.equal(game.garageStore(), false); assert.equal(game.garage.cars.length, 1);
   assert.equal(game.garagePaint(id, PAINT_COLORS[1]), true); assert.equal(game.money, 475);

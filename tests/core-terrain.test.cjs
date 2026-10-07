@@ -70,7 +70,8 @@ test('Party Cannon muzzle and terrain impact stay relative to raised land, with 
   Object.assign(game.player,{x:1080,y:1080,elevation:12});
   const ped={id:'hill-resident',x:1230,y:1080,elevation:12,angle:0,homeX:1230,homeY:1080,pace:0,stunned:0,bubbleTimer:0};game.peds=[ped];
   game.action(0,{pitch:0});near(game.projectiles[0].height,12+MUZZLE_HEIGHT,1e-10);advance(game,.3);
-  assert.equal(game.projectiles.length,0);assert.ok(game.physics.get(ped.id));assert.equal(game.heat,1);
+  assert.equal(game.projectiles.length,0);assert.ok(game.physics.get(ped.id));assert.equal(game.heat,0);
+  game._updateWitnessReports(2);assert.equal(game.heat,1);
   game.peds=[];game.ragdolls.clearAll?.();game._actionCooldown=0;game.particles=[];
   game.action(0,{pitch:-.4});advance(game,.1);assert.equal(game.projectiles.length,0);assert.ok(game.particles.some(particle=>Math.abs(particle.height-12.12)<1e-10));
 });

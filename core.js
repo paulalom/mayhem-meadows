@@ -106,6 +106,8 @@
       this.heat = 0;
       this.escapeTimer = 0;
       this.policeSeen = false;
+      this._witnessReports = [];
+      this._reportedLocation = null;
       this.graceTimer = 2;
       this.mission = null;
       this.missionStats = { elapsed: 0, collisions: 0, style: 0, overtime: false };
@@ -423,7 +425,7 @@
           const kick = clamp(speed / 20 * 0.58 + 1.2, 2.5, 11);
           this._knockDown(person, { x: velocityX / speed * kick, y: clamp(2.1 + speed / 200, 2.1, 4.5), z: velocityY / speed * kick });
           entity.speed *= 0.90;
-          if (entity.id === this.player.vehicleId) this._raiseHeat(1, 'A resident took a confetti tumble. The Fun Police noticed!');
+          if (entity.id === this.player.vehicleId) this._raiseHeat(1, 'Reckless driving', { position: person, noise: 120, victims: [person] });
         }
       }
     }
@@ -602,7 +604,7 @@
       this.debris = this.debris.slice(-120);
       this._confetti(object.x, object.y, 12); this._sound('crash');
       this.vehiclePhysics.sync();
-      if (playerCaused) this._raiseHeat(1, 'Scenery smashed! The Fun Police noticed the mess.');
+      if (playerCaused) this._raiseHeat(1, 'Scenery smashed', { position: object, noise: 180 });
       return true;
     }
 
@@ -650,12 +652,85 @@
       }
     }
 
-    _raiseHeat(amount = 1, reason = 'The Fun Police noticed!') {
+    _activePolice(cop) { return cop.health > 0 && !cop.burning && !cop.exploded; }
+
+    _incidentRange(observer, position) {
+      return Math.hypot(distance(observer, position), (this._base(observer) + MUZZLE_HEIGHT - position.height) * 20);
+    }
+
+    _seesIncident(observer, position, range) {
+      return this._incidentRange(observer, position) < range && !this._incidentBlocked(observer, position);
+    }
+
+    _incidentBlocked(observer, position) {
+      const fromHeight = this._base(observer) + MUZZLE_HEIGHT;
+      if (this._blockedLine(observer, position, fromHeight, position.height)) return true;
+      const terrain = this.world?.terrain;
+      if (!terrain) return false;
+      const steps = Math.ceil(distance(observer, position) / 10);
+      for (let step = 1; step < steps; step++) {
+        const t = step / steps, height = fromHeight + (position.height - fromHeight) * t;
+        const ground = (terrain.heightAt || terrain.surfaceHeight).call(terrain, observer.x + (position.x - observer.x) * t, observer.y + (position.y - observer.y) * t);
+        if (ground > height + .15) return true;
+      }
+      return false;
+    }
+
+    _hearsIncident(observer, position, noise) {
+      const range = this._incidentRange(observer, position);
+      return range < noise && range < noise * (this._incidentBlocked(observer, position) ? .4 : 1);
+    }
+
+    _raiseHeat(amount = 1, reason = 'Mischief', incident = {}) {
+      const source = incident.position || this.current;
+      const position = { x: source.x, y: source.y, elevation: this._base(source), height: finite(source.height, this._base(source) + MUZZLE_HEIGHT) };
+      const officers = incident.officers || [];
+      const observed = this.police.some(cop => this._activePolice(cop) && (officers.includes(cop) ||
+        (!(cop.distracted > 0) && this._seesIncident(cop, position, 400)) ||
+        this._hearsIncident(cop, position, incident.noise || 0)));
+      if (observed) { this._applyReportedHeat(amount, reason + ' · police noticed!', position); return true; }
+
+      // Victims can call after a tumble. Other residents must actually see it.
+      const victims = incident.victims || [];
+      const reporter = this.peds.find(ped => victims.includes(ped)) || this.peds.find(ped =>
+        !(ped.stunned > 0) && !this.ragdolls.get(ped.id) && this._seesIncident(ped, position, 200));
+      if (!reporter || this._troubleCooldown > 0 || this._witnessReports.length) return false;
+      reporter.bubble = 'HELP! CALLING POLICE...'; reporter.bubbleTimer = 2;
+      this._witnessReports.push({ reporter, position, amount, reason, remaining: 2 });
+      return true;
+    }
+
+    _updateWitnessReports(dt) {
+      const reports = this._witnessReports;
+      this._witnessReports = [];
+      for (const report of reports) {
+        report.remaining -= dt;
+        if (report.remaining > .000001) {
+          report.reporter.bubble = 'HELP! CALLING POLICE...'; report.reporter.bubbleTimer = report.remaining;
+          this._witnessReports.push(report); continue;
+        }
+        report.reporter.bubble = 'HELP! POLICE CALLED!'; report.reporter.bubbleTimer = 2;
+        this._applyReportedHeat(report.amount, report.reason + ' · a resident called for help!', report.position);
+      }
+    }
+
+    _clearHeat() {
+      this.heat = 0; this.escapeTimer = 0; this.policeSeen = false; this._policeSearching = false;
+      this._reportedLocation = null;
+      for (const { reporter } of this._witnessReports) if (reporter.bubble === 'HELP! CALLING POLICE...') {
+        reporter.bubble = ''; reporter.bubbleTimer = 0;
+      }
+      this._witnessReports = [];
+    }
+
+    _applyReportedHeat(amount, reason, position) {
       this.escapeTimer = 0;
+      this._reportedLocation = { x: position.x, y: position.y };
+      this.police.forEach(cop => { cop.lastSeen = { ...this._reportedLocation }; cop.routeTimer = 0; });
       if (this._troubleCooldown > 0) return;
       const before = this.heat;
       this.heat = clamp(this.heat + amount, 0, 3);
-      this.police.forEach(cop => { cop.lastSeen = { x: this.current.x, y: this.current.y }; cop.routeTimer = 0; });
+
       this._troubleCooldown = 3;
       if (this.heat !== before) { this._toast(reason, 'warning'); this._sound('heat'); }
     }
@@ -669,7 +744,7 @@
         if (car.upright === false || !this._onGround(car)) { this._toast('Your ride needs its wheels on the road. Press R to recover.'); return false; }
         if (Math.abs(car.speed) > 45) { this._toast('Slow down before hopping out.'); return false; }
         const wash = this.services.find(s => s.id === 'wash' && distance(s, car) < 85);
-        if (wash && (this.heat > 0 || VehicleStats.isDamaged(car))) return this._useService(wash);
+        if (wash && (this.heat > 0 || this._witnessReports.length || VehicleStats.isDamaged(car))) return this._useService(wash);
         return this._exitCar(car);
       }
       const nearby = this.cars.filter(car => car.health > 0 && !car.burning && !car.exploded && distance(car, this.player) < 75 && Math.abs(car.speed) < 110 && this._onGround(car) && car.upright !== false).sort((a, b) => distance(a, this.player) - distance(b, this.player));
@@ -679,7 +754,7 @@
         car.traffic = false;
         car.speed = car.vx = car.vy = 0;
         this.player.x = car.x; this.player.y = car.y; this.player.elevation=car.elevation; this.player.grounded=true;
-        if (!car.borrowed) { car.borrowed = true; this._raiseHeat(1, 'Borrowed a ride! The Fun Police are mildly interested.'); }
+        if (!car.borrowed) { car.borrowed = true; this._raiseHeat(1, 'Borrowed a ride', { position: car }); }
         this._toast('Nice wheels. Hold Shift for boost; Space for handbrake.'); this._sound('enter');
         return true;
       }
@@ -710,9 +785,9 @@
 
     _useService(service) {
       if (service.id === 'garage') { this._toast('Sprinkle Garage: press G for your car collection, or I for toys and pocket supplies.'); return true; }
-      if (this.heat === 0 && (!this.player.vehicleId || !VehicleStats.isDamaged(this.current))) { this._toast('Already sparkling clean!'); return false; }
+      if (this.heat === 0 && !this._witnessReports.length && (!this.player.vehicleId || !VehicleStats.isDamaged(this.current))) { this._toast('Already sparkling clean!'); return false; }
       if (this.money < 75) { this._toast('The wash costs $75. Finish a gig for cash.', 'warning'); return false; }
-      this.money -= 75; this.heat = 0; this.escapeTimer = 0; this.player.composure = 100;
+      this.money -= 75; this._clearHeat(); this.player.composure = 100;
       if (this.player.vehicleId) VehicleStats.repair(this.current, this.maxHealth);
       this._confetti(this.current.x, this.current.y, 36); this._toast('Squeaky clean: heat cleared and car repaired!', 'success'); this._sound('purchase');
       return true;
@@ -753,24 +828,26 @@
         const reach = 62, forwardX = Math.cos(angle), forwardY = Math.sin(angle);
         this._confetti(this.player.x + forwardX * 35 * cosPitch, this.player.y + forwardY * 35 * cosPitch, 18, this.player.elevation + MUZZLE_HEIGHT + sinPitch * 1.75); this._sound('hammer');
         let hit = this._strikeProps(angle, pitch, reach, 45, .5);
+        const victims = [], officers = [];
         const inReach = person => {
           const dx = person.x - this.player.x, dy = person.y - this.player.y, range = Math.hypot(dx, dy);
           return range < reach && inAimHeight(person) && (range < 1 || (dx * forwardX + dy * forwardY) / range > 0.5) &&
             !this._blockedLine(this.player,person,this.player.elevation+MUZZLE_HEIGHT,this._base(person)+MUZZLE_HEIGHT);
         };
         for (const ped of this.peds) if (ped.stunned <= 0 && inReach(ped)) {
-          hit = this._knockDown(ped, { x: forwardX * 5.8, y: 3.2, z: forwardY * 5.8 }) || hit;
+          if (this._knockDown(ped, { x: forwardX * 5.8, y: 3.2, z: forwardY * 5.8 })) { victims.push(ped); hit = true; }
         }
-        for (const cop of this.police) if (inReach(cop)) { cop.distracted = 2.3; this._confetti(cop.x, cop.y, 25); hit = true; }
-        if (hit) this._raiseHeat(1, 'Inflatable nuisance! The Fun Police heard that bonk.');
+        for (const cop of this.police) if (this._activePolice(cop) && inReach(cop)) { officers.push(cop); cop.distracted = 2.3; this._confetti(cop.x, cop.y, 25); hit = true; }
+        if (hit) this._raiseHeat(1, 'Inflatable nuisance', { noise: 100, victims, officers });
         return true;
       }
       const pop = { x: this.player.x + Math.cos(angle) * 44 * cosPitch, y: this.player.y + Math.sin(angle) * 44 * cosPitch };
       this._confetti(pop.x, pop.y, 25, this.player.elevation + MUZZLE_HEIGHT + sinPitch * 2.2); this._sound('pop');
       let hit = this._strikeProps(angle, pitch, 100, 10, .65);
-      for (const ped of this.peds) if (ped.stunned <= 0 && !this.ragdolls.get(ped.id) && inAimHeight(ped) && distance(ped, pop) < 60) { this._startle(ped, angle); hit = true; }
-      for (const cop of this.police) if (inAimHeight(cop) && distance(cop, pop) < 65) { cop.distracted = 1.8; hit = true; this._confetti(cop.x, cop.y, 20); }
-      if (hit) this._raiseHeat(1, 'Confetti disturbance! Find a corner to hide.');
+      const victims = [], officers = [];
+      for (const ped of this.peds) if (ped.stunned <= 0 && !this.ragdolls.get(ped.id) && inAimHeight(ped) && distance(ped, pop) < 60 && this._startle(ped, angle)) { victims.push(ped); hit = true; }
+      for (const cop of this.police) if (this._activePolice(cop) && inAimHeight(cop) && distance(cop, pop) < 65) { officers.push(cop); cop.distracted = 1.8; hit = true; this._confetti(cop.x, cop.y, 20); }
+      if (hit) this._raiseHeat(1, 'Confetti disturbance', { noise: 140, victims, officers });
       return true;
     }
 
@@ -779,13 +856,15 @@
       this._damagePropsNear({ x: projectile.x, y: projectile.y, height: finite(projectile.height,this._ground(projectile)+MUZZLE_HEIGHT) }, 85, 110);
       if (projectile.aimed && projectile.height > this._ground(projectile)+2.6) return;
       let hit = false;
+      const victims = [], officers = [];
       for (const ped of this.peds) if (ped.stunned <= 0 && distance(ped, projectile) < 85 && Math.abs(projectile.height-this._base(ped))<2.6 &&
         !this._blockedLine(projectile,ped,projectile.height,this._base(ped)+MUZZLE_HEIGHT)) {
         const angle = distance(ped, projectile) > 1 ? Math.atan2(ped.y - projectile.y, ped.x - projectile.x) : projectile.angle;
-        hit = this._knockDown(ped, { x: Math.cos(angle) * 4.8, y: 3.8, z: Math.sin(angle) * 4.8 }) || hit;
+        if (this._knockDown(ped, { x: Math.cos(angle) * 4.8, y: 3.8, z: Math.sin(angle) * 4.8 })) { victims.push(ped); hit = true; }
       }
-      for (const cop of this.police) if (distance(cop, projectile) < 90 && Math.abs(projectile.height-this._base(cop))<2.6) { cop.distracted = 3; this._confetti(cop.x, cop.y, 25); hit = true; }
-      if (hit) this._raiseHeat(1, 'Party Cannon commotion! That was a very loud celebration.');
+      for (const cop of this.police) if (this._activePolice(cop) && distance(cop, projectile) < 90 && Math.abs(projectile.height-this._base(cop))<2.6 &&
+        !this._blockedLine(projectile, cop, projectile.height, this._base(cop) + MUZZLE_HEIGHT)) { officers.push(cop); cop.distracted = 3; this._confetti(cop.x, cop.y, 25); hit = true; }
+      if (hit) this._raiseHeat(1, 'Party Cannon commotion', { position: projectile, noise: 300, victims, officers });
     }
 
     _projectiles(dt) {
@@ -824,7 +903,7 @@
       if (this.mission && this.mission.type === 'party') {
         const target = this.mission.targets[this.mission.targetIndex];
         if (distance(car, target) < 95 && Math.abs(car.speed) < 65 && Math.abs(this._base(car)-this._base(target))<3) {
-          this._confetti(target.x, target.y, 65); this._raiseHeat(1, 'That party is loud enough to attract the Fun Police!'); this._advanceMission(); return true;
+          this._confetti(target.x, target.y, 65); this._raiseHeat(1, 'Loud street party', { position: car, noise: 220 }); this._advanceMission(); return true;
         }
         if (distance(car, target) < 130) this._toast('Slow down, then honk inside the party ring.');
       }
@@ -872,7 +951,7 @@
       const start=this.world.start.player;
       this.player.vehicleId = null; this.player.x = start.x; this.player.y = start.y; this.player.composure = 100;
       this.player.elevation = this._ground(start); this.player.verticalVelocity = 0; this.player.grounded = true;
-      this.money = Math.max(0, this.money - 50); this.heat = 0; this.escapeTimer = 0; this.graceTimer = 3;
+      this.money = Math.max(0, this.money - 50); this._clearHeat(); this.graceTimer = 3;
       this._toast('BUSTED-ISH! $50 cleanup fee. Back to the fun—your gig is still active.', 'warning'); this._sound('busted'); this._confetti(start.x,start.y,45);
     }
 
@@ -1113,6 +1192,7 @@
       if (this.player.vehicleId) this._drive(this.current, dt, input); else this._walk(dt, input);
       for (const car of this.cars) if (car.traffic && car.health > 0 && car.id !== this.player.vehicleId) this._traffic(car, dt);
       this._pedestrians(dt);
+      this._updateWitnessReports(dt);
       this._updatePolice(dt);
       const contacts = this.vehiclePhysics.step(dt);
       for (const contact of contacts) if (contact.prop && contact.speed > 75 && this.time - (contact.prop._lastImpactAt ?? -10) > .35) {
@@ -1262,7 +1342,7 @@
       if (distance(car, this.current) < 300) { this._confetti(car.x, car.y, 16); this._sound('crash'); }
       if (driven) {
         if (this.mission) this.missionStats.collisions++;
-        if (traffic && speed > 140) this._raiseHeat(1, 'Whoops! The Fun Police heard that bumper bonk.');
+        if (traffic && speed > 140) this._raiseHeat(1, 'Heavy traffic collision', { position: car, noise: 220 });
       }
     }
 
@@ -1410,7 +1490,7 @@
           this._vehicleFree({ ...node,kind:'compact' }) && this._vehicles().every(vehicle => distance(vehicle,node)>100));
         candidates.sort((a, b) => Math.abs(distance(this.current, a) - 650) - Math.abs(distance(this.current, b) - 650));
         const point = candidates.length ? candidates[0] : this._safeRoadPosition({ x:this.current.x+650,y:this.current.y },18);
-        this.police.push({ id: 'police-' + this._nextId++, ...this._vehicleState('compact'), x:point.x,y:point.y,angle:point.angle || 0,elevation:this._ground(point),verticalVelocity:0,grounded:true,speed: 0, route: [], routeTimer: 0, lastSeen: { x: this.current.x, y: this.current.y } });
+        this.police.push({ id: 'police-' + this._nextId++, ...this._vehicleState('compact'), x:point.x,y:point.y,angle:point.angle || 0,elevation:this._ground(point),verticalVelocity:0,grounded:true,speed: 0, route: [], routeTimer: 0, lastSeen: { x: (this._reportedLocation || this.current).x, y: (this._reportedLocation || this.current).y } });
         activeCount++;
       }
       let seen = false, contact = false;
@@ -1418,7 +1498,7 @@
         if (cop.health <= 0 || cop.burning || cop.exploded) continue;
         cop.distracted = Math.max(0, (cop.distracted || 0) - dt);
         const sight = this.heat > 0 && cop.distracted <= 0 && this.graceTimer <= 0 && distance(cop, this.current) < 340 + this.heat * 65 && !this._blockedLine(cop,this.current);
-        if (sight) { seen = true; cop.lastSeen = { x: this.current.x, y: this.current.y }; }
+        if (sight) { seen = true; cop.lastSeen = { x: this.current.x, y: this.current.y }; this._reportedLocation = { ...cop.lastSeen }; }
         cop.routeTimer -= dt;
         if (cop.routeTimer <= 0 || !cop.route.length) {
           if (this.heat) cop.route = this._roadRoute(cop, cop.lastSeen);
@@ -1442,7 +1522,7 @@
       this.policeSeen = seen;
       if (this.heat > 0) {
         this.escapeTimer = seen ? 0 : this.escapeTimer + dt;
-        if (this.escapeTimer >= this.escapeGoal) { this.heat = 0; this.escapeTimer = 0; this._toast('Fun Police escaped! Back to the biscuits.', 'success'); this._sound('escape'); this._addScore(25); }
+        if (this.escapeTimer >= this.escapeGoal) { this._clearHeat(); this._toast('Fun Police escaped! Back to the biscuits.', 'success'); this._sound('escape'); this._addScore(25); }
       } else this.escapeTimer = 0;
       this.player.composure = clamp(this.player.composure + (contact ? -27 : 7) * dt, 0, 100);
       if (this.player.composure <= 0) this._caught();

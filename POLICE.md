@@ -2,7 +2,7 @@
 
 The Fun Police should turn a sustained spree into a funny chase. A few mistakes or scattered pranks leave room to play; repeated public chaos earns a warning, one pursuing patrol, and then a clearly announced swarm. The player always sees what caused the response, whether they are visible to police, and how to escape.
 
-These are proposed replacement rules for the next gameplay build. The current prototype has immediate heat increments and up to three patrols. The new thresholds, witness reports, four-patrol limit, and feedback below need implementation and playtesting.
+These are proposed replacement rules for the next gameplay build. The current prototype has up to three patrols, immediate heat for police sightings or nearby incident sounds, and two-second resident help calls. Unnoticed incidents add no heat and do not reset escape. The new mischief thresholds, four-patrol limit, and expanded feedback below still need implementation and playtesting.
 
 ## Room for mischief
 
