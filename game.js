@@ -22,6 +22,7 @@
   const inventoryBusy = () => wheelOpen || inventoryView !== null;
   const mouseLocked = () => document.pointerLockElement === canvas;
   const playActive = () => started && !paused && !inventoryBusy() && !graphicsFailed && $('help-screen').hidden && !document.hidden;
+  const uiAudioActive = () => started && !paused && inventoryBusy() && !graphicsFailed && $('help-screen').hidden && !document.hidden;
 
   function toast(text, kind = '') {
     $('toast').hidden = false;
@@ -54,14 +55,15 @@
   function audioStart() {
     audio.unlock().then(() => { updateAudio(); settingsUI(); });
   }
-  function sound(name) {
-    audio.play(name, game);
+  function sound(name, details) {
+    if (uiAudioActive()) audio.playUI(name, game, details);
+    else audio.play(name, game, details);
   }
   function movementInput() {
     return { up: keys.has('KeyW') || keys.has('ArrowUp'), down: keys.has('KeyS') || keys.has('ArrowDown'), left: keys.has('KeyA') || keys.has('ArrowLeft'), right: keys.has('KeyD') || keys.has('ArrowRight'), boost: keys.has('ShiftLeft') || keys.has('ShiftRight'), brake: keys.has('Space') };
   }
   function updateAudio(dt = 0) {
-    audio.update(game, { active: playActive(), viewYaw: scene?.viewYaw ?? game.current.angle, input: movementInput(), dt });
+    audio.update(game, { active: playActive(), allowUI: uiAudioActive(), viewYaw: scene?.viewYaw ?? game.current.angle, input: movementInput(), dt });
   }
   function applyAudioSettings() {
     audio.setSettings({ ...audioSettings, muted });
@@ -89,7 +91,7 @@
   function events() {
     for (const event of game.drainEvents()) {
       if (event.type === 'toast') toast(event.text, event.kind);
-      if (event.type === 'sound') sound(event.name);
+      if (event.type === 'sound') sound(event.name, event.details);
     }
   }
   function settingsUI() {
@@ -195,6 +197,7 @@
     wheelIndex = toyIds.indexOf(game.inventory.equipped);
     $('toy-wheel').hidden = false; renderWheel();
     updateAudio();
+    sound('menu-open');
   }
   function closeWheel(equip = false, focus = true) {
     if (!wheelOpen) return;
@@ -202,22 +205,28 @@
     wheelOpen = false; $('toy-wheel').hidden = true; keys.clear();
     if (focus && started && !paused) canvas.focus({ preventScroll: true });
     updateAudio();
+    if (focus && playActive()) sound('menu-close');
   }
   function cycleWheel(direction) {
+    const previous = wheelIndex;
     for (let i = 0; i < toyIds.length; i++) {
       wheelIndex = (wheelIndex + direction + toyIds.length) % toyIds.length;
       if (game.inventory.unlocked.includes(toyIds[wheelIndex])) break;
     }
     renderWheel();
+    if (wheelIndex !== previous) sound('menu-select');
   }
   function closeInventory(focus = true) {
+    const wasOpen = inventoryView !== null;
     inventoryView = null; $('inventory-screen').hidden = true; keys.clear();
     if (focus && started && !paused) canvas.focus({ preventScroll: true });
     updateAudio();
+    if (wasOpen && focus && playActive()) sound('menu-close');
   }
   function openInventory(view) {
     if (!started) start();
     if (paused || graphicsFailed || !$('help-screen').hidden || !started) return;
+    const previousView = inventoryView;
     closeWheel(false, false); keys.clear(); releaseMouse();
     if (inventoryView !== view) $('inventory-screen').querySelector('.inventory-scroll').scrollTop = 0;
     inventoryView = view; $('inventory-screen').hidden = false;
@@ -231,6 +240,7 @@
     renderInventory();
     $(view === 'pockets' ? 'pockets-tab' : 'collection-tab').focus({ preventScroll: true });
     updateAudio();
+    if (previousView !== view) sound(previousView ? 'menu-select' : 'menu-open');
   }
   function renderGarage() {
     const records = game.garage.cars.map(record => {
@@ -328,7 +338,7 @@
     if (button.dataset.releaseCar) inventoryAction(() => game.garageRelease(button.dataset.releaseCar));
   });
   document.querySelectorAll('.wheel-option').forEach(button => {
-    button.addEventListener('pointerenter', () => { if (wheelOpen && !button.disabled) { wheelIndex = toyIds.indexOf(button.dataset.gadget); renderWheel(); } });
+    button.addEventListener('pointerenter', () => { if (wheelOpen && !button.disabled) { const previous = wheelIndex; wheelIndex = toyIds.indexOf(button.dataset.gadget); renderWheel(); if (wheelIndex !== previous) sound('menu-select'); } });
     button.addEventListener('click', () => { if (wheelOpen && !button.disabled) { wheelIndex = toyIds.indexOf(button.dataset.gadget); closeWheel(true); } });
   });
   $('toy-wheel').addEventListener('wheel', event => { if (wheelOpen) { event.preventDefault(); cycleWheel(event.deltaY >= 0 ? 1 : -1); } }, { passive: false });

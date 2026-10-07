@@ -26,6 +26,7 @@
   const owns = (object, key) => typeof key === 'string' && Object.prototype.hasOwnProperty.call(object, key);
   const starterInventory = () => ({ equipped: 'popper', unlocked: ['popper'], pockets: { biscuits: 2, repairTape: 1, refill: 1 }, ammo: { cannon: 0 } });
   const CURSES = ['SON OF A BISCUIT!', 'HECKITY HECK!', 'FLIPPIN’ TURNIPS!', 'OH, CRUMBS!', 'YOU ABSOLUTE WAFFLE!'];
+  const PROP_SOUND_MATERIALS = { fence: 'wood', bench: 'wood', lamp: 'metal', wash: 'metal', wayfinding: 'metal', fountain: 'stone', tree: 'foliage' };
   const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
   const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   const wrapAngle = n => Math.atan2(Math.sin(n), Math.cos(n));
@@ -108,6 +109,7 @@
       this.policeSeen = false;
       this._witnessReports = [];
       this._reportedLocation = null;
+      this._policeSearching = false;
       this.graceTimer = 2;
       this.mission = null;
       this.missionStats = { elapsed: 0, collisions: 0, style: 0, overtime: false };
@@ -175,7 +177,7 @@
     _random() { this._seed = (Math.imul(this._seed, 1664525) + 1013904223) >>> 0; return this._seed / 4294967296; }
     _pick(items) { return items[Math.floor(this._random() * items.length)]; }
     _toast(text, kind = 'info') { this._events.push({ type: 'toast', text, kind }); }
-    _sound(name) { this._events.push({ type: 'sound', name }); }
+    _sound(name, details = {}) { this._events.push({ type: 'sound', name, details }); }
     drainEvents() { return this._events.splice(0); }
 
     _makeTown() {
@@ -602,7 +604,8 @@
           size: part.half.map(half => clamp(half * (0.6 + this._random() * .5), .08, .65)), color: part.color || colors[object.kind] || '#b8a1e0', life, maxLife: life });
       }
       this.debris = this.debris.slice(-120);
-      this._confetti(object.x, object.y, 12); this._sound('crash');
+      this._confetti(object.x, object.y, 12);
+      this._sound('crash', { x: object.x, y: object.y, sourceId: object.id, destroyed: true, intensity: clamp(amount / maxHealth, .25, 1), material: PROP_SOUND_MATERIALS[object.kind] || 'stone' });
       this.vehiclePhysics.sync();
       if (playerCaused) this._raiseHeat(1, 'Scenery smashed', { position: object, noise: 180 });
       return true;
@@ -728,11 +731,11 @@
       this._reportedLocation = { x: position.x, y: position.y };
       this.police.forEach(cop => { cop.lastSeen = { ...this._reportedLocation }; cop.routeTimer = 0; });
       if (this._troubleCooldown > 0) return;
+      this._policeSearching = false;
       const before = this.heat;
       this.heat = clamp(this.heat + amount, 0, 3);
-
       this._troubleCooldown = 3;
-      if (this.heat !== before) { this._toast(reason, 'warning'); this._sound('heat'); }
+      if (this.heat !== before) { this._toast(reason, 'warning'); this._sound('heat', { level: this.heat, reason }); }
     }
 
     interact() {
@@ -755,7 +758,7 @@
         car.speed = car.vx = car.vy = 0;
         this.player.x = car.x; this.player.y = car.y; this.player.elevation=car.elevation; this.player.grounded=true;
         if (!car.borrowed) { car.borrowed = true; this._raiseHeat(1, 'Borrowed a ride', { position: car }); }
-        this._toast('Nice wheels. Hold Shift for boost; Space for handbrake.'); this._sound('enter');
+        this._toast('Nice wheels. Hold Shift for boost; Space for handbrake.'); this._sound('enter', { x: car.x, y: car.y, kind: car.kind });
         return true;
       }
       const service = this.services.find(s => distance(s, this.player) < 100);
@@ -772,12 +775,13 @@
           this.player.vehicleId = null; this.player.x = x; this.player.y = y; this.player.angle = car.angle;
           this.player.elevation = this._ground(x,y); this.player.verticalVelocity = 0; this.player.grounded = true;
           car.speed = car.vx = car.vy = 0;
-          this._sound('exit'); return true;
+          this._sound('exit', { x: car.x, y: car.y, kind: car.kind }); return true;
         }
       }
       if (forced) {
         const position = this._safeRoadPosition(car, PLAYER_RADIUS); this.player.vehicleId = null; this.player.x = position.x; this.player.y = position.y;
         this.player.elevation = this._ground(position); this.player.verticalVelocity = 0; this.player.grounded = true;
+        this._sound('exit', { x: car.x, y: car.y, kind: car.kind });
         return true;
       }
       this._toast('A little more room to hop out, please.'); return false;
@@ -789,7 +793,7 @@
       if (this.money < 75) { this._toast('The wash costs $75. Finish a gig for cash.', 'warning'); return false; }
       this.money -= 75; this._clearHeat(); this.player.composure = 100;
       if (this.player.vehicleId) VehicleStats.repair(this.current, this.maxHealth);
-      this._confetti(this.current.x, this.current.y, 36); this._toast('Squeaky clean: heat cleared and car repaired!', 'success'); this._sound('purchase');
+      this._confetti(this.current.x, this.current.y, 36); this._toast('Squeaky clean: heat cleared and car repaired!', 'success'); this._sound('wash', { x: service.x, y: service.y });
       return true;
     }
 
@@ -812,7 +816,10 @@
           !this._blockedLine(this.player,person,this.player.elevation+MUZZLE_HEIGHT,height);
       };
       const equipped = this.inventory.equipped;
-      if (equipped === 'cannon' && this.inventory.ammo.cannon <= 0) { this._toast('Party Cannon is empty. Use a Party Refill from your pockets.'); return false; }
+      if (equipped === 'cannon' && this.inventory.ammo.cannon <= 0) {
+        this._toast('Party Cannon is empty. Use a Party Refill from your pockets.');
+        this._sound('empty', { x: this.player.x, y: this.player.y }); return false;
+      }
       this._actionCooldown = GADGETS[equipped].cooldown;
       if (equipped === 'cannon') {
         this.inventory.ammo.cannon--;
@@ -821,12 +828,12 @@
         if (aimed) Object.assign(projectile, { aimed: true, startHeight: Math.max(this._ground(projectile)+.15, this.player.elevation + MUZZLE_HEIGHT + sinPitch * 1.25), horizontalSpeed: 560 * cosPitch, verticalSpeed: 28 * sinPitch });
         if (aimed) projectile.height = projectile.startHeight;
         this.projectiles.push(projectile);
-        this._confetti(this.player.x, this.player.y, 8, this.player.elevation + MUZZLE_HEIGHT); this._sound('pop');
+        this._confetti(this.player.x, this.player.y, 8, this.player.elevation + MUZZLE_HEIGHT); this._sound('cannon', { x: this.player.x, y: this.player.y });
         return true;
       }
       if (equipped === 'hammer') {
         const reach = 62, forwardX = Math.cos(angle), forwardY = Math.sin(angle);
-        this._confetti(this.player.x + forwardX * 35 * cosPitch, this.player.y + forwardY * 35 * cosPitch, 18, this.player.elevation + MUZZLE_HEIGHT + sinPitch * 1.75); this._sound('hammer');
+        this._confetti(this.player.x + forwardX * 35 * cosPitch, this.player.y + forwardY * 35 * cosPitch, 18, this.player.elevation + MUZZLE_HEIGHT + sinPitch * 1.75); this._sound('hammer', { x: this.player.x, y: this.player.y });
         let hit = this._strikeProps(angle, pitch, reach, 45, .5);
         const victims = [], officers = [];
         const inReach = person => {
@@ -842,7 +849,7 @@
         return true;
       }
       const pop = { x: this.player.x + Math.cos(angle) * 44 * cosPitch, y: this.player.y + Math.sin(angle) * 44 * cosPitch };
-      this._confetti(pop.x, pop.y, 25, this.player.elevation + MUZZLE_HEIGHT + sinPitch * 2.2); this._sound('pop');
+      this._confetti(pop.x, pop.y, 25, this.player.elevation + MUZZLE_HEIGHT + sinPitch * 2.2); this._sound('pop', { x: pop.x, y: pop.y });
       let hit = this._strikeProps(angle, pitch, 100, 10, .65);
       const victims = [], officers = [];
       for (const ped of this.peds) if (ped.stunned <= 0 && !this.ragdolls.get(ped.id) && inAimHeight(ped) && distance(ped, pop) < 60 && this._startle(ped, angle)) { victims.push(ped); hit = true; }
@@ -852,7 +859,7 @@
     }
 
     _burstParty(projectile) {
-      this._confetti(projectile.x, projectile.y, 85, projectile.aimed ? projectile.height : undefined); this._sound('party');
+      this._confetti(projectile.x, projectile.y, 85, projectile.aimed ? projectile.height : undefined); this._sound('party', { x: projectile.x, y: projectile.y });
       this._damagePropsNear({ x: projectile.x, y: projectile.y, height: finite(projectile.height,this._ground(projectile)+MUZZLE_HEIGHT) }, 85, 110);
       if (projectile.aimed && projectile.height > this._ground(projectile)+2.6) return;
       let hit = false;
@@ -897,8 +904,8 @@
     horn() {
       if (!this.player.vehicleId) { this._toast('The parade needs a car. Borrow one and honk!'); return false; }
       if (this._hornCooldown > 0) return false;
-      this._hornCooldown = 0.55; this._sound('horn');
       const car = this.current;
+      this._hornCooldown = 0.55; this._sound('horn', { x: car.x, y: car.y, kind: car.kind });
       this.peds.filter(p => distance(p, car) < 100 && p.stunned <= 0).forEach(p => { p.bubble = this._pick(['TOOT TOOT!', 'NICE HORN!', 'OH, CRUMBS!']); p.bubbleTimer = 2; });
       if (this.mission && this.mission.type === 'party') {
         const target = this.mission.targets[this.mission.targetIndex];
@@ -915,7 +922,8 @@
       const body = this.ragdolls.trigger(person, impulse,{terrain:this.world?.terrain});
       if (!body) return false;
       person.stunned = 3.8; person.bubble = this._pick(CURSES); person.bubbleTimer = 3;
-      this._confetti(person.x, person.y, 32); this._sound('flop');
+      this._confetti(person.x, person.y, 32); this._sound('flop', { x: person.x, y: person.y, intensity: clamp(Math.hypot(impulse.x || 0, impulse.y || 0, impulse.z || 0) / 9, .25, 1) });
+      if (person !== this.player) this._sound('resident', { x: person.x, y: person.y, text: person.bubble, id: person.id });
       if (person === this.player) this._toast(person.bubble + ' Getting back up…');
       return true;
     }
@@ -934,6 +942,7 @@
       this.player.stunned = 0; this.player.ragdollGrace = 1.4;
       const entity = this.current, p = this._safeRoadPosition(entity, this.player.vehicleId ? 18 : PLAYER_RADIUS, this.player.vehicleId ? entity : null);
       entity.x = p.x; entity.y = p.y; entity.elevation=this._ground(p);
+      entity.waterTimer = 0; entity._submerged = false;
       if (this.player.vehicleId && Number.isFinite(p.angle)) entity.angle = p.angle;
       if (this.player.vehicleId) this.vehiclePhysics.reset(entity);
       this.player.x = p.x; this.player.y = p.y; this.player.composure = Math.max(60, this.player.composure);
@@ -951,6 +960,7 @@
       const start=this.world.start.player;
       this.player.vehicleId = null; this.player.x = start.x; this.player.y = start.y; this.player.composure = 100;
       this.player.elevation = this._ground(start); this.player.verticalVelocity = 0; this.player.grounded = true;
+      this.player.waterTimer = 0; this.player._submerged = false;
       this.money = Math.max(0, this.money - 50); this._clearHeat(); this.graceTimer = 3;
       this._toast('BUSTED-ISH! $50 cleanup fee. Back to the fun—your gig is still active.', 'warning'); this._sound('busted'); this._confetti(start.x,start.y,45);
     }
@@ -1003,6 +1013,7 @@
 
     equipGadget(id) {
       if (!owns(GADGETS, id) || !this.inventory.unlocked.includes(id) || this.ragdolls.get(this.player.id)) return false;
+      if (this.inventory.equipped !== id) this._sound('equip', { gadget: id });
       this.inventory.equipped = id;
       return true;
     }
@@ -1012,7 +1023,7 @@
       if (this.inventory.unlocked.includes(id)) { this._toast('You already own the ' + GADGETS[id].name + '.'); return false; }
       const gadget = GADGETS[id];
       if (this.money < gadget.price) { this._toast('The ' + gadget.name + ' costs $' + gadget.price + '.', 'warning'); return false; }
-      this.money -= gadget.price; this.inventory.unlocked.push(id); this.inventory.equipped = id;
+      this.money -= gadget.price; this.inventory.unlocked.push(id); this.equipGadget(id);
       if (id === 'cannon') this.inventory.ammo.cannon = 6;
       this._toast(gadget.name + ' unlocked! Hold Tab to choose your toy.', 'success'); this._sound('purchase');
       return true;
@@ -1045,7 +1056,8 @@
         this.inventory.ammo.cannon = Math.min(12, this.inventory.ammo.cannon + 6);
       }
       this.inventory.pockets[id]--;
-      this._toast(POCKET_ITEMS[id].name + ' used. Lovely stuff.', 'success'); this._sound('consume'); return true;
+      this._toast(POCKET_ITEMS[id].name + ' used. Lovely stuff.', 'success');
+      this._sound(id === 'biscuits' ? 'biscuit' : id === 'repairTape' ? 'tape' : 'refill', { x: this.current.x, y: this.current.y }); return true;
     }
 
     _syncGarage() {
@@ -1109,7 +1121,7 @@
       car.speed = car.vx = car.vy = 0; car.traffic = false; car.borrowed = true;
       car.elevation=position.elevation; this.vehiclePhysics.reset(car);
       this.player.vehicleId = car.id; this.player.x = car.x; this.player.y = car.y; this.player.angle = car.angle; this.player.elevation=car.elevation; this.player.verticalVelocity=0; this.player.grounded=true;
-      this._toast(VehicleStats.getModel(car).name + ' retrieved. Ready for a spin!', 'success'); this._sound('enter'); return true;
+      this._toast(VehicleStats.getModel(car).name + ' retrieved. Ready for a spin!', 'success'); this._sound('enter', { x: car.x, y: car.y, kind: car.kind }); return true;
     }
 
     garageRepair(id) {
@@ -1121,7 +1133,8 @@
       if (this.money < 45) { this._toast('A garage repair costs $45.', 'warning'); return false; }
       this.money -= 45; VehicleStats.repair(record, this.maxHealth);
       this.cars.filter(car => car.garageId === record.id).forEach(car => VehicleStats.repair(car, this.maxHealth));
-      this._toast('Collected ride fully repaired for $45. Ready to retrieve!', 'success'); this._sound('purchase'); return true;
+      const garage = this.services.find(service => service.id === 'garage');
+      this._toast('Collected ride fully repaired for $45. Ready to retrieve!', 'success'); this._sound('repair', { x: garage.x, y: garage.y }); return true;
     }
 
     garageRelease(id) {
@@ -1142,7 +1155,8 @@
       if (this.money < 25) { this._toast('A fresh paint color costs $25.', 'warning'); return false; }
       this.money -= 25; record.color = color;
       this.cars.filter(car => car.garageId === record.id).forEach(car => { car.color = color; });
-      this._toast('Fresh sprinkles! New paint applied for $25.', 'success'); this._sound('purchase'); return true;
+      const garage = this.services.find(service => service.id === 'garage');
+      this._toast('Fresh sprinkles! New paint applied for $25.', 'success'); this._sound('paint', { x: garage.x, y: garage.y }); return true;
     }
 
     purchase(item) {
@@ -1165,7 +1179,8 @@
         }
       } else return false;
       this._syncGarage();
-      this._toast(item === 'repair' ? 'Fresh wheels! Car fully repaired.' : item + ' upgraded to level ' + this.upgrades[item] + '!', 'success'); this._sound('purchase'); return true;
+      this._toast(item === 'repair' ? 'Fresh wheels! Car fully repaired.' : item + ' upgraded to level ' + this.upgrades[item] + '!', 'success');
+      this._sound(item === 'repair' ? 'repair' : 'purchase', item === 'repair' ? { x: this.current.x, y: this.current.y } : {}); return true;
     }
 
     _addScore(points) { this.score = Math.min(999999, this.score + points); this.bestScore = Math.max(this.bestScore, this.score); }
@@ -1199,7 +1214,8 @@
         contact.prop._lastImpactAt = this.time;
         this._damageProp(contact.prop, (contact.speed - 55) * .9, contact.entity, contact.entity.id === this.player.vehicleId);
       }
-      for (const contact of contacts) this._impact(contact.entity, contact.speed, contact.vehicle);
+      for (const contact of contacts) this._impact(contact.entity, contact.speed, contact.vehicle,
+        contact.vehicle ? 'vehicle' : PROP_SOUND_MATERIALS[contact.prop?.kind] || 'stone');
       this._vehicleDamageStep(dt);
       for (const vehicle of this._vehicles()) this._vehiclePeople(vehicle, vehicle.vx || 0, vehicle.vy || 0);
       if (this.player.vehicleId) {
@@ -1245,9 +1261,11 @@
       if (this.ragdolls.get(this.player.id)) return;
       if (input.jump && !this._jumpHeld) this.jump();
       this._jumpHeld = Boolean(input.jump);
+      const wasGrounded = this.player.grounded;
       const feet = this.player.elevation;
       const onTerrain=this.player.grounded && Math.abs(feet-this._ground(this.player))<.2;
       this.player.verticalVelocity -= 18 * dt;
+      const fallSpeed = Math.max(0, -this.player.verticalVelocity);
       this.player.elevation = feet + this.player.verticalVelocity * dt;
       if (this.player.verticalVelocity > 0) {
         const ceiling = this.vehiclePhysics.ceiling(this.player.x, this.player.y, feet + PERSON_HEIGHT, this.player.elevation + PERSON_HEIGHT);
@@ -1275,12 +1293,13 @@
       const support = this.vehiclePhysics.support(this.player.x, this.player.y, Math.max(feet, this.player.elevation) + 0.045);
       if (this.player.verticalVelocity <= 0 && this.player.elevation <= support + 0.015) {
         this.player.elevation = support; this.player.verticalVelocity = 0; this.player.grounded = true;
+        if (!wasGrounded && fallSpeed > .3) this._sound('land', { x: this.player.x, y: this.player.y, intensity: clamp(fallSpeed / 11, .15, 1) });
       } else this.player.grounded = false;
     }
 
     jump() {
       if (this.player.vehicleId || this.ragdolls.get(this.player.id) || !this.player.grounded || this.player.stunned > 0) return false;
-      this.player.verticalVelocity = 7.2; this.player.grounded = false; this._sound('jump'); return true;
+      this.player.verticalVelocity = 7.2; this.player.grounded = false; this._sound('jump', { x: this.player.x, y: this.player.y }); return true;
     }
 
     _waterRecovery(dt) {
@@ -1288,13 +1307,17 @@
       if(!terrain) return;
       for(const entity of this._vehicles().concat(this.player.vehicleId ? [] : [this.player])) {
         const submerged=terrain.isWater(entity.x,entity.y) && this._base(entity)<finite(terrain.waterLevel,0)-.4;
-        if(!submerged) { if(entity.waterTimer) entity.waterTimer=0; continue; }
+        if(!submerged) { entity.waterTimer=0; entity._submerged=false; continue; }
+        if(!entity._submerged) {
+          entity._submerged=true;
+          this._sound('splash', { x: entity.x, y: entity.y, intensity: clamp(Math.max(Math.hypot(entity.vx || 0, entity.vy || 0) / 220, -finite(entity.verticalVelocity, 0) / 12), .25, 1) });
+        }
         entity.waterTimer=(entity.waterTimer || 0)+dt;
         if(entity.waterTimer<.6) continue;
         const current=entity===this.current,vehicle=entity!==this.player;
         const point=this._safeRoadPosition(entity,vehicle ? 18 : PLAYER_RADIUS,vehicle ? entity : null);
         entity.x=point.x; entity.y=point.y; entity.angle=point.angle; entity.elevation=this._ground(point);
-        entity.waterTimer=0; entity.verticalVelocity=0; entity.grounded=true;
+        entity.waterTimer=0; entity._submerged=false; entity.verticalVelocity=0; entity.grounded=true;
         if(vehicle) { this.vehiclePhysics.reset(entity); entity.route=[]; entity.routeTimer=0; }
         if(current) {
           this.ragdolls.clear(this.player.id); this.player.stunned=0; this.player.ragdollGrace=1.4;
@@ -1332,14 +1355,28 @@
       }
     }
 
-    _impact(car, speed, traffic) {
+    _impact(car, speed, traffic, material = traffic ? 'vehicle' : 'stone') {
       // Debounce each chassis independently; the solver reports both vehicles.
       const driven = car.id === this.player.vehicleId;
-      if (!Number.isFinite(speed) || speed <= 65 || car.exploded || this.time - (car._impactAt ?? -10) < 0.6 || driven && this.graceTimer > 0) return;
+      if (!Number.isFinite(speed) || speed <= 30 || car.exploded || driven && this.graceTimer > 0) return;
+      if (speed <= 65) {
+        if (distance(car, this.current) < 300 && this.time - (car._impactSoundAt ?? -10) >= .25) {
+          car._impactSoundAt = this.time;
+          this._sound('crash', { x: car.x, y: car.y, sourceId: car.id, intensity: clamp(speed / 330, .1, 1), material });
+        }
+        return;
+      }
+      if (this.time - (car._impactAt ?? -10) < .6) return;
       car._impactAt = this.time;
       const model = VehicleStats.getModel(car), armor = driven || car.garageId ? 1 + this.upgrades.armor * 0.1 : 1;
       this._damageVehicle(car, (speed - 50) * 0.11 / (model.mass * model.durability * armor));
-      if (distance(car, this.current) < 300) { this._confetti(car.x, car.y, 16); this._sound('crash'); }
+      if (distance(car, this.current) < 300) {
+        this._confetti(car.x, car.y, 16);
+        if (this.time - (car._impactSoundAt ?? -10) >= .25) {
+          car._impactSoundAt = this.time;
+          this._sound('crash', { x: car.x, y: car.y, sourceId: car.id, intensity: clamp(speed / 330, .2, 1), material });
+        }
+      }
       if (driven) {
         if (this.mission) this.missionStats.collisions++;
         if (traffic && speed > 140) this._raiseHeat(1, 'Heavy traffic collision', { position: car, noise: 220 });
@@ -1355,6 +1392,7 @@
       car.handlingHealth = Math.max(0, finite(car.handlingHealth, 100) - amount * 0.85);
       if (!car.burning && (car.engineHealth <= 22 || VehicleStats.condition(car) <= 0.18)) {
         car.burning = true; car.fireTime = 0;
+        this._sound('fire-start', { x: car.x, y: car.y });
         if (distance(car, this.current) < 200) this._toast(car.id === this.player.vehicleId ? 'ENGINE FIRE! E to bail out, or stop and use Repair Tape before it blows!' : 'That engine is on fire. Keep clear!', 'warning');
       }
       if (car.health <= 0) this._wreckVehicle(car);
@@ -1385,7 +1423,7 @@
       car.exploded = true; car.burning = false; car.fireTime = 0; car.explosionTime = this.time;
       car.engineHealth = car.handlingHealth = 0; this._wreckVehicle(car);
       this.vehiclePhysics.impulse(car, { x: 0, y: 3.2, z: 0 });
-      if (distance(car, this.current) < 400) { this._sound('crash'); this._confetti(car.x, car.y, 65, finite(car.elevation, 0) + 0.8); }
+      if (distance(car, this.current) < 400) { this._sound('explosion', { x: car.x, y: car.y, intensity: 1 }); this._confetti(car.x, car.y, 65, finite(car.elevation, 0) + 0.8); }
       // Delayed chain fires give nearby drivers the same chance to get away.
       const radius = 160, height = finite(car.elevation, 0) + 0.7;
       for (const other of this._vehicles()) {
@@ -1521,9 +1559,12 @@
       }
       this.policeSeen = seen;
       if (this.heat > 0) {
+        const searching = !seen;
+        if (searching && !this._policeSearching) this._sound('search', { level: this.heat });
+        this._policeSearching = searching;
         this.escapeTimer = seen ? 0 : this.escapeTimer + dt;
         if (this.escapeTimer >= this.escapeGoal) { this._clearHeat(); this._toast('Fun Police escaped! Back to the biscuits.', 'success'); this._sound('escape'); this._addScore(25); }
-      } else this.escapeTimer = 0;
+      } else { this.escapeTimer = 0; this._policeSearching = false; }
       this.player.composure = clamp(this.player.composure + (contact ? -27 : 7) * dt, 0, 100);
       if (this.player.composure <= 0) this._caught();
     }

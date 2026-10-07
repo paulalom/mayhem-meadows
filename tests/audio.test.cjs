@@ -317,3 +317,175 @@ test('generated horn crash and pop events use bounded one-shot voices and retain
   context.advance(2); audio.update(game(), { active: true }); assert.equal(audio.getStatus().voiceCount, 0);
   assert.ok(context.sources.every(source => source.ended && source.disconnected)); audio.dispose();
 });
+
+test('spatial materials choose distinct samples, attenuate distant impacts and bound repeated collisions per source', async () => {
+  const context = new Context(), audio = new AudioDirector({ contextFactory: () => context, settings: { musicVolume: 0 },
+    sampleData: samples('impact-light', 'impact-heavy', 'break-wood', 'break-metal', 'break-stone', 'break-foliage', 'explosion') });
+  await audio.unlock(); await settleSamples(); const world = game(); tick(audio, context, world, { viewYaw: 0 });
+  assert.equal(audio.play('crash', world, { x: 0, y: 30, material: 'wood', destroyed: true, intensity: 0.8 }), true);
+  const wood = [...audio._voices].find(voice => voice.sampleKey === 'break-wood');
+  assert.equal(wood.pan.pan.value, 1); assert.equal(audio.getStatus().lastPlayedSample, 'break-wood');
+  assert.equal(audio.play('crash', world, { x: 0, y: 30, material: 'wood', destroyed: true, intensity: 0.8 }), false);
+  assert.equal(audio.play('crash', world, { x: 0, y: -30, material: 'metal', destroyed: true, intensity: 0.8 }), true, 'different sources can collide together');
+  assert.equal([...audio._voices].find(voice => voice.sampleKey === 'break-metal').pan.pan.value, -1);
+  assert.equal(audio.play('crash', world, { x: 900, y: 0, material: 'stone' }), false);
+  context.advance(0.2);
+  audio.play('crash', world, { material: 'vehicle', intensity: 0.2 }); assert.equal(audio.getStatus().lastPlayedSample, 'impact-light');
+  context.advance(0.2);
+  audio.play('crash', world, { material: 'vehicle', intensity: 1 }); assert.equal(audio.getStatus().lastPlayedSample, 'impact-heavy');
+  context.advance(0.2);
+  audio.play('explosion', world, { x: 0, y: 0 }); assert.equal(audio.getStatus().lastPlayedSample, 'explosion');
+  assert.equal(audio.getStatus().oneShotCount, 5); audio.dispose();
+});
+
+test('resident speech follows the text, preserves full lines, ducks music and avoids overlap or distant chatter', async () => {
+  const context = new Context(); context.decodeAudioData = async () => ({ ...decodedBuffer(), duration: 4.88 });
+  const audio = new AudioDirector({ contextFactory: () => context,
+    sampleData: samples('voice-resident-2', 'voice-resident-4', 'voice-police-pursuit', 'voice-police-search') });
+  await audio.unlock(); await settleSamples(); const world = game(); tick(audio, context, world);
+  assert.equal(audio.play('resident', world, { x: 0, y: 25, text: "FLIPPIN' TURNIPS!" }), true);
+  const speech = [...audio._voices].find(voice => voice.speech);
+  assert.equal(speech.sampleKey, 'voice-resident-2'); assert.ok(speech.end - context.currentTime > 4.8);
+  assert.equal(speech.pan.pan.value, 1); assert.equal(audio.getStatus().speechCount, 1);
+  assert.ok(audio._music.gain.value < audio.settings.musicVolume);
+  context.advance(3);
+  assert.equal(audio.play('resident', world, { x: 0, y: -25, text: 'YOU ABSOLUTE WAFFLE!' }), false, 'a long line cannot overlap another');
+  context.advance(2); tick(audio, context, world);
+  assert.equal(audio.play('resident', world, { x: 750, y: 0, text: 'YOU ABSOLUTE WAFFLE!' }), false, 'distant residents do not clutter the mix');
+  assert.equal(audio.play('resident', world, { x: 0, y: -25, text: 'YOU ABSOLUTE WAFFLE!' }), true);
+  audio.update(world, { active: false }); assert.equal(audio.getStatus().speechCount, 0);
+  context.advance(0.03); assert.ok(context.sources.every(source => source.ended && source.disconnected)); audio.dispose();
+});
+
+test('road contact uses terrain height and footsteps distinguish paved roads, grass and low shore sand', () => {
+  const world = game(), ride = car('ride'); world.cars = [ride]; world.player.vehicleId = ride.id;
+  ride.speed = 170; ride.elevation = 12; world.terrain = { surfaceHeight: () => 12, heightAt: () => 1 };
+  world.network = { nearestRoad: () => ({ width: 104, distance: 65 }) }; world.districtAt = () => ({ id: 'riverfront' });
+  const options = { input: { up: true, boost: true, brake: true } };
+  let frame = deriveAudioFrame(world, options); assert.ok(frame.skid > 0); assert.ok(frame.road > 0); assert.ok(frame.boost > 0); assert.equal(frame.surface, 'pavement');
+  ride.elevation = 12.471; frame = deriveAudioFrame(world, options); assert.ok(frame.skid > 0, 'physics ground contact remains authoritative on a slope');
+  world.network.nearestRoad = () => ({ width: 104, distance: 150 }); assert.equal(deriveAudioFrame(world).surface, 'sand');
+  world.terrain.heightAt = () => 5; assert.equal(deriveAudioFrame(world).surface, 'grass');
+  ride.grounded = false; frame = deriveAudioFrame(world, options); assert.equal(frame.skid, 0); assert.equal(frame.road, 0); assert.equal(frame.boost, 0);
+  world.police = [car('healthy'), { ...car('wreck'), health: 0 }, { ...car('burning'), burning: true }, { ...car('exploded'), exploded: true }]; world.heat = 2;
+  assert.deepEqual(deriveAudioFrame(world).sirens.map(siren => siren.id), ['healthy']);
+});
+
+test('fire loops stay local and the occupied burning ride warning accelerates then stops on pause and mute', async () => {
+  const context = new Context(), data = samples('fire', 'ambience-coast'); for (const asset of Object.values(data)) asset.loop = true;
+  const audio = new AudioDirector({ contextFactory: () => context, settings: { musicVolume: 0 }, sampleData: data });
+  await audio.unlock(); await settleSamples(); const world = game(), ride = car('ride');
+  world.cars = [ride, { ...car('remote', 'van', 1000), burning: true }]; world.player.vehicleId = ride.id; ride.burning = true; ride.fireTime = 0;
+  world.districtAt = () => ({ id: 'riverfront' }); tick(audio, context, world);
+  assert.equal(audio.getStatus().fireCount, 1); assert.equal(audio.getStatus().ambienceCount, 1);
+  const slowInterval = audio._warningAt - context.currentTime; assert.ok(slowInterval >= 1.2);
+  context.advance(1.4); ride.fireTime = 7.2; tick(audio, context, world);
+  assert.ok(audio._warningAt - context.currentTime < 0.4, 'warning pulses accelerate near detonation');
+  audio.update(world, { active: false }); assert.equal(audio.getStatus().voiceCount, 0); assert.equal(audio.getStatus().fireCount, 0);
+  tick(audio, context, world); assert.equal(audio.getStatus().fireCount, 1);
+  audio.setSettings({ muted: true }); assert.equal(audio.getStatus().voiceCount, 0); assert.equal(audio.getStatus().ambienceCount, 0);
+  audio.setSettings({ muted: false }); ride.burning = false; tick(audio, context, world); assert.equal(audio.getStatus().fireCount, 0); assert.equal(audio._warningId, null);
+  audio.dispose();
+});
+
+test('deliberate inventory feedback survives menu frames while pause, background and mute retire every UI sound', async () => {
+  const context = new Context(), audio = new AudioDirector({ contextFactory: () => context, sampleData: samples('biscuit', 'tape', 'refill') });
+  await audio.unlock(); await settleSamples(); const world = game();
+  audio.update(world, { active: false, allowUI: true });
+  assert.equal(audio.playUI('biscuit', world), true); assert.equal(audio.getStatus().lastPlayedSample, 'biscuit');
+  assert.ok(audio._master.gain.value > 0); assert.equal(audio.play('crash', world), false); assert.equal(audio.playUI('crash', world), false);
+  for (let i = 0; i < 10; i++) { context.advance(0.01); audio.update(world, { active: false, allowUI: true }); }
+  assert.equal(audio.getStatus().voiceCount, 1); assert.equal(audio.getStatus().musicVoiceCount, 0); assert.equal(audio.getStatus().engineCount, 0);
+  audio.update(world, { active: false }); assert.equal(audio.getStatus().voiceCount, 0);
+  context.advance(0.05); assert.equal(audio.playUI('tape', world), true);
+  audio.setSettings({ effectsVolume: 0 }); assert.equal(audio.getStatus().voiceCount, 0);
+  audio.update(world, { active: false, allowUI: true }); audio.setSettings({ effectsVolume: 0.8 });
+  audio.update(world, { active: false, allowUI: true }); assert.equal(audio.getStatus().voiceCount, 0, 'restoring effects does not revive an old menu action');
+  audio.setSettings({ muted: true }); assert.equal(audio.getStatus().voiceCount, 0); assert.equal(audio.playUI('refill', world), false);
+  audio.setSettings({ muted: false, effectsVolume: 0 }); assert.equal(audio.playUI('refill', world), false); audio.dispose();
+});
+
+test('generated music crossfades finite voices and station IDs do not repeat at every loop', async () => {
+  const context = new Context(), audio = new AudioDirector({ contextFactory: () => context,
+    sampleData: samples('music-biscuit', 'voice-radio-biscuit') });
+  await audio.unlock(); await settleSamples(); const world = game(); world.cars = [car('ride')]; world.player.vehicleId = 'ride';
+  for (let i = 0; i < 600; i++) { tick(audio, context, world); assert.ok(audio.getStatus().musicVoiceCount <= 2); }
+  assert.equal(audio.getStatus().station, 'biscuit');
+  assert.equal(context.sources.filter(source => source.buffer && !source.loop && source.startTime > 1.4 && source.startTime < 1.7).length >= 1, true);
+  assert.equal(audio._stationLast.size, 1);
+  const speechBuffer = audio._samples.get('voice-radio-biscuit').buffer;
+  assert.equal(context.sources.filter(source => source.buffer === speechBuffer).length, 1, 'one ID across many loops');
+  assert.equal([...audio._voices].filter(voice => voice.speech).length, 0);
+  audio.setSettings({ radioStation: 'off' }); assert.equal(audio.getStatus().musicVoiceCount, 0);
+  audio.setSettings({ radioStation: 'biscuit' }); for (let i = 0; i < 120; i++) tick(audio, context, world);
+  assert.equal(context.sources.filter(source => source.buffer === speechBuffer).length, 1, 'rapid radio toggles do not repeat the station ID'); audio.dispose();
+});
+
+test('quiet ambience receives bounded normalization without clipping or amplified silence', async () => {
+  const context = new Context(); context.decodeAudioData = async () => {
+    const data = Float32Array.from({ length: 4800 }, (_, i) => Math.sin(i / 7) * 0.02);
+    return { duration: 0.6, sampleRate: 8000, numberOfChannels: 1, getChannelData: () => data };
+  };
+  const audio = new AudioDirector({ contextFactory: () => context, sampleData: { 'ambience-nature': { data: 'AQID', loop: true } } });
+  await audio.unlock(); await settleSamples();
+  const data = audio._samples.get('ambience-nature').buffer.getChannelData(0), peak = Math.max(...data.map(Math.abs));
+  assert.ok(peak > 0.2 && peak <= 0.240001, 'a quiet loop gets at most 12 times gain'); assert.equal(data[0], 0); assert.equal(data.at(-1), 0);
+  audio.dispose();
+});
+
+test('loaded engine loops blend with throttle while damage layers retire with their source and skid stays grounded', async () => {
+  const context = new Context(), data = samples('engine-compact', 'engine-high-compact', 'skid'); data.skid.loop = true;
+  const audio = new AudioDirector({ contextFactory: () => context, settings: { musicVolume: 0 }, sampleData: data });
+  await audio.unlock(); await settleSamples(); const world = game(), ride = car('ride'); world.cars = [ride]; world.player.vehicleId = ride.id;
+  tick(audio, context, world); const engine = audio._engines.get('ride'), idleBlend = engine.highGain.gain.value;
+  assert.equal(engine.sources.length, 2); assert.equal(audio.getStatus().engineSampleCount, 1);
+  ride.speed = 170; ride.engineHealth = 30; tick(audio, context, world, { input: { up: true, brake: true } });
+  assert.ok(engine.highGain.gain.value > idleBlend); assert.ok(engine.main.playbackRate.value <= 1.65);
+  assert.equal(audio._noiseLoops.get('skid').sampleKey, 'skid'); assert.ok(audio._noiseLoops.has('rattle-ride'));
+  ride.grounded = false; tick(audio, context, world, { input: { brake: true } }); assert.equal(audio._noiseLoops.has('skid'), false);
+  ride.exploded = true; tick(audio, context, world); assert.equal(audio._engines.size, 0); assert.equal(audio._noiseLoops.has('rattle-ride'), false);
+  audio.dispose(); context.advance(0.04); assert.ok(context.sources.every(source => source.ended && source.disconnected));
+});
+
+test('police dispatch can interrupt residents and queues search only while police are still searching', async () => {
+  const context = new Context(); context.decodeAudioData = async () => ({ ...decodedBuffer(), duration: 4.88 });
+  const audio = new AudioDirector({ contextFactory: () => context, settings: { musicVolume: 0 },
+    sampleData: samples('voice-resident-3', 'voice-police-pursuit', 'voice-police-search') });
+  await audio.unlock(); await settleSamples(); const world = game(); tick(audio, context, world);
+  audio.play('resident', world, { text: 'OH, CRUMBS!' }); assert.equal(audio.getStatus().lastPlayedSample, 'voice-resident-3');
+  context.advance(2); world.heat = 1; world._policeSearching = true; world.policeSeen = false;
+  audio.play('heat', world); assert.equal(audio.getStatus().lastPlayedSample, 'voice-police-pursuit'); assert.equal(audio.getStatus().speechCount, 1);
+  audio.play('search', world); assert.equal(audio.getStatus().speechCount, 1); assert.ok(audio._pendingSearch);
+  context.advance(5); tick(audio, context, world); assert.equal(audio.getStatus().lastPlayedSample, 'voice-police-search'); assert.equal(audio._pendingSearch, null);
+  context.advance(5); world.heat = 2; audio.play('heat', world); audio.play('search', world); assert.ok(audio._pendingSearch);
+  world.policeSeen = true; world._policeSearching = false; tick(audio, context, world); assert.equal(audio._pendingSearch, null, 'reacquiring the player discards a queued search');
+  context.advance(5); world.policeSeen = false; world._policeSearching = true; audio.play('search', world); world.heat = 0;
+  tick(audio, context, world); assert.equal(audio._pendingSearch, null, 'cleared heat cannot revive an old announcement'); audio.dispose();
+});
+
+test('boost attacks use the generated sample once per activation, debounce taps and do not replay a held input after pause', async () => {
+  const context = new Context(), audio = new AudioDirector({ contextFactory: () => context, settings: { musicVolume: 0 }, sampleData: samples('boost') });
+  await audio.unlock(); await settleSamples(); const world = game(); world.cars = [car('ride')]; world.player.vehicleId = 'ride';
+  const boost = { input: { up: true, boost: true } }; tick(audio, context, world, boost);
+  const buffer = audio._samples.get('boost').buffer, attacks = () => context.sources.filter(source => source.buffer === buffer).length;
+  assert.equal(attacks(), 1); for (let i = 0; i < 10; i++) tick(audio, context, world, boost); assert.equal(attacks(), 1);
+  tick(audio, context, world); tick(audio, context, world, boost); assert.equal(attacks(), 1, 'rapid taps are debounced');
+  audio.update(world, { active: false }); context.advance(2); tick(audio, context, world, boost); assert.equal(attacks(), 1, 'held input on resume has no fresh attack');
+  tick(audio, context, world); tick(audio, context, world, boost); assert.equal(attacks(), 2);
+  audio.dispose(); context.advance(0.04); assert.ok(context.sources.every(source => source.ended && source.disconnected));
+});
+
+test('fire warnings and police announcements reserve room during dense ordinary effects', async () => {
+  const context = new Context(), audio = new AudioDirector({ contextFactory: () => context, settings: { musicVolume: 0 },
+    sampleData: samples('pop', 'voice-police-pursuit') });
+  await audio.unlock(); await settleSamples(); const world = game(); tick(audio, context, world);
+  const fill = () => { while (audio._hasRoom('effects')) audio._sampleVoice('pop', { level: 0.1 }); };
+  fill(); assert.equal(audio.getStatus().voiceCount, 48);
+  audio._updateWarning({ id: 'burning-ride', progress: 0.9 });
+  assert.equal(audio.getStatus().voiceCount, 48);
+  assert.equal([...audio._voices].filter(voice => voice.priority === 2).length, 2, 'ordinary debris yields to the fire warning');
+  fill(); assert.equal(audio.play('heat', world), true); assert.equal(audio.getStatus().lastPlayedSample, 'voice-police-pursuit');
+  assert.equal(audio.getStatus().speechCount, 1); assert.ok(audio.getStatus().voiceCount <= 48);
+  audio.setSettings({ effectsVolume: 0 }); assert.equal(audio.getStatus().voiceCount, 0);
+  audio.setSettings({ effectsVolume: 0.8 }); assert.equal(audio.getStatus().voiceCount, 0); audio.dispose();
+});

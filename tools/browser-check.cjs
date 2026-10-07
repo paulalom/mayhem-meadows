@@ -270,7 +270,16 @@ async function installEngineInspection(context) {
       get() { return audio; },
       set(value) {
         audio = { ...value, AudioDirector: class extends value.AudioDirector {
-          constructor(...args) { super(...args); globalThis.__browserCheckAudioDirector = this; }
+          constructor(...args) { super(...args); globalThis.__browserCheckAudioDirector = this; globalThis.__browserCheckAudioEvents = []; }
+          play(name, game, details) {
+            const before = new Set(this._voices);
+            const result = super.play(name, game, details);
+            globalThis.__browserCheckAudioEvents.push({ name, details: { ...details }, status: this.getStatus(),
+              voices: [...this._voices].filter(voice => !before.has(voice)).map(voice => ({ sample: voice.sampleKey || null,
+                generated: !!voice.generated, pan: voice.pan?.pan?.value ?? 0, bus: voice.bus })) });
+            globalThis.__browserCheckAudioEvents = globalThis.__browserCheckAudioEvents.slice(-256);
+            return result;
+          }
         } };
       },
     });
@@ -428,12 +437,14 @@ async function checkAudio(browser, externalRequests) {
     await page.locator('#play-button').click();
     await waitForScene(page, 'foot');
     await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().state === 'running' && globalThis.__browserCheckAudioDirector.getStatus().active);
-    await page.waitForFunction(() => {
+    const expectedSamples = await page.evaluate(() => Object.keys(globalThis.MayhemAudioSamples || {}).length);
+    assert.ok(expectedSamples > 7, 'The themed sound library must include more than the original shared effects.');
+    await page.waitForFunction(expected => {
       const audio = globalThis.__browserCheckAudioDirector.getStatus();
-      return audio.sampleCount === 7 && audio.loadingSamples === 0;
-    }, null, { timeout: 15000 });
+      return audio.sampleCount === expected && audio.loadingSamples === 0;
+    }, expectedSamples, { timeout: 30000 });
     const foot = await audioState(page), footOutput = await measureAudio(page);
-    assert.equal(foot.failedSamples, 0, 'All seven locally embedded generated samples must decode in Chrome.');
+    assert.equal(foot.failedSamples, 0, 'All locally embedded generated samples must decode in Chrome.');
     assert.equal(foot.mode, 'foot'); assert.equal(foot.station, 'foot');
     assert.ok(footOutput.rms > 0.00001, 'Foot music must produce real nonzero Chrome audio samples.');
     await page.keyboard.press('e');
@@ -472,14 +483,14 @@ async function checkAudio(browser, externalRequests) {
     await page.keyboard.press('h');
     await page.waitForFunction(() => {
       const audio = globalThis.__browserCheckAudioDirector.getStatus();
-      return audio.generatedVoiceCount > audio.engineSampleCount + audio.sirenSampleCount;
+      return audio.oneShotCount > 0 && audio.lastPlayedSample === 'horn';
     }, null, { timeout: 2000 });
     const horn = await audioState(page), hornOutput = await measureAudio(page, 140);
     assert.ok(hornOutput.peakRms > 0.00001, 'The generated horn must reach Chrome audio output through the real horn action.');
     await page.waitForFunction(() => {
       const audio = globalThis.__browserCheckAudioDirector.getStatus();
-      return audio.generatedVoiceCount === audio.engineSampleCount + audio.sirenSampleCount;
-    }, null, { timeout: 2000 });
+      return audio.oneShotCount === 0;
+    }, null, { timeout: 4000 });
     // Exercise the real crash feedback/event path independently of the physical
     // contact regressions elsewhere in this suite, then observe native output.
     await page.evaluate(() => {
@@ -488,7 +499,7 @@ async function checkAudio(browser, externalRequests) {
     });
     await page.waitForFunction(() => {
       const audio = globalThis.__browserCheckAudioDirector.getStatus();
-      return audio.generatedVoiceCount > audio.engineSampleCount + audio.sirenSampleCount;
+      return audio.oneShotCount > 0 && audio.lastPlayedEvent === 'crash';
     }, null, { timeout: 2000 });
     const crashOutput = await measureAudio(page, 140);
     assert.ok(crashOutput.peakRms > 0.00001, 'The generated crash must reach native output when core crash feedback is drained.');
@@ -549,14 +560,14 @@ async function checkAudio(browser, externalRequests) {
     await setAudioRange(page, 'audio-effects', 1);
     await page.locator('#close-help').click();
     await page.waitForTimeout(450);
-    assert.ok((await measureAudio(page, 80)).peakRms < 0.000001, 'Music level zero must silence the isolated on-foot scene.');
+    assert.equal((await audioState(page)).musicVoiceCount, 0, 'Music level zero must release the music voices while town ambience remains available.');
     await page.locator('#game-canvas').focus();
     await page.keyboard.press('Space');
     const effect = await measureAudio(page, 120);
     assert.ok(effect.peakRms > 0.00001, 'Jump effects must produce real audio when music is disabled.');
     await captureMouse(page);
     await fireToy(page);
-    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().generatedVoiceCount > 0, null, { timeout: 2000 });
+    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().oneShotCount > 0 && globalThis.__browserCheckAudioDirector.getStatus().lastPlayedSample === 'pop', null, { timeout: 2000 });
     const pop = await audioState(page), popOutput = await measureAudio(page, 140);
     assert.ok(popOutput.peakRms > 0.00001, 'The generated pop sample must reach native output through the real toy action.');
 
@@ -623,6 +634,188 @@ async function checkUnavailableAudio(browser, externalRequests) {
     await page.locator('#close-help').click();
     assert.equal(await page.locator('#game-canvas').evaluate(element => element === document.activeElement), true);
     assert.equal((await audioState(page)).voiceCount, 0, 'Unavailable audio must leave gameplay usable without audio voices.');
+  } finally { await closeTestContext(context); }
+}
+
+async function checkThemedAudio(browser, externalRequests) {
+  const context = await createTestContext(browser, { viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });
+  try {
+    await installEngineInspection(context);
+    await installAudioInspection(context);
+    await context.route('**/*', route => {
+      if (/^(file|data|blob):/.test(route.request().url())) return route.continue();
+      externalRequests.push(route.request().url()); return route.abort();
+    });
+    const page = await context.newPage();
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+    await page.goto(url);
+    await page.evaluate(() => {
+      const game = globalThis.__browserCheckGame, lane = globalThis.__browserCheckLane();
+      globalThis.__browserCheckAudioResident = { ...game.peds[0] };
+      game.peds = []; game.police = []; game.cars = [game.cars[0]];
+      Object.assign(game.player, { ...lane.point(), angle: lane.angle, vehicleId: null });
+      Object.assign(game.cars[0], { ...lane.point(-220), angle: lane.angle, traffic: false });
+      game.vehiclePhysics.reset(game.cars[0]); game.heat = 0; game.graceTimer = 60;
+      game.inventory.unlocked = ['popper', 'hammer', 'cannon'];
+      game.inventory.pockets = { biscuits: 2, repairTape: 2, refill: 2 }; game.inventory.ammo.cannon = 3;
+    });
+    await page.locator('#play-button').click();
+    await waitForScene(page, 'foot');
+    await page.waitForFunction(() => {
+      const audio = globalThis.__browserCheckAudioDirector.getStatus();
+      return audio.active && audio.loadingSamples === 0 && audio.sampleCount === Object.keys(globalThis.MayhemAudioSamples).length;
+    }, null, { timeout: 30000 });
+    await page.locator('#help-toggle').click();
+    await setAudioRange(page, 'audio-music', 0);
+    await page.locator('#close-help').click();
+    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().musicVoiceCount === 0);
+    const expectedAmbience = await page.evaluate(() => globalThis.MayhemAudio.deriveAudioFrame(globalThis.__browserCheckGame).ambience);
+    assert.equal((await audioState(page)).ambienceCount, expectedAmbience ? 1 : 0, 'The live district must select one quiet ambient bed.');
+    const routes = [];
+    async function routed(action, event, sample) {
+      const after = await page.evaluate(() => globalThis.__browserCheckAudioEvents.length);
+      await action();
+      await page.waitForFunction(({ after, event, sample }) => globalThis.__browserCheckAudioEvents.slice(after).some(entry =>
+        entry.name === event && entry.voices.some(voice => voice.generated && voice.sample === sample)), { after, event, sample }, { timeout: 3000 });
+      const entry = await page.evaluate(({ after, event, sample }) => globalThis.__browserCheckAudioEvents.slice(after).find(entry =>
+        entry.name === event && entry.voices.some(voice => voice.generated && voice.sample === sample)), { after, event, sample });
+      assert.ok(entry.voices.every(voice => voice.bus === 'effects'), 'Gameplay events must use the effects volume bus.');
+      const output = await measureAudio(page, 100);
+      assert.ok(output.peakRms > 0.000001, `${event} must reach the native Chrome audio destination.`);
+      routes.push({ event, sample, details: entry.details, voices: entry.voices, peakRms: output.peakRms });
+      return entry;
+    }
+
+    for (const [gadget, event, sample] of [['popper', 'pop', 'pop'], ['hammer', 'hammer', 'hammer'], ['cannon', 'cannon', 'cannon-launch']]) {
+      await routed(async () => page.evaluate(gadget => {
+        const game = globalThis.__browserCheckGame; game.equipGadget(gadget); game._actionCooldown = 0; game.action();
+      }, gadget), event, sample);
+    }
+    await page.waitForFunction(() => globalThis.__browserCheckAudioEvents.some(entry => entry.name === 'party' &&
+      entry.voices.some(voice => voice.generated && voice.sample === 'cannon-burst')), null, { timeout: 3000 });
+    const burst = await page.evaluate(() => globalThis.__browserCheckAudioEvents.find(entry => entry.name === 'party'));
+    assert.ok(Number.isFinite(burst.details.x) && Number.isFinite(burst.details.y), 'Cannon impact must forward its world position.');
+    await routed(async () => page.evaluate(() => {
+      const game = globalThis.__browserCheckGame; game.player.composure = 30;
+      if (!game.usePocket('biscuits')) throw new Error('The biscuit fixture must be usable.');
+    }), 'biscuit', 'biscuit');
+    await routed(async () => page.evaluate(() => {
+      if (!globalThis.__browserCheckGame.usePocket('refill')) throw new Error('The refill fixture must be usable.');
+    }), 'refill', 'refill');
+
+    await page.evaluate(() => { globalThis.__browserCheckGame.player.composure = 55; });
+    await page.locator('#game-canvas').focus();
+    await openInventory(page);
+    await page.waitForTimeout(350);
+    const inventory = await audioState(page);
+    for (const count of ['engineCount', 'sirenCount', 'musicVoiceCount', 'ambienceCount', 'fireCount', 'speechCount'])
+      assert.equal(inventory[count], 0, `Opening pockets must pause world ${count}.`);
+    await routed(async () => page.locator('[data-use-pocket="biscuits"]').click(), 'biscuit', 'biscuit');
+    assert.equal(await page.locator('#inventory-screen').isVisible(), true, 'The intentional item sound must play while pockets stay open.');
+    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().voiceCount === 0, null, { timeout: 4000 });
+    await page.waitForTimeout(240);
+    const inventorySettled = await measureAudio(page, 100);
+    assert.ok(inventorySettled.peakRms < 0.000001, 'Pockets must settle to silence after the tactile item sound.');
+    await closeInventory(page);
+
+    for (const [kind, material] of [['fence', 'wood'], ['lamp', 'metal'], ['fountain', 'stone'], ['tree', 'foliage']]) {
+      const entry = await routed(async () => page.evaluate(kind => {
+        const game = globalThis.__browserCheckGame, object = game.staticObjects.find(object => object.kind === kind && !object.destroyed);
+        if (!object) throw new Error(`The town needs a destructible ${kind} fixture.`);
+        Object.assign(game.player, globalThis.__browserCheckPose({ x: object.x - 120, y: object.y }));
+        if (!game._damageProp(object, 999, game.player, false)) throw new Error('The real destruction path must damage the prop.');
+      }, kind), 'crash', `break-${material}`);
+      assert.equal(entry.details.material, material, 'Destruction must forward the actual scenery material.');
+      assert.equal(entry.details.destroyed, true, 'Only destroyed scenery must request its material breaking sound.');
+      assert.ok(entry.details.intensity > 0, 'Destruction must forward impact strength.');
+      await page.waitForTimeout(60);
+    }
+    await page.evaluate(() => {
+      const game = globalThis.__browserCheckGame, lane = globalThis.__browserCheckLane();
+      Object.assign(game.player, { ...lane.point(), angle: lane.angle });
+      Object.assign(game.cars[0], { ...lane.point(-220), angle: lane.angle, speed: 0, vx: 0, vy: 0 });
+      game.vehiclePhysics.reset(game.cars[0]);
+    });
+    await routed(async () => page.evaluate(() => globalThis.__browserCheckGame._explodeVehicle(globalThis.__browserCheckGame.cars[0])), 'explosion', 'explosion');
+    const spatial = await routed(async () => page.evaluate(() => {
+      const game = globalThis.__browserCheckGame, yaw = globalThis.__browserCheckAudioDirector._viewYaw;
+      game._sound('crash', { x: game.player.x - Math.sin(yaw) * 80, y: game.player.y + Math.cos(yaw) * 80,
+        material: 'stone', intensity: 0.8 });
+    }), 'crash', 'impact-heavy');
+    assert.ok(spatial.voices.some(voice => voice.pan > 0.8), 'A forwarded world position must pan the generated impact toward the listener’s right.');
+    const light = await routed(async () => page.evaluate(() => {
+      const game = globalThis.__browserCheckGame, yaw = globalThis.__browserCheckAudioDirector._viewYaw;
+      game._sound('crash', { x: game.player.x + Math.sin(yaw) * 80, y: game.player.y - Math.cos(yaw) * 80,
+        material: 'metal', intensity: 0.2 });
+    }), 'crash', 'impact-light');
+    assert.ok(light.voices.some(voice => voice.pan < -0.8), 'An unbroken metal prop must use a light impact and preserve left-side positioning.');
+    await page.waitForTimeout(80);
+    const farAfter = await page.evaluate(() => globalThis.__browserCheckAudioEvents.length);
+    await page.evaluate(() => {
+      const game = globalThis.__browserCheckGame;
+      game._sound('crash', { x: game.player.x + 2000, y: game.player.y, material: 'metal', intensity: 1 });
+    });
+    await page.waitForFunction(after => globalThis.__browserCheckAudioEvents.length > after, farAfter);
+    const far = await page.evaluate(after => globalThis.__browserCheckAudioEvents.slice(after).find(entry => entry.name === 'crash'), farAfter);
+    assert.equal(far.voices.length, 0, 'An impact beyond hearing range must not allocate an audio voice.');
+
+    const speechAfter = await page.evaluate(() => globalThis.__browserCheckAudioEvents.length);
+    await page.evaluate(() => {
+      const game = globalThis.__browserCheckGame, ped = globalThis.__browserCheckAudioResident;
+      Object.assign(ped, { x: game.player.x + 45, y: game.player.y, elevation: game.player.elevation,
+        stunned: 0, ragdollGrace: 0, pace: 0, homeX: game.player.x + 45, homeY: game.player.y });
+      game.peds = [ped]; game._knockDown(ped, { x: 3.5, y: 2.5, z: 0 });
+    });
+    await page.waitForFunction(after => globalThis.__browserCheckAudioEvents.slice(after).some(entry => entry.name === 'resident' &&
+      entry.voices.some(voice => /^voice-resident-/.test(voice.sample))), speechAfter, { timeout: 3000 });
+    const speech = await page.evaluate(after => globalThis.__browserCheckAudioEvents.slice(after).find(entry => entry.name === 'resident'), speechAfter);
+    assert.equal(speech.status.speechCount, 1, 'A nearby resident must have one intelligible voice.');
+    assert.ok(speech.details.text, 'The resident’s visible curse must accompany the speech event.');
+    const speechOutput = await measureAudio(page, 100);
+    assert.ok(speechOutput.peakRms > 0.000001, 'Generated resident speech must reach native audio output.');
+    const chatterAfter = await page.evaluate(() => globalThis.__browserCheckAudioEvents.length);
+    await page.evaluate(() => {
+      const game = globalThis.__browserCheckGame;
+      for (let i = 0; i < 10; i++) game._sound('resident', { x: game.player.x + 45, y: game.player.y, text: 'OH, CRUMBS!', id: 'chatter-' + i });
+    });
+    await page.waitForFunction(after => globalThis.__browserCheckAudioEvents.length >= after + 10, chatterAfter);
+    const chatter = await page.evaluate(after => globalThis.__browserCheckAudioEvents.slice(after).filter(entry => entry.name === 'resident'), chatterAfter);
+    assert.ok(chatter.every(entry => entry.voices.length === 0 && entry.status.speechCount <= 1), 'A crowd must not talk over the active resident.');
+
+    await page.evaluate(() => {
+      const game = globalThis.__browserCheckGame, lane = globalThis.__browserCheckLane();
+      game.peds = []; game.physics.clearAll(); game.heat = 0; game.graceTimer = 60;
+      Object.assign(game.player, { ...lane.point(), angle: lane.angle, vehicleId: null });
+      const point = lane.point(48), car = game._addCar(point.x, point.y, lane.angle, 'compact', '#67d3c8', false);
+      Object.assign(car, point); game.vehiclePhysics.reset(car);
+    });
+    await page.locator('#game-canvas').focus();
+    await page.keyboard.press('e');
+    await waitForScene(page, 'drive');
+    await page.evaluate(() => globalThis.__browserCheckGame._damageVehicle(globalThis.__browserCheckGame.current, 72));
+    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().fireCount > 0 &&
+      globalThis.__browserCheckAudioDirector._warningId === globalThis.__browserCheckGame.current.id, null, { timeout: 3000 });
+    const fire = await audioState(page), fireOutput = await measureAudio(page, 100);
+    assert.ok(fire.fireCount <= 3 && fireOutput.peakRms > 0.000001, 'Nearby fire and the driver warning must remain audible and bounded.');
+    await page.keyboard.press('p');
+    await page.locator('#pause-screen').waitFor({ state: 'visible' });
+    await page.waitForTimeout(350);
+    const paused = await audioState(page), pausedOutput = await measureAudio(page, 100);
+    for (const count of ['voiceCount', 'ambienceCount', 'fireCount', 'speechCount', 'oneShotCount']) assert.equal(paused[count], 0, `Pause must release ${count}.`);
+    assert.ok(pausedOutput.peakRms < 0.000001, 'Pause must silence ambience, speech, fire and its warning.');
+    await page.locator('#resume-button').click();
+    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().fireCount > 0);
+    await routed(async () => page.evaluate(() => {
+      const game = globalThis.__browserCheckGame; game.current.speed = game.current.vx = game.current.vy = 0;
+      if (!game.usePocket('repairTape')) throw new Error('The stopped burning car must accept repair tape.');
+    }), 'tape', 'tape');
+    await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().fireCount === 0 &&
+      globalThis.__browserCheckAudioDirector._warningId === null, null, { timeout: 3000 });
+    const repaired = await audioState(page);
+    assert.equal(await page.evaluate(() => globalThis.__browserCheckGame.current.burning), false, 'Repair tape must extinguish the actual fire.');
+    assert.ok(repaired.voiceCount <= 80 && repaired.ambienceCount <= 1 && repaired.speechCount <= 1, 'Ambience and speech must respect the total voice budget.');
+    diagnostics.themedAudio = { routes, burst, inventory, inventorySettled, spatial, light, far, speech, speechOutput, chatter, fire, fireOutput, paused, pausedOutput, repaired };
   } finally { await closeTestContext(context); }
 }
 
@@ -834,6 +1027,7 @@ async function checkSampleFallback(browser, externalRequests) {
         Object.defineProperty(globalThis, 'MayhemAudioSamples', { configurable: true,
           get() { return samples; },
           set(value) {
+            globalThis.__browserCheckEmbeddedSampleCount = Object.keys(value).length;
             samples = mode === 'missing' ? undefined : Object.fromEntries(Object.entries(value).map(([id, entry]) =>
               [id, { ...entry, data: 'AAAA' }]));
           },
@@ -854,10 +1048,11 @@ async function checkSampleFallback(browser, externalRequests) {
       });
       await page.locator('#play-button').click();
       await waitForScene(page, 'foot');
+      const expectedFailures = scenario === 'corrupt' ? await page.evaluate(() => globalThis.__browserCheckEmbeddedSampleCount) : 0;
       await page.waitForFunction(expected => {
         const audio = globalThis.__browserCheckAudioDirector.getStatus();
         return audio.state === 'running' && audio.active && audio.loadingSamples === 0 && audio.failedSamples === expected;
-      }, scenario === 'corrupt' ? 7 : 0, { timeout: 15000 });
+      }, expectedFailures, { timeout: 30000 });
       const foot = await audioState(page), footOutput = await measureAudio(page);
       assert.equal(foot.sampleCount, 0);
       assert.equal(foot.generatedVoiceCount, 0);
@@ -2624,6 +2819,7 @@ async function main() {
     });
 
     await check('audio produces real music, vehicle radios, engines, sirens and effects; mute, pause and saved levels work', async () => checkAudio(browser, externalRequests));
+    await check('themed audio routes toys, consumables, destruction, spatial impacts, resident speech and fire through Chrome output', async () => checkThemedAudio(browser, externalRequests));
     await check('audio falls back to local synthesis when embedded generated samples are missing or corrupt', async () => checkSampleFallback(browser, externalRequests));
     await check('unavailable audio leaves Play, vehicle entry and sound settings usable', async () => checkUnavailableAudio(browser, externalRequests));
     await check('no external network requests', async () => assert.deepEqual(externalRequests, []));
