@@ -547,7 +547,8 @@
 
     _syncEnvironment(frame) {
       const descriptions = frame.fires.map(fire => ({ id: 'fire-' + fire.id, key: 'fire', environment: 'fire', level: 0.052 * fire.attenuation, pan: fire.pan }));
-      if (frame.ambience) descriptions.push({ id: 'ambience', key: 'ambience-' + frame.ambience, environment: 'ambience', level: frame.mode === 'vehicle' ? 0.035 : 0.065, pan: 0 });
+      // Keep district background ambience at 20% of its original level.
+      if (frame.ambience) descriptions.push({ id: 'ambience', key: 'ambience-' + frame.ambience, environment: 'ambience', level: frame.mode === 'vehicle' ? 0.007 : 0.013, pan: 0 });
       const wanted = new Set(descriptions.map(item => item.id));
       for (const [id, record] of this._environment) if (!wanted.has(id)) { this._stop(record); this._environment.delete(id); }
       for (const item of descriptions) {
