@@ -78,7 +78,7 @@
       const rev = clamp((ratio * 4 - gear) * 0.6 + throttle * 0.3 + (controlled && input.boost ? 0.16 : 0), 0, 1.2);
       const damage = 1 - clamp(finite(car.engineHealth, 100) / 100, 0, 1);
       return { id: String(car.id), kind, controlled, speed, throttle, gear, damage, frequency: type.idle + type.range * rev,
-        cutoff: type.cutoff + 1500 * rev, gain: (controlled ? 0.115 : 0.06 * location.attenuation) * (0.65 + throttle * 0.35),
+        cutoff: type.cutoff + 1500 * rev, gain: (controlled ? 0.115 : 0.012 * location.attenuation) * (0.65 + throttle * 0.35),
         pan: controlled ? 0 : location.pan, distance: controlled ? 0 : location.distance };
     };
     const nearby = cars.filter(car => hasEngine(car) && car.id !== vehicle?.id && car.traffic)
