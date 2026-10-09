@@ -8,7 +8,7 @@
     Object.freeze({ id: 'neon', name: 'Neon Drive', genre: 'Synthwave arcade' }),
     Object.freeze({ id: 'meadow', name: 'Meadow Waves', genre: 'Mellow dub' })
   ]);
-  const DEFAULT_SETTINGS = Object.freeze({ masterVolume: 0.65, musicVolume: 0.45, effectsVolume: 0.8, radioStation: 'biscuit', muted: false });
+  const DEFAULT_SETTINGS = Object.freeze({ outputVolume: 0.05, masterVolume: 0.65, musicVolume: 0.45, effectsVolume: 0.8, radioStation: 'biscuit', muted: false });
   const finite = (value, fallback = 0) => typeof value === 'number' && Number.isFinite(value) ? value : fallback;
   const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
   const midi = note => 440 * 2 ** ((note - 69) / 12);
@@ -32,6 +32,7 @@
   function normalizeSettings(value) {
     const saved = value && typeof value === 'object' ? value : {};
     const result = { ...DEFAULT_SETTINGS };
+    result.outputVolume = clamp(finite(saved.outputVolume, result.outputVolume), 0.01, 0.1);
     for (const key of ['masterVolume', 'musicVolume', 'effectsVolume']) result[key] = clamp(finite(saved[key], result[key]), 0, 1);
     if (STATIONS.some(station => station.id === saved.radioStation) || saved.radioStation === 'off') result.radioStation = saved.radioStation;
     result.muted = typeof saved.muted === 'boolean' ? saved.muted : DEFAULT_SETTINGS.muted;
@@ -147,8 +148,8 @@
           this._limiter.threshold.value = -14; this._limiter.knee.value = 10;
           this._limiter.ratio.value = 8; this._limiter.attack.value = 0.003; this._limiter.release.value = 0.2;
           this._music.connect(this._master); this._effects.connect(this._master);
-          // Lower the entire mix by 80% after limiting, including saved mixes.
-          this._outputGain = this._node('createGain'); this._outputGain.gain.value = 0.2;
+          // Apply the overall volume after limiting so every sound scales evenly.
+          this._outputGain = this._node('createGain'); this._outputGain.gain.value = this.settings.outputVolume;
           this._master.connect(this._limiter); this._limiter.connect(this._outputGain); this._outputGain.connect(context.destination);
           this._noise = context.createBuffer(1, context.sampleRate * 2, context.sampleRate);
           const data = this._noise.getChannelData(0);
@@ -350,6 +351,7 @@
       this._ramp(this._master.gain, audible && !this.settings.muted ? this.settings.masterVolume : 0);
       this._ramp(this._music.gain, this.settings.musicVolume * (this._context.currentTime < this._duckUntil ? 0.36 : 1), 0.12);
       this._ramp(this._effects.gain, this.settings.effectsVolume);
+      this._ramp(this._outputGain?.gain, this.settings.outputVolume);
     }
     _record(sources, nodes, gain, bus, end = Infinity) {
       const record = { sources, nodes, gain, bus, end, stopped: false, ui: this._uiPlaying && bus === 'effects' };

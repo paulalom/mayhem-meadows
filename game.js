@@ -97,6 +97,10 @@
   function settingsUI() {
     $('sound-toggle').textContent = audio.getStatus().state === 'unavailable' ? 'Sound: unavailable' : muted ? 'Sound: off' : 'Sound: on';
     $('sound-toggle').setAttribute('aria-pressed', String(!muted));
+    const outputPercent = Math.round(audioSettings.outputVolume * 100);
+    $('audio-output').value = outputPercent;
+    $('audio-output').setAttribute('aria-valuetext', outputPercent + '%');
+    $('audio-output-value').textContent = outputPercent + '%';
     $('motion-toggle').textContent = reducedMotion ? 'Motion: calm' : 'Motion: full';
     $('motion-toggle').setAttribute('aria-pressed', String(reducedMotion));
     document.body.classList.toggle('reduced-motion', reducedMotion);
@@ -146,6 +150,10 @@
     settingsUI(); save();
   });
   $('camera-invert-y').addEventListener('change', event => { cameraInvertY = event.target.checked; settingsUI(); save(); });
+  $('audio-output').addEventListener('input', event => {
+    audioSettings = normalizeSettings({ ...audioSettings, outputVolume: Number(event.target.value) / 100 });
+    applyAudioSettings();
+  });
   for (const category of ['master', 'music', 'effects']) {
     $('audio-' + category).addEventListener('input', event => {
       audioSettings = normalizeSettings({ ...audioSettings, [category + 'Volume']: Number(event.target.value) });

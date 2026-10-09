@@ -427,6 +427,19 @@ async function checkAudio(browser, externalRequests) {
     await page.goto(url);
     assert.equal((await audioState(page)).state, 'locked', 'Music must wait for the Play gesture.');
     assert.equal((await measureAudio(page, 80)).contexts, 0, 'The welcome screen must not create an audio context.');
+    const outputSlider = page.locator('#audio-output');
+    assert.equal(await outputSlider.isVisible(), true, 'Overall volume must be available directly in the header.');
+    for (const [attribute, value] of [['min', '1'], ['max', '10'], ['step', '1']])
+      assert.equal(await outputSlider.getAttribute(attribute), value);
+    assert.equal(await outputSlider.inputValue(), '5'); assert.equal(await page.locator('#audio-output-value').textContent(), '5%');
+    for (const [key, value] of [['Home', '1'], ['End', '10'], ['ArrowRight', '10'], ['ArrowLeft', '9']]) {
+      await outputSlider.press(key);
+      assert.equal(await outputSlider.inputValue(), value); assert.equal(await page.locator('#audio-output-value').textContent(), value + '%');
+      assert.equal(await page.evaluate(() => globalThis.__browserCheckAudioDirector.settings.outputVolume), Number(value) / 100);
+    }
+    await setAudioRange(page, 'audio-output', 5);
+    assert.equal((await audioState(page)).state, 'locked', 'Welcome volume changes must preserve the Play gesture gate.');
+    assert.equal((await measureAudio(page, 80)).contexts, 0, 'Adjusting welcome volume must not create an audio context.');
     // Remove nearby ambient engines and residents from this isolated listening
     // scenario; the real simulation, input and WebAudio synthesis stay active.
     await page.evaluate(() => {
@@ -437,6 +450,7 @@ async function checkAudio(browser, externalRequests) {
     await page.locator('#play-button').click();
     await waitForScene(page, 'foot');
     await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().state === 'running' && globalThis.__browserCheckAudioDirector.getStatus().active);
+    await page.waitForFunction(() => Math.abs(globalThis.__browserCheckAudioDirector._outputGain.gain.value - 0.05) < 0.000001);
     const expectedSamples = await page.evaluate(() => Object.keys(globalThis.MayhemAudioSamples || {}).length);
     assert.ok(expectedSamples > 7, 'The themed sound library must include more than the original shared effects.');
     await page.waitForFunction(expected => {
@@ -472,6 +486,8 @@ async function checkAudio(browser, externalRequests) {
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
     for (const id of ['radio-panel', 'radio-previous', 'radio-next']) assert.equal(await page.locator(`#${id}`).isVisible(), true);
+    assert.equal(await outputSlider.isVisible(), true, 'The volume slider must remain available on narrow screens.');
+    assert.equal(await outputSlider.evaluate(input => { const rect = input.getBoundingClientRect(); return rect.left >= 0 && rect.right <= innerWidth; }), true);
     await page.screenshot({ path: path.join(evidence, 'audio-radio-mobile.png'), fullPage: true });
     await page.setViewportSize({ width: 1365, height: 900 });
     await page.locator('#game-canvas').focus();
@@ -579,10 +595,23 @@ async function checkAudio(browser, externalRequests) {
     await page.locator('#radio-station').selectOption('meadow');
     for (const [id, level] of [['audio-master-value', 75], ['audio-music-value', 45], ['audio-effects-value', 65]])
       assert.match(await page.locator(`#${id}`).textContent(), new RegExp(String(level)));
+    await page.locator('#close-help').click();
+    await outputSlider.press('ArrowRight'); await outputSlider.press('ArrowRight');
+    assert.equal(await outputSlider.inputValue(), '7'); assert.equal(await page.locator('#audio-output-value').textContent(), '7%');
+    await page.waitForFunction(() => Math.abs(globalThis.__browserCheckAudioDirector._outputGain.gain.value - 0.07) < 0.000001);
     const saved = await page.evaluate(key => JSON.parse(localStorage.getItem(key)).settings, saveKey);
     assert.equal(saved.muted, false);
-    for (const [key, value] of Object.entries({ masterVolume: 0.75, musicVolume: 0.45, effectsVolume: 0.65, radioStation: 'meadow' }))
+    for (const [key, value] of Object.entries({ outputVolume: 0.07, masterVolume: 0.75, musicVolume: 0.45, effectsVolume: 0.65, radioStation: 'meadow' }))
       assert.equal(saved.audio[key], value);
+    await page.screenshot({ path: path.join(evidence, 'audio-volume-desktop.png'), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+    assert.equal(await outputSlider.isVisible(), true);
+    assert.equal(await outputSlider.evaluate(input => { const rect = input.getBoundingClientRect(); return rect.left >= 0 && rect.right <= innerWidth; }), true);
+    await page.screenshot({ path: path.join(evidence, 'audio-volume-mobile.png'), fullPage: true });
+    await page.setViewportSize({ width: 1365, height: 900 });
+    await page.locator('#help-toggle').click();
+    await page.locator('#help-screen').waitFor({ state: 'visible' });
     await page.locator('.audio-settings').scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(evidence, 'audio-settings.png'), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
@@ -593,6 +622,8 @@ async function checkAudio(browser, externalRequests) {
     await page.setViewportSize({ width: 1365, height: 900 });
     await page.reload();
     assert.equal((await audioState(page)).state, 'locked', 'Reload must preserve the user-gesture playback gate.');
+    assert.equal(await outputSlider.inputValue(), '7'); assert.equal(await page.locator('#audio-output-value').textContent(), '7%');
+    assert.equal(await page.evaluate(() => globalThis.__browserCheckAudioDirector.settings.outputVolume), 0.07);
     for (const [id, level] of [['audio-master', '0.75'], ['audio-music', '0.45'], ['audio-effects', '0.65']])
       assert.equal(await page.locator(`#${id}`).inputValue(), level);
     assert.equal(await page.locator('#radio-station').inputValue(), 'meadow');

@@ -17,8 +17,8 @@ class Param {
   cancelAndHoldAtTime(time) { this.cancelScheduledValues(time); }
 }
 class Node {
-  constructor(context) { this.context = context; this.connected = false; this.disconnected = false; context.nodes.push(this); }
-  connect() { this.connected = true; }
+  constructor(context) { this.context = context; this.connected = false; this.disconnected = false; this.connections = []; context.nodes.push(this); }
+  connect(destination) { this.connected = true; this.connections.push(destination); }
   disconnect() { this.disconnected = true; }
 }
 class Source extends Node {
@@ -65,6 +65,38 @@ test('saved audio settings validate volumes, station and mute without mutating d
     { ...DEFAULT_SETTINGS, musicVolume: 0, effectsVolume: 1 });
   assert.equal(normalizeSettings({ radioStation: 'off', muted: true }).radioStation, 'off');
   assert.deepEqual(STATIONS.map(station => station.id), ['biscuit', 'neon', 'meadow']);
+});
+
+test('overall volume defaults legacy saves to 5 percent and clamps saved levels to 1–10 percent', () => {
+  assert.equal(DEFAULT_SETTINGS.outputVolume, 0.05);
+  assert.equal(normalizeSettings({ masterVolume: 0.75 }).outputVolume, 0.05, 'older saves receive the quieter default');
+  for (const invalid of [NaN, Infinity, -Infinity, '0.07', null])
+    assert.equal(normalizeSettings({ outputVolume: invalid }).outputVolume, 0.05);
+  for (const [saved, expected] of [[-1, 0.01], [0, 0.01], [0.01, 0.01], [0.07, 0.07], [0.1, 0.1], [1, 0.1]])
+    assert.equal(normalizeSettings({ outputVolume: saved }).outputVolume, expected);
+  const saved = { outputVolume: 0.07, masterVolume: 0.75, musicVolume: 0.45, effectsVolume: 0.65 };
+  assert.deepEqual(normalizeSettings(saved), { ...DEFAULT_SETTINGS, ...saved });
+  assert.equal(saved.outputVolume, 0.07); assert.equal(DEFAULT_SETTINGS.outputVolume, 0.05);
+});
+
+test('overall volume changes the final output live without replacing sources or the saved mix', async () => {
+  const { audio, context } = await director({ masterVolume: 0.75, musicVolume: 0.45, effectsVolume: 0.65 });
+  const world = game(); world.cars = [car('ride')]; world.player.vehicleId = 'ride'; tick(audio, context, world);
+  const output = audio._outputGain, engine = audio._engines.get('ride'), voices = audio.getStatus().voiceCount;
+  assert.equal(output.gain.value, 0.05);
+  assert.deepEqual(audio._limiter.connections, [output], 'all mixed audio passes through the final gain after compression');
+  assert.deepEqual(output.connections, [context.destination]);
+  for (const level of [0.01, 0.1, 0.07]) {
+    const settings = audio.setSettings({ outputVolume: level });
+    assert.equal(settings.outputVolume, level); assert.equal(output.gain.value, level);
+    assert.equal(output.gain.events.at(-1).type, 'linear', 'live volume changes ramp without an abrupt click');
+    assert.equal(audio._engines.get('ride'), engine); assert.equal(audio.getStatus().voiceCount, voices);
+    assert.equal(audio._master.gain.value, 0.75); assert.equal(audio._music.gain.value, 0.45); assert.equal(audio._effects.gain.value, 0.65);
+  }
+  assert.equal(await audio.unlock(), true); assert.equal(audio._outputGain, output); assert.equal(output.gain.value, 0.07);
+  audio.setSettings({ muted: true }); assert.equal(audio._master.gain.value, 0); assert.equal(output.gain.value, 0.07);
+  audio.setSettings({ muted: false }); tick(audio, context, world); assert.equal(output.gain.value, 0.07);
+  audio.dispose(); assert.equal(output.disconnected, true);
 });
 
 test('audio model bounds nearby engines and sirens and projects pan against camera yaw', () => {
