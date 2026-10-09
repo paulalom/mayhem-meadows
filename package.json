@@ -5,6 +5,7 @@
   "description": "A confetti-powered, client-only third-person 3D arcade sandbox.",
   "scripts": {
     "start": "node tools/serve.cjs",
+    "build": "node tools/build-site.cjs",
     "vendor": "node tools/vendor.cjs",
     "audio-assets": "node tools/build-audio-assets.cjs",
     "test": "node --test tests/*.test.cjs",

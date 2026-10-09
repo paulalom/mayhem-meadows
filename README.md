@@ -6,6 +6,8 @@ A for-fun, original, GTA-inspired third-person 3D driving sandbox. Borrow a car,
 
 ## Play
 
+Play online in Chrome: **[Mayhem Meadows](https://paulalom.github.io/mayhem-meadows/)**.
+
 Open **index.html** in a desktop browser with WebGL 2 support. The game uses local HTML, CSS, JavaScript, procedurally modeled art, generated sound effects, and synthesized music. Its Three.js renderer and Cannon physics engine are bundled locally under **vendor/**. No installation, backend, account, or network connection is required to play.
 
 Use a desktop keyboard and mouse with a WebGL 2 capable browser. If the game cannot create its 3D view, it shows a reload prompt; check that browser hardware acceleration is enabled.
@@ -19,6 +21,20 @@ npm start
 Then open **http://127.0.0.1:4173** in Chrome. This optional server only serves static files on your computer. All game logic runs in the browser.
 
 The layout adapts to small screens, but touch controls and gamepads are not implemented.
+
+## Hosting
+
+GitHub Pages publishes the game at **https://paulalom.github.io/mayhem-meadows/**. Each push to **main** runs the game checks, packages the static files, and deploys them through **.github/workflows/pages.yml**. Failed checks prevent deployment. You can also publish from the repository's **Actions** tab with **Publish game to GitHub Pages → Run workflow**. In **Settings → Pages**, the publishing source must be **GitHub Actions**.
+
+To prepare the same bundle for any static web host:
+
+```sh
+npm run build
+```
+
+Upload the contents of **dist/**, keeping its folder structure. This command only copies the ready-to-play browser files and their licenses; no dependency installation or engine rebuild is needed. Relative asset paths support both a domain root and a project path such as **/mayhem-meadows/**. Add new runtime assets to **tools/build-site.cjs** when extending the game.
+
+Hosting serves each player their own game; it does not add multiplayer. Saves stay in each browser and are separate from file-open or localhost saves. Your desktop does not need to stay on for GitHub Pages players.
 
 ## Controls
 
