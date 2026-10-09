@@ -78,7 +78,7 @@
       const rev = clamp((ratio * 4 - gear) * 0.6 + throttle * 0.3 + (controlled && input.boost ? 0.16 : 0), 0, 1.2);
       const damage = 1 - clamp(finite(car.engineHealth, 100) / 100, 0, 1);
       return { id: String(car.id), kind, controlled, speed, throttle, gear, damage, frequency: type.idle + type.range * rev,
-        cutoff: type.cutoff + 1500 * rev, gain: (controlled ? 0.115 : 0.012 * location.attenuation) * (0.65 + throttle * 0.35),
+        cutoff: type.cutoff + 1500 * rev, gain: (controlled ? 0.115 : 0.06 * location.attenuation) * (0.65 + throttle * 0.35),
         pan: controlled ? 0 : location.pan, distance: controlled ? 0 : location.distance };
     };
     const nearby = cars.filter(car => hasEngine(car) && car.id !== vehicle?.id && car.traffic)
@@ -147,7 +147,9 @@
           this._limiter.threshold.value = -14; this._limiter.knee.value = 10;
           this._limiter.ratio.value = 8; this._limiter.attack.value = 0.003; this._limiter.release.value = 0.2;
           this._music.connect(this._master); this._effects.connect(this._master);
-          this._master.connect(this._limiter); this._limiter.connect(context.destination);
+          // Lower the entire mix by 80% after limiting, including saved mixes.
+          this._outputGain = this._node('createGain'); this._outputGain.gain.value = 0.2;
+          this._master.connect(this._limiter); this._limiter.connect(this._outputGain); this._outputGain.connect(context.destination);
           this._noise = context.createBuffer(1, context.sampleRate * 2, context.sampleRate);
           const data = this._noise.getChannelData(0);
           // Repeatable white noise; loop ends are crossfaded to avoid a seam.
@@ -547,8 +549,7 @@
 
     _syncEnvironment(frame) {
       const descriptions = frame.fires.map(fire => ({ id: 'fire-' + fire.id, key: 'fire', environment: 'fire', level: 0.052 * fire.attenuation, pan: fire.pan }));
-      // Keep district background ambience at 20% of its original level.
-      if (frame.ambience) descriptions.push({ id: 'ambience', key: 'ambience-' + frame.ambience, environment: 'ambience', level: frame.mode === 'vehicle' ? 0.007 : 0.013, pan: 0 });
+      if (frame.ambience) descriptions.push({ id: 'ambience', key: 'ambience-' + frame.ambience, environment: 'ambience', level: frame.mode === 'vehicle' ? 0.035 : 0.065, pan: 0 });
       const wanted = new Set(descriptions.map(item => item.id));
       for (const [id, record] of this._environment) if (!wanted.has(id)) { this._stop(record); this._environment.delete(id); }
       for (const item of descriptions) {
@@ -832,7 +833,7 @@
       this._silence(); this._disposed = true; this._state = 'disposed';
       this._samples.clear(); this._loadingSamples.clear();
       if (this._context) {
-        for (const node of [this._master, this._music, this._effects, this._limiter]) { try { node?.disconnect(); } catch (_) {} }
+        for (const node of [this._master, this._music, this._effects, this._limiter, this._outputGain]) { try { node?.disconnect(); } catch (_) {} }
         try { const close = this._context.close(); if (close?.catch) close.catch(() => {}); } catch (_) {}
       }
     }
