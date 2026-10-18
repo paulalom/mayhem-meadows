@@ -214,10 +214,10 @@ test('expanded physics bounds allow suburban driving and bounce at the new perim
   const game = empty();
   assert.equal(Game.SIZE, 12000);
   assert.equal(game.vehiclePhysics.size, Game.SIZE);
-  const suburban = car(game, 9000, 9500); suburban.speed = suburban.vx = 180;
+  const suburban = car(game, 9000, 7500); suburban.speed = suburban.vx = 180;
   stepBodies(game, 0.5);
   assert.ok(suburban.x > 9070, 'previous map boundaries no longer trap cars on the larger terrain');
-  const edge = car(game, Game.SIZE - 80, 9500); edge.speed = edge.vx = 280;
+  const edge = car(game, Game.SIZE - 80, 7500); edge.speed = edge.vx = 280;
   let bounce = false; stepBodies(game, 0.6, () => { bounce ||= edge.vx < -20; });
   assert.ok(bounce, 'the new outer boundary reverses chassis velocity');
   assert.ok(edge.x < Game.SIZE - 20, 'the vehicle remains inside the expanded town');
@@ -225,7 +225,7 @@ test('expanded physics bounds allow suburban driving and bounce at the new perim
 });
 
 test('world-size resynchronization preserves live cars while replacing all four perimeter walls', () => {
-  const game = empty(), ride = car(game, 3000, 3500); game.vehiclePhysics.sync();
+  const game = empty(), ride = car(game, 3000, 3500); delete game.world.bounds; game.vehiclePhysics.sync();
   const body = game.vehiclePhysics.get(ride.id), oldWalls = game.vehiclePhysics.world.bodies.filter(candidate => candidate.kind === 'boundary');
   const enlarged = Game.SIZE + 600;
   game.world = { ...game.world, size: enlarged }; game.vehiclePhysics.sync();

@@ -3,8 +3,9 @@ const test=require('node:test');
 const assert=require('node:assert/strict');
 const World=require('../world.js');
 const HeightData=require('../height-data.js');
+const NorthHeightData=require('../north-height-data.js');
 const world=World.createWorld();
-const wet=(x,y)=>HeightData.isWaterRaw(x,y,world.mapWidth,world.mapHeight);
+const wet=(x,y)=>y<0?NorthHeightData.isWaterRaw(x,y):HeightData.isWaterRaw(x,y,world.referenceMapWidth,world.referenceMapHeight);
 
 function sampleBox(box,visit,spacing=12) {
   const cx=box.x+box.w/2,cy=box.y+box.h/2,c=Math.cos(box.angle||0),s=Math.sin(box.angle||0);
@@ -39,7 +40,7 @@ test('oriented buildings, lots, shared solids and parking approaches never span 
     objects.push({id:object.id,x:x-part.half[0]*20,y:y-part.half[2]*20,w:part.half[0]*40,h:part.half[2]*40,angle});
   }
   for(const object of objects) sampleBox(object,(x,y)=>{
-    assert.ok(x>0&&x<world.mapWidth&&y>0&&y<world.mapHeight,'all structures stay inside the reference land region');
+    assert.ok(x>world.bounds.minX&&x<world.bounds.maxX&&y>world.bounds.minY&&y<world.bounds.maxY,'all structures stay inside the expanded playable land region');
     assert.equal(wet(x,y),false,(object.id||'parking access')+' spans a source-water cell');
   });
   for(const path of world.pedPaths) for(let i=1;i<path.points.length;i++) {
@@ -68,13 +69,13 @@ test('both river crossings have playable decks and retain the river bed undernea
   }
   for(const point of [{x:2000,y:5500},{x:3800,y:5500},{x:6000,y:10000}]) {
     assert.equal(wet(point.x,point.y),true);
-    assert.ok(world.terrain.heightAt(point.x,point.y)<-1,'west coast, marina bay and extra southern extent remain ocean');
+    assert.ok(world.terrain.heightAt(point.x,point.y)<-1,'west coast, marina bay and source padding remain ocean');
   }
 });
 
 test('terrain is populated before world consumers and roads expose metre elevations',()=>{
   const t=world.terrain;
-  assert.equal(t.count,257);assert.equal(t.heights.length,257*257);assert.equal(t.step,world.size/256);
+  assert.equal(t.count,257);assert.equal(t.rows,258);assert.equal(t.heights.length,t.count*t.rows);assert.equal(t.step,world.size/256);
   assert.ok(Math.max(...t.heights)>30,'the source mountain remains visible above the graded roads');
   for(const road of world.roads) {
     for(let i=0;i<road.points.length;i++) {

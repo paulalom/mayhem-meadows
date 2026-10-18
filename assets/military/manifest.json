@@ -1,0 +1,65 @@
+{
+  "author": "Mayhem Meadows",
+  "license": "MIT",
+  "source": "military-workshop.blend",
+  "generator": "../../tools/export-military.py",
+  "units": "metres",
+  "models": {
+    "hangar": {
+      "bounds": {
+        "length": 28,
+        "width": 20,
+        "height": 8
+      },
+      "triangles": 324
+    },
+    "tower": {
+      "bounds": {
+        "length": 8,
+        "width": 8,
+        "height": 14
+      },
+      "triangles": 228
+    },
+    "barracks": {
+      "bounds": {
+        "length": 26,
+        "width": 10,
+        "height": 4
+      },
+      "triangles": 332
+    },
+    "hq": {
+      "bounds": {
+        "length": 24,
+        "width": 12,
+        "height": 5
+      },
+      "triangles": 248
+    },
+    "workshop": {
+      "bounds": {
+        "length": 18,
+        "width": 8,
+        "height": 5
+      },
+      "triangles": 332
+    },
+    "gatehouse": {
+      "bounds": {
+        "length": 7,
+        "width": 6,
+        "height": 3.2
+      },
+      "triangles": 140
+    },
+    "utility-truck": {
+      "bounds": {
+        "length": 2.75,
+        "width": 1.6,
+        "height": 1.7
+      },
+      "triangles": 252
+    }
+  }
+}

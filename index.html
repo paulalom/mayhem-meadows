@@ -10,6 +10,8 @@
     <script src="vendor/three.min.js" defer></script>
     <script src="vendor/cannon.min.js" defer></script>
     <script src="height-data.js" defer></script>
+    <script src="north-height-data.js" defer></script>
+    <script src="military.js" defer></script>
     <script src="railway.js" defer></script>
     <script src="terrain.js" defer></script>
     <script src="world.js" defer></script>
@@ -26,6 +28,8 @@
     <script src="railway-render.js" defer></script>
     <script src="train-models.js" defer></script>
     <script src="trains-render.js" defer></script>
+    <script src="military-models.js" defer></script>
+    <script src="military-render.js" defer></script>
     <script src="assets/audio/samples.js" defer></script>
     <script src="audio.js" defer></script>
     <script src="game.js" defer></script>
@@ -142,11 +146,11 @@
                     <div id="garage-paints" class="garage-paint-note"><span aria-hidden="true">◐</span><p>A fresh lick of nonsense.<small>Choose a paint swatch on a saved ride for $25. Boost and armor upgrades apply to every ride.</small></p></div>
                   </div>
                   <div id="hangar-panel" role="tabpanel" aria-labelledby="hangar-tab" hidden>
-                    <div class="inventory-section-heading"><div><span class="eyebrow">Meadows Airport hangar</span><h3>Keep your head in the clouds.</h3></div><span id="hangar-count" class="garage-count">0 / 3 aircraft</span></div>
-                    <div class="garage-store-bar"><p>Land and stop at the airport apron to save your aircraft. Stored aircraft and repairs stay in this browser.</p><button id="store-aircraft" class="inventory-action use-action" type="button">Save current aircraft</button></div>
-                    <p id="hangar-empty" class="garage-empty"><span aria-hidden="true">✈</span>A little room for your lofty ambitions.<small>Borrow a parked aircraft at the airport, then stop on the apron to save it.</small></p>
+                    <div class="inventory-section-heading"><div><span class="eyebrow">Airfield hangar</span><h3>Keep your head in the clouds.</h3></div><span id="hangar-count" class="garage-count">0 / 3 aircraft</span></div>
+                    <div class="garage-store-bar"><p>Land and stop at either airfield apron to save your aircraft. Stored aircraft and repairs stay in this browser.</p><button id="store-aircraft" class="inventory-action use-action" type="button">Save current aircraft</button></div>
+                    <p id="hangar-empty" class="garage-empty"><span aria-hidden="true">✈</span>A little room for your lofty ambitions.<small>Borrow a parked aircraft at either airfield, then stop on its apron to save it.</small></p>
                     <div id="hangar-aircraft" class="garage-cars" aria-label="Saved aircraft collection"></div>
-                    <p class="hangar-advice">Aircraft servicing costs $75. Retrieve a saved aircraft to a clear airport stand. R recovers your current aircraft to the airfield.</p>
+                    <p class="hangar-advice">Aircraft servicing costs $75. Retrieve a saved aircraft to a clear local stand. R recovers your aircraft to its home airfield.</p>
                   </div>
                 </div>
                 <div class="inventory-footer"><span><kbd>ESC</kbd> back to the town</span><span>The town waits while you browse.</span></div>
@@ -195,6 +199,7 @@
             <div class="panel-heading"><div><span class="eyebrow">Meadows Airport · northeast</span><h2>Take the high road.</h2></div><span class="garage-icon" aria-hidden="true">✈</span></div>
             <p class="panel-intro">Parked planes and helicopters are yours to borrow with E. Follow Terminal Avenue to the airport.</p>
             <button id="airport-route" class="inventory-action" type="button">Mark airport on compass ↗</button>
+            <button id="military-route" class="inventory-action" type="button">Mark Northwatch Airbase ↗</button>
             <dl class="flight-quick-controls"><div><dt>W / S</dt><dd>Throttle / helicopter forward &amp; back</dd></div><div><dt>A / D</dt><dd>Bank / turn</dd></div><div><dt>SPACE / CTRL</dt><dd>Climb / descend</dd></div><div><dt>SHIFT</dt><dd>Plane boost / helicopter hover assist</dd></div><div><dt>F / R</dt><dd>Parachute / airport recovery</dd></div><div><dt>G</dt><dd>Hangar when stopped at the apron</dd></div></dl>
           </section>
 
@@ -205,7 +210,7 @@
       <div id="map-screen" class="screen-overlay map-screen" role="dialog" aria-modal="true" aria-labelledby="map-title" aria-describedby="map-note" hidden>
         <div class="map-card">
           <div class="map-heading"><div><span class="eyebrow">Meadows field guide</span><h2 id="map-title">Your town, unfolded.</h2></div><button id="close-map" class="utility-button" type="button">Close map · M / Esc</button></div>
-          <img id="city-map" class="city-map" src="assets/city-map.png" width="1536" height="1024" alt="Illustrated city map with Ridge Heights, Northside, Old Town, Downtown, West Beach, Marina, Airport, Docklands, Central Station, railway lines, and the depot rooftop helipad.">
+          <img id="city-map" class="city-map" src="assets/city-map.png" width="1254" height="1254" alt="Illustrated city map extended north to Northwatch military base and its separate airstrip, with Ridge Heights, Northside, Old Town, Downtown, West Beach, Marina, Airport, Docklands, Central Station, railway lines, and the depot rooftop helipad.">
           <p id="map-note" class="map-note">The town waits while you find your way. Press M or Escape to return.</p>
         </div>
       </div>

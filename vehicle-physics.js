@@ -138,6 +138,7 @@
         const corners = [[-half.x,-half.z],[half.x,-half.z],[half.x,half.z],[-half.x,half.z]]
           .map(([localX,localZ]) => quaternion.vmult(new C.Vec3(localX,-half.y,localZ)));
         const worldX = x / SCALE, worldZ = z / SCALE;
+        const originX = finite(this._terrain()?.originX) / SCALE, originZ = finite(this._terrain()?.originY, finite(this._terrain()?.minY)) / SCALE;
         const minX = Math.min(...corners.map(p=>p.x)) + worldX, maxX = Math.max(...corners.map(p=>p.x)) + worldX;
         const minZ = Math.min(...corners.map(p=>p.z)) + worldZ, maxZ = Math.max(...corners.map(p=>p.z)) + worldZ;
         const inside = (dx,dz) => corners.every((a,i) => {
@@ -145,14 +146,14 @@
         });
         // Peaks can lie between wheel samples. Include the terrain vertices
         // and every footprint/grid edge crossing, including cell diagonals.
-        for (let ix=Math.ceil(minX/step);ix<=Math.floor(maxX/step);ix++) for (let iz=Math.ceil(minZ/step);iz<=Math.floor(maxZ/step);iz++) {
-          const dx=ix*step-worldX,dz=iz*step-worldZ; if(inside(dx,dz)) sample(dx,dz);
+        for (let ix=Math.ceil((minX-originX)/step);ix<=Math.floor((maxX-originX)/step);ix++) for (let iz=Math.ceil((minZ-originZ)/step);iz<=Math.floor((maxZ-originZ)/step);iz++) {
+          const dx=originX+ix*step-worldX,dz=originZ+iz*step-worldZ; if(inside(dx,dz)) sample(dx,dz);
         }
         for (let i=0;i<4;i++) {
           const a=corners[i],b=corners[(i+1)%4];
           for (const axis of ['x','z','diagonal']) {
             const av=axis==='diagonal'?a.x+a.z:a[axis], bv=axis==='diagonal'?b.x+b.z:b[axis];
-            const origin=axis==='diagonal'?worldX+worldZ:axis==='x'?worldX:worldZ;
+            const origin=axis==='diagonal'?worldX+worldZ-originX-originZ:axis==='x'?worldX-originX:worldZ-originZ;
             if(Math.abs(bv-av)<1e-9) continue;
             for(let k=Math.ceil((Math.min(av,bv)+origin)/step);k<=Math.floor((Math.max(av,bv)+origin)/step);k++) {
               const t=(k*step-origin-av)/(bv-av); sample(a.x+(b.x-a.x)*t,a.z+(b.z-a.z)*t);
@@ -167,8 +168,9 @@
       if (this.floor) this.world.removeBody(this.floor);
       const terrain = this._terrain();
       this.floor = new C.Body({ mass: 0, material: this.floorMaterial });
-      if (terrain && terrain.count > 1 && terrain.step > 0 && terrain.heights?.length === terrain.count * terrain.count) {
-        const data = Array.from({ length: terrain.count }, (_, row) => Array.from(terrain.heights.subarray
+      const rows = terrain?.rows || terrain?.count;
+      if (terrain && terrain.count > 1 && rows > 1 && terrain.step > 0 && terrain.heights?.length === terrain.count * rows) {
+        const data = Array.from({ length: rows }, (_, row) => Array.from(terrain.heights.subarray
           ? terrain.heights.subarray(row * terrain.count, (row + 1) * terrain.count)
           : terrain.heights.slice(row * terrain.count, (row + 1) * terrain.count)));
         this.heightfield = new C.Heightfield(data, { elementSize: terrain.step / SCALE });
@@ -177,6 +179,7 @@
         // cyclic rotation maps row Y to world Z, column X to world X, and
         // height to world up, preserving the shared anti-diagonal triangles.
         this.floor.quaternion.set(-0.5, -0.5, -0.5, 0.5);
+        this.floor.position.set(finite(terrain.originX) / SCALE, 0, finite(terrain.originY, finite(terrain.minY)) / SCALE);
         this.floor.kind = 'terrain';
       } else {
         this.heightfield = null;
@@ -225,15 +228,21 @@
       return clamp(finite(this.game.world?.size, finite(this.game.worldSize, finite(this.game.constructor?.SIZE, 2160))), 80, 20000);
     }
 
+    _worldBounds() {
+      const bounds = this.game.world?.bounds, size = this._worldSize();
+      return { minX: finite(bounds?.minX), minY: finite(bounds?.minY), maxX: finite(bounds?.maxX, size), maxY: finite(bounds?.maxY, size) };
+    }
+
     _boundaries() {
-      const size = this._worldSize(), bottom = Math.min(-8, finite(this.heightfield?.minValue) - 8);
+      const size = this._worldSize(), bounds = this._worldBounds(), width = bounds.maxX - bounds.minX, depth = bounds.maxY - bounds.minY;
+      const x = (bounds.minX + bounds.maxX) / 2, z = (bounds.minY + bounds.maxY) / 2, bottom = Math.min(-8, finite(this.heightfield?.minValue) - 8);
       const top = Math.max(52, finite(this.heightfield?.maxValue) + 12), wallHeight = top - bottom, centre = (top + bottom) / 2;
       for (const body of this.world.bodies.slice()) if (body.kind === 'boundary') this.world.removeBody(body);
-      this._fixed('boundary', -10, size / 2, [{ half: [0.5, wallHeight / 2, size / 40], offset: [0, centre, 0] }]);
-      this._fixed('boundary', size + 10, size / 2, [{ half: [0.5, wallHeight / 2, size / 40], offset: [0, centre, 0] }]);
-      this._fixed('boundary', size / 2, -10, [{ half: [size / 40, wallHeight / 2, 0.5], offset: [0, centre, 0] }]);
-      this._fixed('boundary', size / 2, size + 10, [{ half: [size / 40, wallHeight / 2, 0.5], offset: [0, centre, 0] }]);
-      this.size = size;
+      this._fixed('boundary', bounds.minX - 10, z, [{ half: [0.5, wallHeight / 2, depth / 40], offset: [0, centre, 0] }]);
+      this._fixed('boundary', bounds.maxX + 10, z, [{ half: [0.5, wallHeight / 2, depth / 40], offset: [0, centre, 0] }]);
+      this._fixed('boundary', x, bounds.minY - 10, [{ half: [width / 40, wallHeight / 2, 0.5], offset: [0, centre, 0] }]);
+      this._fixed('boundary', x, bounds.maxY + 10, [{ half: [width / 40, wallHeight / 2, 0.5], offset: [0, centre, 0] }]);
+      this.size = size; this._boundsKey = JSON.stringify(bounds);
     }
 
     _fixed(kind, x, z, parts, source) {
@@ -351,7 +360,7 @@
       const terrainChanged = this._terrainModel !== this._terrain();
       if (terrainChanged) this._makeFloor();
       if (terrainChanged || this._roads !== (this.game.roads || this.game.world?.roads || NO_ROADS)) this._makeBridges();
-      if (terrainChanged || this.size !== this._worldSize()) this._boundaries();
+      if (terrainChanged || this.size !== this._worldSize() || this._boundsKey !== JSON.stringify(this._worldBounds())) this._boundaries();
       if (this._buildings !== this.game.buildings || this._objects !== this.game.staticObjects) {
         for (const body of this.world.bodies.slice()) if (body.type === C.Body.STATIC && body !== this.floor && body.kind !== 'boundary' && body.kind !== 'bridge') this.world.removeBody(body);
         for (const building of this.game.buildings) this._building(building);

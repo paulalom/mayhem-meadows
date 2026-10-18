@@ -72,16 +72,41 @@
       helipad:{id:'depot-helipad',name:'Central Station Depot',buildingId:'rail-depot',x:8090,y:5530,radius:100,rooftop:true},
       access:{x:6530,y:5150,w:90,h:390},forecourt:{x:6570,y:5040,w:550,h:140},
       operation:{doubleEnded:true,turnaround:'reverse',crossoverId:'station-crossover'}};
-    // Index earthwork segments once; the full-resolution export and runtime grid share it.
+    indexEarthworks(railway);
+    return railway;
+  }
+  function indexEarthworks(railway) {
+    // The original city export and the expanded runtime use the same index.
     railway.earthworkCells=new Map();
-    for(const line of tracks)if(line.role!=='crossover')for(let i=1;i<line.points.length;i++) {
+    for(const line of railway.tracks)if(line.role!=='crossover')for(let i=1;i<line.points.length;i++) {
       const a=line.points[i-1],b=line.points[i];
       for(let row=Math.floor((Math.min(a.y,b.y)-SHOULDER)/256);row<=Math.floor((Math.max(a.y,b.y)+SHOULDER)/256);row++)
         for(let col=Math.floor((Math.min(a.x,b.x)-SHOULDER)/256);col<=Math.floor((Math.max(a.x,b.x)+SHOULDER)/256);col++) {
           const key=col+','+row;if(!railway.earthworkCells.has(key))railway.earthworkCells.set(key,[]);railway.earthworkCells.get(key).push({a,b});
         }
     }
-    return railway;
+  }
+  function extendNorth(railway,portalY=-4000) {
+    if(railway.portalY===portalY)return railway;
+    if(railway.portalY!==undefined)throw new Error('The railway already has a northern extension');
+    // Keep every original city point. The dry eastern foothills bypass the
+    // airbase perimeter and its runway; a narrow northern land corridor puts
+    // the off-map portal west of the new river's headwaters.
+    const north=curve([[6750,portalY],[6830,-3500],[6980,-2700],[7000,-1800],[7030,-1100],[7000,-600],[6880,-180]]);
+    for(const [id,amount] of [['main-west',-TRACK_SPACING/2],['main-east',TRACK_SPACING/2]]) {
+      const line=railway.tracks.find(line=>line.id===id);if(!line)continue;
+      const prefix=offset(north,amount),a=prefix.at(-1),previous=prefix.at(-2),target=line.points[0],next=line.points[1];
+      const incoming=Math.atan2(a.y-previous.y,a.x-previous.x),outgoing=Math.atan2(next.y-target.y,next.x-target.x),handle=Math.hypot(target.x-a.x,target.y-a.y)*.4;
+      prefix.push(...bezier(a,{x:a.x+Math.cos(incoming)*handle,y:a.y+Math.sin(incoming)*handle},
+        {x:target.x-Math.cos(outgoing)*handle,y:target.y-Math.sin(outgoing)*handle},target,30).slice(1,-1));
+      // Both portals end on the map edge, including the track's lateral offset.
+      const first=prefix[0],second=prefix[1],t=(portalY-first.y)/(second.y-first.y);
+      first.x+=t*(second.x-first.x);first.y=portalY;
+      line.points=prefix.map(p=>({...p,elevation:elevationAt(p.y)})).concat(line.points);
+      let length=0;for(let i=0;i<line.points.length;i++){if(i)length+=Math.hypot(line.points[i].x-line.points[i-1].x,line.points[i].y-line.points[i-1].y);line.points[i].s=length;}
+      line.length=length;line.cityStartS=line.points[prefix.length].s;
+    }
+    railway.portalY=portalY;railway.northExtension=true;indexEarthworks(railway);return railway;
   }
   function closest(x,y,a,b) {const dx=b.x-a.x,dy=b.y-a.y,l=dx*dx+dy*dy,t=l?clamp(((x-a.x)*dx+(y-a.y)*dy)/l,0,1):0;return {distance:Math.hypot(x-a.x-dx*t,y-a.y-dy*t),t};}
   function earthworks(railway,x,y,original,isWater=false,details=false) {
@@ -160,6 +185,6 @@
   }
   // Carry the complete approach on one continuous deck, including its ramps.
   const isOverpassSegment=(road,i)=>Boolean(i>0&&i<road.points.length&&road.railOverpasses?.length);
-  const api={createRailway,elevationAt,earthworks,intersectsBox,crossings,inCrossing,isOverpassSegment,GAUGE,UNIT,YARD_HEIGHT};root.MayhemRailway=api;
+  const api={createRailway,extendNorth,elevationAt,earthworks,intersectsBox,crossings,inCrossing,isOverpassSegment,GAUGE,UNIT,YARD_HEIGHT};root.MayhemRailway=api;
   if(typeof module!=='undefined'&&module.exports)module.exports=api;
 })(globalThis);

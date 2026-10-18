@@ -7,6 +7,7 @@ const root = path.resolve(__dirname, '..');
 const port = Number(process.env.PORT) || 4173;
 const allowed = new Set(['/index.html', '/styles.css', '/height-data.js', '/terrain.js', '/world.js', '/core.js', '/physics.js', '/vehicle-stats.js', '/vehicle-physics.js', '/audio.js', '/game.js', '/scene3d.js', '/vendor/three.min.js', '/vendor/cannon.min.js']);
 allowed.add('/railway.js');allowed.add('/railway-render.js');
+allowed.add('/north-height-data.js');allowed.add('/military.js');allowed.add('/military-models.js');allowed.add('/military-render.js');
 allowed.add('/trains.js');allowed.add('/train-models.js');allowed.add('/trains-render.js');
 allowed.add('/assets/audio/samples.js');
 allowed.add('/assets/city-map.png');

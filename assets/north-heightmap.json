@@ -1,0 +1,30 @@
+{
+  "source": "assets/concepts/military-base/heightmap-draft.png",
+  "sourceSha256": "b5505e2f9d6a26a436242d3980e1ab6d361b75107f879e9bcfe472d8c8f07e01",
+  "sourceWidth": 1254,
+  "sourceHeight": 1254,
+  "northOnly": false,
+  "numericWidth": 385,
+  "numericHeight": 129,
+  "bounds": {
+    "minX": 0,
+    "minY": -4000,
+    "maxX": 12000,
+    "maxY": 0
+  },
+  "sourceBitDepth": 8,
+  "seamBlendUnits": 600,
+  "baseElevation": 14,
+  "output": "north-heightmap.png",
+  "outputSha256": "1d628b3cfd6d7d052f1f1eb6126545b56db34c377bcb6ba4fdec05990879e79a",
+  "combinedOutput": "north-heightmap-combined.png",
+  "combinedOutputSha256": "a5a13b9624ed7019434ebce3980973ebf1a01c89184f0be323b9f9957850abfd",
+  "citySource": "railway-heightmap.png",
+  "citySourceSha256": "4cd028b6276734da9750949c241cb0f1199af910112e531e4198ce617eebd570",
+  "citySourcePixelRowsPreserved": 1024,
+  "citySourcePixelChanges": 0,
+  "cityWaterMaskChanges": 0,
+  "northernWaterPixels": 48423,
+  "northernRailExtension": true,
+  "runtime": "north-height-data.js imports only negative world Y. terrain.js retains old city samples, blends the northern seam and applies the same military pads and extended railway earthworks."
+}

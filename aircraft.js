@@ -78,7 +78,13 @@
   class AircraftSystem {
     constructor(game, options = {}) {
       this.game = game; this.aircraft = []; this.aircraftProjectiles = [];
-      this.time = 0; this._nextId = 1; this.runwayReservation = null;
+      this.time = 0; this._nextId = 1; this.airports = {};
+      // Keep the original civilian aliases available to the HUD and tools.
+      // A remote airstrip owns its own runway and ground-traffic clearance.
+      Object.defineProperty(this, 'runwayReservation', {
+        get: () => this.airports.civilian?.runwayReservation || null,
+        set: value => { if (this.airports.civilian) this.airports.civilian.runwayReservation = value; }
+      });
       this.policeWarning = 0; this._highHeatTime = 0; this._newsHeatTime = 0;
       this._policeCooldown = 0; this._newsCooldown = 0; this._dispatchLocation = null;
       this._airport = game.world?.landscape?.airport || {};
@@ -95,32 +101,53 @@
     _phase(entity, phase) { entity.phase = entity.flightPhase = phase; entity.phaseTime = 0; }
 
     _configureAirport() {
-      const runway = this._airport.runways?.[0] || { x: 10920, y: 2300, w: 280, h: 2200, angle: 0 };
-      this.runway = runway;
+      const civilian = this._configureField(this._airport, 'civilian');
+      this.airports.civilian = civilian;
+      for (const key of ['runway', 'threshold', 'heading', 'runwayEnd', 'approach', 'stands', 'helipads']) this[key] = civilian[key];
+      const military = this.game.world?.landscape?.militaryBase || this.game.world?.militaryBase;
+      if (military?.runways?.length) this.airports.military = this._configureField(military, 'military');
+      const world = this.game.world || {}, ground = world.groundBounds || world.bounds || {};
+      this.bounds = { minX: finite(ground.minX) - 4200, minY: finite(ground.minY) - 4200, maxX: finite(ground.maxX, finite(world.mapWidth, finite(world.size, 12000))) + 4200, maxY: finite(ground.maxY, finite(world.mapHeight, 8000)) + 4200, ...world.landscape?.airspace };
+    }
+
+    _configureField(airport, id) {
+      const runway = airport.runways?.[0] || { x: 10920, y: 2300, w: 280, h: 2200, angle: 0 };
       const center = { x: runway.x + runway.w / 2, y: runway.y + runway.h / 2 };
       const angle = finite(runway.angle) + (runway.h >= runway.w ? -Math.PI / 2 : 0);
       const length = Math.max(runway.w, runway.h), along = offset => ({ x: center.x + Math.cos(angle) * offset, y: center.y + Math.sin(angle) * offset, angle });
-      const selected = runway.thresholds?.find(point => point.id === this._airport.departureThresholdId) || runway.thresholds?.find(point => Math.abs(wrap(finite(point.angle) - angle)) < .1);
-      this.threshold = selected ? { ...selected } : along(-length / 2 + 140);
-      this.threshold.angle = finite(this.threshold.angle, angle);
-      this.heading = this.threshold.angle;
-      this.runwayEnd = runway.thresholds?.find(point => point !== selected && distance(point, this.threshold) > length * .5) || {
-        x: this.threshold.x + Math.cos(this.heading) * (length - 280), y: this.threshold.y + Math.sin(this.heading) * (length - 280)
+      const selected = runway.thresholds?.find(point => point.id === airport.departureThresholdId) || runway.thresholds?.find(point => Math.abs(wrap(finite(point.angle) - angle)) < .1);
+      const threshold = selected ? { ...selected } : along(-length / 2 + 140);
+      threshold.angle = finite(threshold.angle, angle);
+      const heading = threshold.angle;
+      const runwayEnd = runway.thresholds?.find(point => point !== selected && distance(point, threshold) > length * .5) || {
+        x: threshold.x + Math.cos(heading) * (length - 280), y: threshold.y + Math.sin(heading) * (length - 280)
       };
-      this.approach = { x: this.threshold.x - Math.cos(this.heading) * 4500, y: this.threshold.y - Math.sin(this.heading) * 4500, elevation: this._ground(this.threshold) + 75 };
-      const apron = this._airport.aprons?.[0] || { x: 10370, y: 2850, w: 390, h: 1900 };
-      this.stands = this._airport.stands?.length ? this._airport.stands : [
+      const approach = { x: threshold.x - Math.cos(heading) * 4500, y: threshold.y - Math.sin(heading) * 4500, elevation: this._ground(threshold) + 75 };
+      const apron = airport.aprons?.[0] || { x: 10370, y: 2850, w: 390, h: 1900 };
+      const stands = airport.stands?.length ? airport.stands : id === 'military' ? [] : [
         { id: 'trainer-1', aircraftType: 'trainer', x: apron.x + apron.w / 2, y: apron.y + 180, angle: 0 },
         { id: 'trainer-2', aircraftType: 'trainer', x: apron.x + apron.w / 2, y: apron.y + 490, angle: 0 },
         { id: 'commuter-1', aircraftType: 'commuter', x: apron.x + apron.w / 2, y: apron.y + 820, angle: 0 }
       ];
-      this.helipads = this._airport.helipads?.length ? this._airport.helipads : [
+      const helipads = airport.helipads?.length ? airport.helipads : id === 'military' ? [] : [
         { id: 'heli-civilian', aircraftType: 'helicopter', x: apron.x + apron.w / 2, y: apron.y + 1190, angle: 0, radius: 110 },
         { id: 'heli-news', aircraftType: 'news', x: apron.x + apron.w / 2, y: apron.y + 1510, angle: 0, radius: 110 },
         { id: 'heli-police', aircraftType: 'policeheli', x: apron.x + apron.w / 2, y: apron.y + 1830, angle: 0, radius: 110 }
       ];
-      const world = this.game.world || {};
-      this.bounds = { minX: -4200, minY: -4200, maxX: finite(world.mapWidth, finite(world.size, 12000)) + 4200, maxY: finite(world.mapHeight, 8000) + 4200, ...world.landscape?.airspace };
+      return { id, airport, runway, threshold, heading, runwayEnd, approach, stands, helipads, runwayReservation: null };
+    }
+
+    _field(entity) { return this.airports[typeof entity === 'string' ? entity : entity?.airportId] || this.airports.civilian; }
+
+    airportAt(point) {
+      if (!point) return null;
+      const fields = Object.values(this.airports);
+      const named = fields.find(field => field.stands.concat(field.helipads, field.airport.storageStands || []).some(stand => stand === point || stand.id && stand.id === point.id));
+      return named?.id || fields.find(field => (field.airport.aprons || []).some(apron => inBox(point, apron, 180)) || field.helipads.some(pad => distance(point, pad) < finite(pad.radius, 110) + 100))?.id || null;
+    }
+
+    _releaseRunway(entity) {
+      for (const field of Object.values(this.airports)) if (field.runwayReservation === entity.id) field.runwayReservation = null;
     }
 
     _populate() {
@@ -130,7 +157,12 @@
       }
       const padTypes = ['helicopter', 'news', 'policeheli'];
       this.helipads.forEach((pad, index) => { if (!pad.noSpawn) this.spawn(Object.hasOwn(AIRCRAFT_TYPES, pad.aircraftType) ? pad.aircraftType : padTypes[index % 3], pad, { standId: pad.id }); });
-      for (const stand of this._airport.militaryStands || []) this.spawn(stand.aircraftType || 'transportheli', stand, { standId: stand.id });
+      if (this.airports.military) {
+        const field = this.airports.military;
+        for (const stand of field.stands.concat(field.helipads)) {
+          if (!stand.noSpawn) this.spawn(stand.aircraftType || 'fighter', stand, { standId: stand.id, airportId: field.id, npc: Boolean(stand.npc), departureDelay: finite(stand.departureDelay, 70) });
+        }
+      } else for (const stand of this._airport.militaryStands || []) this.spawn(stand.aircraftType || 'transportheli', stand, { standId: stand.id });
       const taxiPad = this.helipads.find(pad => pad.airTaxi), townPad = this.game.world?.landscape?.helipads?.find(pad => /marina/.test(pad.id || ''));
       if (taxiPad && townPad) this.spawn('helicopter', townPad, { npc: true, npcRole: 'air-taxi', routePads: [{ ...townPad }, { ...taxiPad }], routeIndex: 1, flightPhase: 'boarding', phase: 'boarding', departureDelay: 6 });
     }
@@ -140,6 +172,7 @@
       position ||= this.parkingPosition(type);
       if (!position) return null;
       const model = AIRCRAFT_TYPES[type];
+      const airportId = options.airportId || this.airportAt(position) || 'civilian';
       const entity = {
         id: 'aircraft-' + this._nextId++, kind: 'aircraft', aircraftType: type, modelId: type,
         x: finite(position.x), y: finite(position.y), angle: finite(position.angle),
@@ -148,7 +181,7 @@
         grounded: true, upright: true, health: model.maxHealth, maxHealth: model.maxHealth,
         engineHealth: 100, handlingHealth: 100, burning: false, exploded: false,
         visible: true, npc: Boolean(options.npc), traffic: false, borrowed: false,
-        standId: options.standId || position.id, home: { ...position }, phase: 'parked', flightPhase: 'parked',
+        standId: options.standId || position.id, airportId, home: { ...position }, phase: 'parked', flightPhase: 'parked',
         phaseTime: 0, departureDelay: finite(options.departureDelay, 20), passengers: 0,
         altitudeAGL: 0, agl: 0, stalled: false, stallWarning: false, gunCooldown: 0,
         ...options
@@ -160,8 +193,10 @@
 
     clearPosition(entity, position, ignore = entity) {
       const model = getModel(entity), candidate = { ...position, angle: finite(position.angle), elevation: finite(position.elevation, this._ground(position)) };
-      const world = this.game.world || {}, width = finite(world.mapWidth, finite(world.size, 12000)), height = finite(world.mapHeight, 8000);
-      if (candidate.x < model.length / 2 || candidate.y < model.width / 2 || candidate.x > width - model.length / 2 || candidate.y > height - model.width / 2) return false;
+      const world = this.game.world || {}, bounds = world.groundBounds || world.bounds || {};
+      const minX = finite(bounds.minX), minY = finite(bounds.minY), maxX = finite(bounds.maxX, finite(world.mapWidth, finite(world.size, 12000))), maxY = finite(bounds.maxY, finite(world.mapHeight, 8000));
+      const c = Math.abs(Math.cos(candidate.angle)), s = Math.abs(Math.sin(candidate.angle)), halfX = (model.length * c + model.width * s) / 2, halfY = (model.length * s + model.width * c) / 2;
+      if (candidate.x < minX + halfX || candidate.y < minY + halfY || candidate.x > maxX - halfX || candidate.y > maxY - halfY) return false;
       const terrain = world.terrain;
       if (terrain?.isWater?.(candidate.x, candidate.y) && candidate.elevation < finite(terrain.waterLevel) + .3) return false;
       const bottom = candidate.elevation, top = bottom + model.height;
@@ -194,10 +229,11 @@
       return true;
     }
 
-    parkingPosition(type, ignore) {
-      const model = getModel(type), pads = (this._airport.militaryStands || []).filter(stand => stand.aircraftType === model.id)
-        .concat(this._airport.storageStands || [], model.class === 'helicopter' ? this.helipads.filter(pad => !pad.airTaxi) : this.stands);
-      if (ignore?.home) {
+    parkingPosition(type, ignore, airportId) {
+      const model = getModel(type), field = this._field(airportId || ignore || (['fighter', 'transportheli'].includes(model.id) && this.airports.military ? 'military' : 'civilian'));
+      const airport = field.airport, pads = (airport.militaryStands || []).filter(stand => stand.aircraftType === model.id)
+        .concat(airport.storageStands || [], model.class === 'helicopter' ? field.helipads.filter(pad => !pad.airTaxi) : field.stands);
+      if (ignore?.home && this._field(ignore) === field) {
         const home = { ...ignore.home, elevation: finite(ignore.home.elevation, this._ground(ignore.home)) };
         if (this.clearPosition(model.id, home, ignore)) return home;
       }
@@ -208,7 +244,7 @@
       }
       // Overflow stays on the prepared apron; never put a recovered plane in a
       // live runway or taxiway simply because its original stand is occupied.
-      for (const apron of this._airport.aprons || []) {
+      for (const apron of airport.aprons || []) {
         for (let y = apron.y + model.width / 2 + 20; y <= apron.y + apron.h - model.width / 2 - 20; y += model.width + 35) {
           for (let x = apron.x + model.length / 2 + 20; x <= apron.x + apron.w - model.length / 2 - 20; x += model.length + 35) {
             const candidate = { x, y, angle: 0, elevation: this._ground({ x, y }) };
@@ -218,7 +254,7 @@
       }
       return null;
     }
-    findParking(type, ignore) { return this.parkingPosition(type, ignore); }
+    findParking(type, ignore, airportId) { return this.parkingPosition(type, ignore, airportId); }
 
     enterNearest() {
       if (this.current) return this.interact();
@@ -229,7 +265,7 @@
       if (!nearest) return false;
       player.vehicleId = nearest.id; nearest.npc = false; nearest.borrowed = true; nearest.throttle = 0;
       this._phase(nearest, 'player');
-      if (this.runwayReservation === nearest.id) this.runwayReservation = null;
+      this._releaseRunway(nearest);
       this._syncPlayer(nearest);
       this._toast(getModel(nearest).name + ': Space climbs, Ctrl descends, F opens your parachute.');
       return true;
@@ -276,7 +312,7 @@
         speed: 0, vx: 0, vy: 0, vz: 0, verticalVelocity: 0, pitch: 0, roll: 0, throttle: 0, grounded: true, upright: true, visible: true,
         npc: false, borrowed: true, altitudeAGL: 0, agl: 0 });
       this._phase(entity, this.current === entity ? 'player' : 'parked');
-      if (this.runwayReservation === entity.id) this.runwayReservation = null;
+      this._releaseRunway(entity);
       if (this.current === entity) this._syncPlayer(entity);
       this._toast('Aircraft recovered at a clear airport stand.', 'success'); return true;
     }
@@ -496,13 +532,29 @@
     }
 
     _routeFor(entity) {
-      const configured = this._airport.taxiRoutes;
+      const field = this._field(entity), configured = field.airport.taxiRoutes;
       const route = Array.isArray(configured) ? configured.find(item => item.standId === entity.standId) : configured?.[entity.standId];
       if (route?.points?.length) return route.points.map(point => ({ ...point }));
       if (Array.isArray(route) && route.length) return route.map(point => ({ ...point }));
-      const taxi = this._airport.taxiways?.[0];
-      const taxiX = taxi ? taxi.x + taxi.w / 2 : this.threshold.x - 315;
-      return [{ x: taxiX, y: entity.y }, { x: taxiX, y: this.threshold.y }, { x: this.threshold.x - Math.cos(this.heading + Math.PI / 2) * 180, y: this.threshold.y - Math.sin(this.heading + Math.PI / 2) * 180 }];
+      const taxi = field.airport.taxiways?.[0], side = { x: -Math.sin(field.heading), y: Math.cos(field.heading) };
+      const taxiCenter = taxi ? { x: taxi.x + taxi.w / 2, y: taxi.y + taxi.h / 2 } : { x: field.threshold.x - side.x * 315, y: field.threshold.y - side.y * 315 };
+      const offset = (taxiCenter.x - field.threshold.x) * side.x + (taxiCenter.y - field.threshold.y) * side.y;
+      const across = (entity.x - field.threshold.x) * side.x + (entity.y - field.threshold.y) * side.y;
+      return [{ x: entity.x + side.x * (offset - across), y: entity.y + side.y * (offset - across) }, { x: field.threshold.x + side.x * offset, y: field.threshold.y + side.y * offset }, { ...field.threshold }];
+    }
+
+    _arrivalRouteFor(entity, destination) {
+      const field = this._field(entity), configured = field.airport.arrivalTaxiRoutes;
+      const route = Array.isArray(configured) ? configured.find(item => item.standId === destination.id) : configured?.[destination.id];
+      if (route?.points?.length) return route.points.map(point => ({ ...point })).concat([{ ...destination }]);
+      if (Array.isArray(route) && route.length) return route.map(point => ({ ...point })).concat([{ ...destination }]);
+      const departure = this._routeFor({ ...entity, ...destination, standId: destination.id || entity.standId });
+      // Follow the taxiway parallel to either runway orientation. The old
+      // north/south-only return path would cross a horizontal base runway.
+      const side = { x: -Math.sin(field.heading), y: Math.cos(field.heading) };
+      const exit = { x: field.runwayEnd.x - Math.cos(field.heading) * 75, y: field.runwayEnd.y - Math.sin(field.heading) * 75 };
+      const taxi = departure[Math.max(0, departure.length - 2)], offset = (taxi.x - field.threshold.x) * side.x + (taxi.y - field.threshold.y) * side.y;
+      return [exit, { x: exit.x + side.x * offset, y: exit.y + side.y * offset }, ...departure.slice(0, -2).reverse(), { ...destination }];
     }
 
     _steer(entity, target, throttle, altitude) {
@@ -518,27 +570,29 @@
     }
 
     _groundTrafficClear(entity) {
-      if (this.runwayReservation && this.runwayReservation !== entity.id) {
-        const owner = this.aircraft.find(other => other.id === this.runwayReservation);
+      const field = this._field(entity);
+      if (field.runwayReservation && field.runwayReservation !== entity.id) {
+        const owner = this.aircraft.find(other => other.id === field.runwayReservation);
         if (owner && owner.visible !== false && owner.npc && ['arrival', 'landing'].includes(owner.flightPhase)) return false;
       }
-      return !this.aircraft.some(other => other !== entity && other.visible !== false && other.npc && !other.exploded && ['taxi', 'hold', 'takeoff', 'landing', 'taxi-in', 'hold-parking'].includes(other.flightPhase));
+      return !this.aircraft.some(other => other !== entity && this._field(other) === field && other.visible !== false && other.npc && !other.exploded && ['taxi', 'hold', 'takeoff', 'landing', 'taxi-in', 'hold-parking'].includes(other.flightPhase));
     }
 
     _runwayFree(entity) {
+      const field = this._field(entity);
       if (['arrival', 'landing'].includes(entity.flightPhase) && !this._groundTrafficClear(entity)) return false;
-      if (this.runwayReservation && this.runwayReservation !== entity.id) {
-        const owner = this.aircraft.find(item => item.id === this.runwayReservation);
+      if (field.runwayReservation && field.runwayReservation !== entity.id) {
+        const owner = this.aircraft.find(item => item.id === field.runwayReservation);
         if (owner && owner.visible !== false && !owner.exploded && owner.npc && ['takeoff', 'landing', 'hold', 'arrival'].includes(owner.flightPhase)) return false;
-        this.runwayReservation = null;
+        field.runwayReservation = null;
       }
-      const center = { x: this.runway.x + this.runway.w / 2, y: this.runway.y + this.runway.h / 2 };
+      const center = { x: field.runway.x + field.runway.w / 2, y: field.runway.y + field.runway.h / 2 };
       const runwayHeight = this._ground(center);
-      return !this.aircraft.concat(this.game.cars || [], this.game.police || []).some(other => other !== entity && other.visible !== false && finite(other.elevation) < runwayHeight + 12 && inBox(other, this.runway, isAircraft(other) ? getModel(other).width * .4 : 25));
+      return !this.aircraft.concat(this.game.cars || [], this.game.police || [], this.game.peds || [], this.game.player?.vehicleId ? [] : [this.game.player].filter(Boolean)).some(other => other !== entity && other.visible !== false && finite(other.elevation) < runwayHeight + 12 && inBox(other, field.runway, isAircraft(other) ? getModel(other).width * .4 : 25));
     }
 
     _npc(entity, dt) {
-      const model = getModel(entity), phase = entity.flightPhase;
+      const model = getModel(entity), phase = entity.flightPhase, field = this._field(entity);
       if (['patrol', 'chase', 'search', 'return'].includes(phase)) return this._helicopterDuty(entity, dt);
       if (model.class === 'helicopter') return this._airTaxi(entity, dt);
       if (phase === 'parked') {
@@ -564,52 +618,54 @@
       if (phase === 'hold') {
         entity.speed = approach(entity.speed, 0, 180, dt);
         if (this._runwayFree(entity)) {
-          this.runwayReservation = entity.id; this._phase(entity, 'takeoff'); entity.lineUp = true;
+          field.runwayReservation = entity.id; this._phase(entity, 'takeoff'); entity.lineUp = true;
         }
         return { throttle: 0 };
       }
       if (phase === 'takeoff') {
+        if (entity.grounded && !this._runwayFree(entity)) {
+          this._releaseRunway(entity); this._phase(entity, 'hold'); return { throttle: 0 };
+        }
         if (entity.lineUp) {
-          if (distance(entity, this.threshold) > 25) {
-            entity.angle = Math.atan2(this.threshold.y - entity.y, this.threshold.x - entity.x);
+          if (distance(entity, field.threshold) > 25) {
+            entity.angle = Math.atan2(field.threshold.y - entity.y, field.threshold.x - entity.x);
             return { throttle: .085 };
           }
-          entity.lineUp = false; entity.angle = this.heading;
+          entity.lineUp = false; entity.angle = field.heading;
         }
-        if (entity.elevation > this._ground(this.threshold) + 38) { this.runwayReservation = null; this._phase(entity, 'departure'); }
+        if (entity.elevation > this._ground(field.threshold) + 38) { this._releaseRunway(entity); this._phase(entity, 'departure'); }
         return { throttle: .85, climb: true };
       }
       if (phase === 'departure') {
         if (entity.phaseTime > 15) { entity.visible = false; entity.speed = 0; this._phase(entity, 'turnaround'); return {}; }
-        return this._steer(entity, { x: this.runwayEnd.x + Math.cos(this.heading) * 5000, y: this.runwayEnd.y + Math.sin(this.heading) * 5000 }, .72, this._ground(this.threshold) + 100);
+        return this._steer(entity, { x: field.runwayEnd.x + Math.cos(field.heading) * 5000, y: field.runwayEnd.y + Math.sin(field.heading) * 5000 }, .72, this._ground(field.threshold) + 100);
       }
       if (phase === 'turnaround') {
         if (entity.phaseTime > 20) {
-          Object.assign(entity, this.approach, { angle: this.heading, visible: true, grounded: false, speed: model.stallSpeed * 1.35, vz: 0, health: entity.maxHealth, engineHealth: 100, handlingHealth: 100 });
+          Object.assign(entity, field.approach, { angle: field.heading, visible: true, grounded: false, speed: model.stallSpeed * 1.35, vz: 0, health: entity.maxHealth, engineHealth: 100, handlingHealth: 100 });
           this._phase(entity, 'arrival');
         }
         return {};
       }
       if (phase === 'arrival') {
-        if (!this._runwayFree(entity)) { this._phase(entity, 'go-around'); this.runwayReservation = null; return { throttle: .9, climb: true }; }
-        this.runwayReservation = entity.id;
-        const range = distance(entity, this.threshold), targetAltitude = this._ground(this.threshold) + clamp(range / 60, 0, 75);
+        if (!this._runwayFree(entity)) { this._phase(entity, 'go-around'); this._releaseRunway(entity); return { throttle: .9, climb: true }; }
+        field.runwayReservation = entity.id;
+        const range = distance(entity, field.threshold), targetAltitude = this._ground(field.threshold) + clamp(range / 60, 0, 75);
         if (range < 950) this._phase(entity, 'landing');
-        return this._steer(entity, this.threshold, model.stallSpeed * 1.2 / model.maxSpeed, targetAltitude);
+        return this._steer(entity, field.threshold, model.stallSpeed * 1.2 / model.maxSpeed, targetAltitude);
       }
       if (phase === 'landing') {
-        if (!this._runwayFree(entity)) { this._phase(entity, 'go-around'); this.runwayReservation = null; return { throttle: .9, climb: true }; }
-        const along = (this.threshold.x - entity.x) * Math.cos(this.heading) + (this.threshold.y - entity.y) * Math.sin(this.heading);
-        const targetAltitude = this._ground(this.threshold) + Math.max(0, along / 60);
-        const command = this._steer(entity, this.runwayEnd, entity.grounded ? 0 : model.stallSpeed * 1.12 / model.maxSpeed, targetAltitude);
+        if (!this._runwayFree(entity)) { this._phase(entity, 'go-around'); this._releaseRunway(entity); return { throttle: .9, climb: true }; }
+        const along = (field.threshold.x - entity.x) * Math.cos(field.heading) + (field.threshold.y - entity.y) * Math.sin(field.heading);
+        const targetAltitude = this._ground(field.threshold) + Math.max(0, along / 60);
+        const command = this._steer(entity, field.runwayEnd, entity.grounded ? 0 : model.stallSpeed * 1.12 / model.maxSpeed, targetAltitude);
         if (entity.grounded) {
           entity.speed = approach(entity.speed, 0, 135, dt);
           if (Math.abs(entity.speed) < 25) {
-            this.runwayReservation = null;
+            this._releaseRunway(entity);
             const destination = this.parkingPosition(entity.aircraftType, entity);
             if (destination) {
-              const exit = { x: this.runwayEnd.x - Math.cos(this.heading) * 75, y: this.runwayEnd.y - Math.sin(this.heading) * 75 };
-              entity.taxiRoute = [exit, { x: this.threshold.x - 315, y: exit.y }, { x: this.threshold.x - 315, y: destination.y }, destination];
+              entity.taxiRoute = this._arrivalRouteFor(entity, destination);
               entity.taxiIndex = 0; entity.returningToStand = true; this._phase(entity, 'taxi-in');
             } else this._phase(entity, 'hold-parking');
           }
@@ -637,7 +693,8 @@
     _airTaxi(entity, dt) {
       const model = getModel(entity);
       if (!entity.routePads?.length) {
-        const destination = this.game.world?.landscape?.helipads?.find(pad => distance(pad, entity.home) > 300) || this.helipads.find(pad => distance(pad, entity.home) > 300);
+        const field = this._field(entity), localPads = field.id === 'military' ? field.helipads : (this.game.world?.landscape?.helipads || []).concat(field.helipads);
+        const destination = localPads.find(pad => distance(pad, entity.home) > 300);
         if (!destination) return { throttle: 0 };
         entity.routePads = [{ ...entity.home }, { ...destination }]; entity.routeIndex = 1;
       }

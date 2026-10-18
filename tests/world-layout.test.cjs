@@ -19,9 +19,9 @@ const pathDistance = (point,points) => {
 test('the stable terrain world has connected city, northside, airport and mountain streets with a usable welcome', () => {
   const game=makeGame(),other=new Game({seed:999});
   assert.equal(SIZE,12000); assert.equal(Game.SIZE,SIZE); assert.equal(game.world.size,SIZE);
-  assert.equal(game.world.mapWidth,12000); assert.equal(game.world.mapHeight,8000);
+  assert.equal(game.world.mapWidth,12000); assert.equal(game.world.mapHeight,12000);assert.equal(game.world.referenceMapHeight,8000);
   assert.deepEqual(game.buildings,other.buildings); assert.deepEqual(game.staticObjects,other.staticObjects);
-  assert.equal(Object.keys(DISTRICTS).length,8);
+  assert.equal(Object.keys(DISTRICTS).length,9);
   assert.deepEqual([game.player.x,game.player.y],[5984,3700]);
   assert.deepEqual([game.cars[0].x,game.cars[0].y],[6016,3700]);
   const garage=game.services.find(service=>service.id==='garage');
@@ -47,7 +47,7 @@ test('navigation consumes bounded samples of real curved roads through every con
     for(let i=0;i<route.length;i++) {
       const point=route[i],road=game.network.roadById.get(point.roadId);
       assert.ok(road); assert.ok(point.s>=0 && point.s<=road.length);
-      assert.ok(point.x>=0 && point.y>=0 && point.x<=SIZE && point.y<=SIZE);
+      const bounds=game.world.bounds;assert.ok(point.x>=bounds.minX && point.y>=bounds.minY && point.x<=bounds.maxX && point.y<=bounds.maxY);
       if(i) assert.ok(distance(point,route[i-1])<30,'lane offsets join smoothly at junctions');
       if(i%5===0) assert.ok(game._vehicleFree({...point,kind:'van',elevation:game._ground(point)}),node.id+' route clears the actual fixed geometry');
     }
@@ -67,7 +67,7 @@ test('rotated lots have varied physical footprints, open gardens and distinctly 
   for(const building of game.buildings) {
     const block=game.blocks.find(b=>b.id===building.blockId);
     assert.equal(block.district,building.district); assert.ok(block.density<.8);
-    assert.ok(World.footprintCorners(building).every(p=>p.x>0 && p.y>0 && p.x<SIZE && p.y<SIZE));
+    const bounds=game.world.bounds;assert.ok(World.footprintCorners(building).every(p=>p.x>bounds.minX && p.y>bounds.minY && p.x<bounds.maxX && p.y<bounds.maxY));
     for(const other of game.buildings) if(other!==building) assert.equal(World.boxesOverlap(building,other),false);
   }
   assert.ok(game.buildings.some(b=>b.style==='tower' && b.height>12));
@@ -90,8 +90,8 @@ test('mission gates, suburban destinations and services fit a van at every appro
   for(const car of game._vehicles()) assert.ok(game._vehicleFree(car));
 });
 
-test('forty-eight residents start on safe raised sidewalk paths with busier downtown and quieter outlying districts', () => {
-  const game=makeGame(); assert.equal(game.peds.length,48);
+test('forty-eight city residents and six base personnel start on safe paths', () => {
+  const game=makeGame(); assert.equal(game.peds.filter(ped=>ped.district!=='military').length,48);assert.equal(game.peds.length,54);
   const count=id=>game.peds.filter(ped=>ped.district===id).length;
   assert.ok(count('market')>count('heights')); assert.ok(count('market')>count('works'));
   for(const district of Object.values(DISTRICTS))assert.equal(count(district.id),district.pedCount);

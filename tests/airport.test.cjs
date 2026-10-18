@@ -32,7 +32,7 @@ test('the full runway, taxi loop, apron and pedestrian access share one physical
     assert.ok(Math.abs(world.terrain.heightAt(point.x,point.y)-airport.elevation)<.00001,surface.id+' stays physically level');
     assert.ok(Math.abs(world.terrain.surfaceHeight(point.x,point.y)-airport.elevation)<.00001);
     assert.ok(world.terrain.normalAt(point.x,point.y).y>.99999,'wheels and skids stand on level triangles');
-    assert.equal(HeightData.isWaterRaw(point.x,point.y,world.mapWidth,world.mapHeight),false);
+    assert.equal(HeightData.isWaterRaw(point.x,point.y,world.referenceMapWidth,world.referenceMapHeight),false);
     samples++;
   });
   assert.ok(samples>1500,'the complete surfaces are checked rather than their centres alone');
@@ -138,7 +138,7 @@ test('empty hangar reserves fit every aircraft on connected level land with safe
       sampleBox(footprint,point=>{
         assert.ok(airport.aprons.some(apron=>contains(apron,point,.001)),type+' fits the connected reserve apron');
         assert.ok(Math.abs(world.terrain.heightAt(point.x,point.y)-stand.elevation)<.00001,type+' receives level landing-gear support');
-        assert.equal(HeightData.isWaterRaw(point.x,point.y,world.mapWidth,world.mapHeight),false,'reserve space remains on the source map land');
+        assert.equal(HeightData.isWaterRaw(point.x,point.y,world.referenceMapWidth,world.referenceMapHeight),false,'reserve space remains on the source map land');
       },15);
       for(const road of world.roads)for(let i=1;i<road.points.length;i++)
         assert.ok(World.segmentBoxDistance(road.points[i-1],road.points[i],footprint)>=road.width/2+world.sidewalkWidth+8,type+' stored at '+stand.id+' clears '+road.id);
@@ -159,7 +159,7 @@ test('visiting military aircraft have safe level stands without needing a milita
     sampleBox(footprint,point=>{
       assert.ok(airport.aprons.some(apron=>contains(apron,point,.001)),'the whole aircraft fits its apron');
       assert.ok(Math.abs(world.terrain.heightAt(point.x,point.y)-stand.elevation)<.00001,'heavy landing gear has level support');
-      assert.equal(HeightData.isWaterRaw(point.x,point.y,world.mapWidth,world.mapHeight),false);
+      assert.equal(HeightData.isWaterRaw(point.x,point.y,world.referenceMapWidth,world.referenceMapHeight),false);
     },15);
     for(const road of world.roads)for(let i=1;i<road.points.length;i++)
       assert.ok(World.segmentBoxDistance(road.points[i-1],road.points[i],footprint)>=road.width/2+world.sidewalkWidth+8,'visiting aircraft clear '+road.id);
@@ -175,7 +175,7 @@ test('town helicopter destinations have a level marina pad and a real broad roof
   const rooftop=world.landscape.helipads.find(pad=>pad.rooftop);
   assert.ok(marina&&rooftop);
   sampleBox({x:marina.x-marina.radius,y:marina.y-marina.radius,w:marina.radius*2,h:marina.radius*2},point=>{
-    assert.equal(HeightData.isWaterRaw(point.x,point.y,world.mapWidth,world.mapHeight),false,'the marina pad is on solid land');
+    assert.equal(HeightData.isWaterRaw(point.x,point.y,world.referenceMapWidth,world.referenceMapHeight),false,'the marina pad is on solid land');
     assert.ok(Math.abs(world.terrain.heightAt(point.x,point.y)-marina.elevation)<.00001);
   },15);
   assert.ok(marina.accessRoute.length>=2);

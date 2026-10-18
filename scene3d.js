@@ -290,6 +290,7 @@
       this._physicalProps();
       this._services();
       root.MayhemRailwayRender?.render(this);
+      root.MayhemMilitaryRender?.render(this);
     }
 
     _groundY(x, z) {
@@ -339,19 +340,24 @@
           area += a.x * b.z - b.x * a.z;
         }
         if (Math.abs(area) < .00000001) return;
-        const start = batch.positions.length / 3;
-        for (const point of points) batch.positions.push(point.x, this._surfaceY(point.x, point.z) + lift, point.z);
+        // Tight inner sidewalk turns can fold a ribbon quad. Orient each fan
+        // triangle independently, and omit slivers that collapse in Float32.
         for (let i = 1; i < points.length - 1; i++) {
-          if (area > 0) batch.indices.push(start, start + i + 1, start + i);
-          else batch.indices.push(start, start + i, start + i + 1);
+          const triangle=[points[0],points[i],points[i+1]].map(p=>({x:Math.fround(p.x),z:Math.fround(p.z)}));
+          const [a,b,c]=triangle,turn=(b.x-a.x)*(c.z-a.z)-(b.z-a.z)*(c.x-a.x);
+          if(Math.abs(turn)<1e-9)continue;
+          const start=batch.positions.length/3;
+          for(const point of triangle)batch.positions.push(point.x,this._surfaceY(point.x,point.z)+lift,point.z);
+          if(turn>0)batch.indices.push(start,start+2,start+1);
+          else batch.indices.push(start,start+1,start+2);
         }
       };
       if (!field) { append(polygon); return; }
-      const step = field.step / UNIT, last = field.count - 2;
-      const minX = Math.max(0, Math.floor(Math.min(...polygon.map(point => point.x)) / step));
-      const maxX = Math.min(last, Math.floor(Math.max(...polygon.map(point => point.x)) / step));
-      const minZ = Math.max(0, Math.floor(Math.min(...polygon.map(point => point.z)) / step));
-      const maxZ = Math.min(last, Math.floor(Math.max(...polygon.map(point => point.z)) / step));
+      const step = field.step / UNIT, last = field.count - 2, lastRow=(field.rows||field.count)-2,ox=(field.originX||0)/UNIT,oz=(field.originY||0)/UNIT;
+      const minX = Math.max(0, Math.floor((Math.min(...polygon.map(point => point.x))-ox) / step));
+      const maxX = Math.min(last, Math.floor((Math.max(...polygon.map(point => point.x))-ox) / step));
+      const minZ = Math.max(0, Math.floor((Math.min(...polygon.map(point => point.z))-oz) / step));
+      const maxZ = Math.min(lastRow, Math.floor((Math.max(...polygon.map(point => point.z))-oz) / step));
       const clip = (subject, triangle) => {
         let points = subject;
         for (let edge = 0; edge < 3 && points.length; edge++) {
@@ -376,8 +382,8 @@
       // sidewalk intersect its middle on a hill.
       for (let row = minZ; row <= maxZ; row++) {
         for (let col = minX; col <= maxX; col++) {
-          const a = { x: col * step, z: row * step }, b = { x: (col + 1) * step, z: row * step };
-          const c = { x: col * step, z: (row + 1) * step }, d = { x: (col + 1) * step, z: (row + 1) * step };
+          const a = { x: ox+col * step, z: oz+row * step }, b = { x: ox+(col + 1) * step, z: oz+row * step };
+          const c = { x: ox+col * step, z: oz+(row + 1) * step }, d = { x: ox+(col + 1) * step, z: oz+(row + 1) * step };
           append(clip(polygon, [a, b, c]));
           append(clip(polygon, [d, c, b]));
         }
@@ -514,7 +520,12 @@
         geometry.setIndex(batch.indices);
         geometry.computeVertexNormals();
         geometry.computeBoundingSphere();
-        const mesh = new T.Mesh(geometry, this._material(batch.color));
+        // Layered pavement is only centimetres apart. A small depth bias keeps
+        // the northern road leg readable from aircraft viewing distances.
+        const material=this._material(batch.color,{roadLayer:name});
+        material.polygonOffset=true;material.polygonOffsetFactor=-1;
+        material.polygonOffsetUnits=name==='Curved roads'?-2:name==='Curb edges'?-3:-1;
+        const mesh = new T.Mesh(geometry, material);
         mesh.name = name;
         mesh.receiveShadow = true;
         group.add(mesh);
@@ -616,6 +627,7 @@
       if (this._buildingFrames) this._buildingFrames.set(building.id ?? index, {
         center: { x: cx, y: base + height / 2, z: cz }, baseElevation: base, foundationBottom: bottom, yaw: -rotation, front: point(cx, z + d), width: w, depth: d, height, style
       });
+      if(building.militaryModel&&root.MayhemMilitaryRender)return;
       if (base > bottom + .001) box('#c5bfad', cx, -(base - bottom) / 2, cz, w, base - bottom, d);
       box(building.color, cx, wallHeight / 2, cz, w, wallHeight, d);
       box('#f1ead8', cx, 0.18, cz, w + .08, .36, d + .08);
@@ -677,23 +689,23 @@
       this._riverGroup = water;
       this.scene.add(landscape, water);
       if (!field) return;
-      const count = field.count, step = field.step / UNIT, total = count * count;
+      const count = field.count, rows=field.rows||count,step = field.step / UNIT, total = count * rows,ox=(field.originX||0)/UNIT,oz=(field.originY||0)/UNIT;
       const positions = new Float32Array(total * 3), colors = new Float32Array(total * 3);
-      const indices = new Uint32Array((count - 1) ** 2 * 6);
+      const indices = new Uint32Array((count - 1)*(rows-1) * 6);
       const sand = new T.Color('#dacda3'), grass = new T.Color('#a5c58c'), forest = new T.Color('#78a382'), rock = new T.Color('#a6aba2');
       let low = Infinity, high = -Infinity, at = 0;
-      for (let row = 0; row < count; row++) for (let col = 0; col < count; col++) {
+      for (let row = 0; row < rows; row++) for (let col = 0; col < count; col++) {
         const index = row * count + col, height = field.heights[index];
-        positions.set([col * step, height, row * step], index * 3);
+        positions.set([ox+col * step, height, oz+row * step], index * 3);
         low = Math.min(low, height); high = Math.max(high, height);
         const dx = (field.heights[row * count + Math.min(count - 1, col + 1)] - field.heights[row * count + Math.max(0, col - 1)]) / (step * 2);
-        const dz = (field.heights[Math.min(count - 1, row + 1) * count + col] - field.heights[Math.max(0, row - 1) * count + col]) / (step * 2);
+        const dz = (field.heights[Math.min(rows - 1, row + 1) * count + col] - field.heights[Math.max(0, row - 1) * count + col]) / (step * 2);
         const color = grass.clone();
         if (height < 2.2) color.lerp(sand, clamp((2.2 - height) / 2.2, 0, 1));
         else color.lerp(forest, clamp((height - 6) / 30, 0, .7));
         color.lerp(rock, clamp((Math.hypot(dx, dz) - .32) * 1.5, 0, .9));
         colors.set([color.r, color.g, color.b], index * 3);
-        if (row < count - 1 && col < count - 1) {
+        if (row < rows - 1 && col < count - 1) {
           // Cannon's anti-diagonal splits each cell across highX/lowY and
           // lowX/highY. The visible triangles use exactly those vertices.
           indices.set([index, index + count, index + 1, index + count + 1, index + 1, index + count], at);
@@ -724,8 +736,8 @@
       // Only glints are animated; the large sea and river remain one surface.
       // Each glint starts on a water cell, including the southern ocean.
       this._waterGlints = [];
-      for (let row = 2; row < count - 2; row += 7) for (let col = 2; col < count - 2; col += 7) {
-        const x = (col + Math.sin(row * 2) * .8) * step, z = (row + Math.cos(col * 3) * .8) * step;
+      for (let row = 2; row < rows - 2; row += 7) for (let col = 2; col < count - 2; col += 7) {
+        const x = ox+(col + Math.sin(row * 2) * .8) * step, z = oz+(row + Math.cos(col * 3) * .8) * step;
         if (field.isWater(x * UNIT, z * UNIT)) this._waterGlints.push({ x, z, phase: col * .67 + row });
       }
       this._riverFlow = new T.InstancedMesh(this._cube, this._material('#b8dde0', { unlit: true }), this._waterGlints.length);
@@ -870,6 +882,7 @@
         bollard: ['#5c7781'], wayfinding: ['#687d74', '#f1ddae'], fence: ['#e7ddbd'], hedge: ['#78a578']
       };
       for (const object of this.game.staticObjects || []) {
+        const customVisuals=object.militaryRendered&&root.MayhemMilitaryRender;
         this._activePropObject = object.kind !== 'garage' && object.destructible !== false ? object : null;
         if (this._activePropObject) this._propRenderState(object);
         const x = object.x / UNIT, z = object.y / UNIT, elevation = object.elevation ?? this._surfaceY(x, z);
@@ -889,7 +902,7 @@
           const sy = shape === 'sphere' ? half[1] : half[1] * 2;
           const sz = shape === 'cylinder' || shape === 'sphere' ? half[2] : half[2] * 2;
           const material = this._material(color);
-          this._static(geometry, material, px, py, pz, sx, sy, sz, [0, yaw, 0]);
+          if(!customVisuals)this._static(geometry, material, px, py, pz, sx, sy, sz, [0, yaw, 0]);
           if (geometry && this._propAimMeshes) {
             // Raycast the exact shared shape without adding another draw call;
             // its visible twin is baked into the static material batches.
@@ -1071,6 +1084,7 @@
         damageKey: null, fireAnchor: new T.Vector3() };
       model.effects = this._makeVehicleEffects(entity.id);
       model.geometries = this._geometries.slice(geometryStart);
+      root.MayhemMilitaryRender?.decorateVehicle?.(this,entity,model);
       return model;
     }
 
@@ -1485,28 +1499,28 @@
       if (!this._terrainRayScratch) this._terrainRayScratch = {
         a: new T.Vector3(), b: new T.Vector3(), c: new T.Vector3(), d: new T.Vector3(), hit: new T.Vector3(), start: new T.Vector3()
       };
-      const scratch = this._terrainRayScratch, count = field.count, step = field.step / UNIT, size = (count - 1) * step;
+      const scratch = this._terrainRayScratch, count = field.count,rows=field.rows||count,step = field.step / UNIT, size = (count - 1) * step,depth=(rows-1)*step,ox=(field.originX||0)/UNIT,oz=(field.originY||0)/UNIT;
       let near = 0, far = this.camera.far || 950;
       // Walk only the cells crossed by the projected ray. This avoids testing
       // all 131,072 terrain triangles whenever the player moves the crosshair.
-      for (const [position, delta] of [[origin.x, direction.x], [origin.z, direction.z]]) {
-        if (Math.abs(delta) < 1e-10) { if (position < 0 || position > size) return false; }
+      for (const [position, delta,min,span] of [[origin.x, direction.x,ox,size], [origin.z, direction.z,oz,depth]]) {
+        if (Math.abs(delta) < 1e-10) { if (position < min || position > min+span) return false; }
         else {
-          let a = -position / delta, b = (size - position) / delta;
+          let a = (min-position) / delta, b = (min+span - position) / delta;
           if (a > b) { const swap = a; a = b; b = swap; }
           near = Math.max(near, a); far = Math.min(far, b);
           if (far < near) return false;
         }
       }
       ray.at(near + 1e-7, scratch.start);
-      let col = clamp(Math.floor(scratch.start.x / step), 0, count - 2), row = clamp(Math.floor(scratch.start.z / step), 0, count - 2);
+      let col = clamp(Math.floor((scratch.start.x-ox) / step), 0, count - 2), row = clamp(Math.floor((scratch.start.z-oz) / step), 0, rows - 2);
       const stepX = Math.sign(direction.x), stepZ = Math.sign(direction.z);
       const deltaX = Math.abs(direction.x) > 1e-10 ? step / Math.abs(direction.x) : Infinity;
       const deltaZ = Math.abs(direction.z) > 1e-10 ? step / Math.abs(direction.z) : Infinity;
-      let nextX = Number.isFinite(deltaX) ? ((col + (stepX > 0 ? 1 : 0)) * step - origin.x) / direction.x : Infinity;
-      let nextZ = Number.isFinite(deltaZ) ? ((row + (stepZ > 0 ? 1 : 0)) * step - origin.z) / direction.z : Infinity;
-      for (let visited = 0; visited < count * 2 + 2 && col >= 0 && col < count - 1 && row >= 0 && row < count - 1; visited++) {
-        const index = row * count + col, end = Math.min(nextX, nextZ, far), x = col * step, z = row * step;
+      let nextX = Number.isFinite(deltaX) ? (ox+(col + (stepX > 0 ? 1 : 0)) * step - origin.x) / direction.x : Infinity;
+      let nextZ = Number.isFinite(deltaZ) ? (oz+(row + (stepZ > 0 ? 1 : 0)) * step - origin.z) / direction.z : Infinity;
+      for (let visited = 0; visited < count+rows+2 && col >= 0 && col < count - 1 && row >= 0 && row < rows - 1; visited++) {
+        const index = row * count + col, end = Math.min(nextX, nextZ, far), x = ox+col * step, z = oz+row * step;
         scratch.a.set(x, field.heights[index], z);
         scratch.b.set(x + step, field.heights[index + 1], z);
         scratch.c.set(x, field.heights[index + count], z + step);
@@ -1567,7 +1581,7 @@
       const field = this.game.world?.terrain;
       if (this._ray.ray.intersectPlane(this._ground, this._aimHit)) {
         const x = this._aimHit.x * UNIT, y = this._aimHit.z * UNIT;
-        if (!field || x < 0 || y < 0 || x > field.size || y > field.size || field.isWater(x, y)) saveHit(this._aimHit);
+        if (!field || x < (field.originX||0) || y < (field.minY||0) || x > field.size || y > (field.maxY??field.size) || field.isWater(x, y)) saveHit(this._aimHit);
       }
       return Number.isFinite(nearest);
     }
@@ -2179,6 +2193,7 @@
       this._cars(options.paused ? 0 : step);
       this._aircraftStep(options.paused ? 0 : step);
       root.MayhemTrainRender?.step(this);
+      root.MayhemMilitaryRender?.step?.(this);
       this._effects();
       this._landscapeStep(this.game.time);
       this._cameraStep(step);

@@ -40,7 +40,7 @@
 
     _openSky(ped) {
       if (!ped || ped === this.game.player || ped.alien || ped.stunned > 0 || this.game.ragdolls?.get(ped.id) || ped.grounded === false) return false;
-      const width = this.game.world?.mapWidth || 12000, height = this.game.world?.mapHeight || 8000;
+      const width = this.game.world?.bounds?.maxX || this.game.world?.mapWidth || 12000, height = this.game.world?.bounds?.maxY || this.game.world?.mapHeight || 8000;
       if (ped.x < 250 || ped.x > Math.min(width - 250, 9300) || ped.y < 500 || ped.y > height - 250) return false;
       if (this.game._dry && !this.game._dry(ped)) return false;
       // Check the real rotated footprint, rather than its axis-aligned bounds.
@@ -77,10 +77,12 @@
       const candidates = (this.game.peds || []).filter(ped => this._openSky(ped));
       if (!candidates.length) { this.nextVisit = 15; return false; }
       const target = candidates[Math.floor(this._random() * candidates.length)];
-      const world = this.game.world || {}, width = world.mapWidth || 12000, height = world.mapHeight || 8000;
-      // Western/northern/southern edges keep the airport's eastern approach clear.
+      const world = this.game.world || {}, width = world.bounds?.maxX || world.mapWidth || 12000, height = world.bounds?.maxY || world.mapHeight || 8000;
+      // Stay over the civilian city: northern military and eastern airport
+      // runway approaches remain clear of ambient UFO entry paths.
       const edge = Math.floor(this._random() * 3), offset = 600 + this._random() * (width - 1800);
-      const entry = edge === 0 ? { x: -800, y: 600 + this._random() * (height - 1200) } : { x: offset, y: edge === 1 ? -800 : height + 800 };
+      const westEntry = edge === 0 || (edge === 1 && world.bounds?.minY < 0);
+      const entry = westEntry ? { x: -800, y: 600 + this._random() * (height - 1200) } : { x: offset, y: edge === 1 ? -800 : height + 800 };
       this.destination = { x: target.x, y: target.y };
       this.targetId = target.id;
       this.exit = { x: -1000, y: 500 + this._random() * (height - 1000) };

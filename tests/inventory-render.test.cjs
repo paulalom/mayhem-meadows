@@ -166,7 +166,9 @@ test('district facades follow real footprints and cottage roofs face outward', (
     assert.ok(Math.abs(volume.minY - building.foundationBottom + .2) < .000001);
     const frame = scene._buildingFrames.get(building.id);
     assert.equal(frame.yaw, -(building.angle || 0));
-    assert.ok(Math.abs(Math.atan2(frame.front.z - volume.cz, frame.front.x - volume.cx) - building.frontAngle) < 0.000001);
+    // Blender base models author their doors on local -Z; this fallback
+    // facade renderer places ordinary street doors on local +Z.
+    if(!building.militaryModel)assert.ok(Math.abs(Math.atan2(frame.front.z - volume.cz, frame.front.x - volume.cx) - building.frontAngle) < 0.000001);
   });
   const normals = scene._roofGeometry().attributes.normal;
   for (let vertex = 0; vertex < 12; vertex++) assert.ok(normals.getY(vertex) > 0, 'roof slopes are visible from above');
@@ -224,7 +226,7 @@ test('the playable map renders its shared hills, coast and actual supported rive
   let low=Infinity, high=-Infinity;
   for(let i=0;i<vertices.count;i++){ low=Math.min(low,vertices.getY(i));high=Math.max(high,vertices.getY(i)); }
   assert.ok(high-low > 5, 'the backdrop has true height variation');
-  assert.equal(vertices.count, scene.game.world.terrain.count ** 2);
+  assert.equal(vertices.count, scene.game.world.terrain.count * scene.game.world.terrain.rows);
   const water = scene._riverGroup.getObjectByName('Coastal water');
   assert.ok(water?.isMesh);
   assert.equal(water.position.y, 0);

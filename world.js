@@ -5,6 +5,7 @@
   const HeightData=typeof module!=='undefined'&&module.exports?require('./height-data.js'):root.MayhemHeightData;
   const Terrain=typeof module!=='undefined'&&module.exports?require('./terrain.js'):root.MayhemTerrain;
   const Railway=typeof module!=='undefined'&&module.exports?require('./railway.js'):root.MayhemRailway;
+  const Military=typeof module!=='undefined'&&module.exports?require('./military.js'):root.MayhemMilitary;
   const DISTRICTS = Object.freeze({
     heights: Object.freeze({ id: 'heights', name: 'Old Town', color: '#bcd2ae', mapColor: '#bcd2ae',pedCount:8 }),
     works: Object.freeze({ id: 'works', name: 'Docklands', color: '#b8c7cd', mapColor: '#b8c7cd',pedCount:5 }),
@@ -13,7 +14,8 @@
     willow: Object.freeze({ id: 'willow', name: 'Northside', color: '#a9c99f', mapColor: '#a9c99f', suburban: true,pedCount:10 }),
     orchard: Object.freeze({ id: 'orchard', name: 'Airport', color: '#d2d6ac', mapColor: '#d2d6ac',pedCount:3 }),
     ridge: Object.freeze({id:'ridge',name:'Ridge Heights',color:'#9cb190',mapColor:'#9cb190',pedCount:1}),
-    marsh: Object.freeze({id:'marsh',name:'Tidewell Marsh',color:'#8fac98',mapColor:'#8fac98',pedCount:1})
+    marsh: Object.freeze({id:'marsh',name:'Tidewell Marsh',color:'#8fac98',mapColor:'#8fac98',pedCount:1}),
+    military: Object.freeze({id:'military',name:'Northwatch Airbase',color:'#a3ad8d',mapColor:'#a3ad8d',pedCount:6})
   });
   const COLORS = ['#ffd15b', '#fb8097', '#67d3c8', '#a6a0fa', '#90c66b', '#6fb5eb'];
   const PROP_HEALTH = Object.freeze({fence:25,wayfinding:20,lamp:35,bench:45,tree:90,fountain:160,wash:100});
@@ -25,6 +27,7 @@
   function districtAt(point, y) {
     const x = typeof point === 'number' ? point : point.x;
     y = typeof point === 'number' ? y : point.y;
+    if(y<0)return DISTRICTS[x>=1750&&x<=6620&&y>=-3400&&y<=-750?'military':'ridge'];
     return DISTRICTS[x>9450?(y>5600?'marsh':'orchard'):y<2500?(x<5300?'ridge':'willow'):
       y>4900&&x>6000?'works':x<5200?(y>4000?'riverfront':'heights'):'market'];
   }
@@ -611,7 +614,63 @@
       landmarks:[{id:'eagle-peak',label:'EAGLE PEAK',...anchor('eagle-peak')},{id:'vista',label:'VISTA POINT',...anchor('vista')},
         {id:'marina',label:'MARINA',...anchor('marina-gate')},{id:'marsh',label:'TIDEWELL MARSH',...anchor('marsh-lookout')}],
       beach:{x:2480,y:4520,w:280,h:420,angle:-.42},mountainRoads:roads.filter(road=>road.district==='ridge').map(road=>road.id)};
-    const result={size:SIZE,mapWidth:MAP_WIDTH,mapHeight:MAP_HEIGHT,sidewalkWidth:SIDEWALK_WIDTH,districts:DISTRICTS,roads,nodes,network,buildings,blocks,lots:blocks,areas,staticObjects,services,start,spawn:start,pedPaths,vehicleSpawns,parkingBays,missionAnchors,landscape};
+    // Append the new district after all seeded city lots, props and parking.
+    // Adding the base must never consume random values or move an old street.
+    const militaryBase=Military.createMilitaryBase();
+    for(const [id,x,y] of militaryBase.roadNodes)node(id,x,y);
+    for(const [id,name,a,b,bend,width] of militaryBase.roadLinks)road(id,name,a,b,'military',bend,width);
+    // Turn before the perimeter, then cross its narrow gate perpendicular to
+    // the fence. A diagonal road here would clip vans into the fence panels.
+    const gateRoad=roads.find(road=>road.id==='base-gate-road'),gate=militaryBase.gate;
+    const gateStart=gateRoad.points[0],gateTurn={x:gate.x,y:gate.y+160},gateControls=[{x:gateStart.x-220,y:gateStart.y-35},{x:gate.x,y:gateTurn.y+180}];
+    const gateSteps=Math.ceil(3*Math.max(distance(gateStart,gateControls[0]),distance(...gateControls),distance(gateControls[1],gateTurn))/24);
+    gateRoad.points=Array.from({length:gateSteps+1},(_,i)=>{const t=i/gateSteps,u=1-t;return {
+      x:u*u*u*gateStart.x+3*u*u*t*gateControls[0].x+3*u*t*t*gateControls[1].x+t*t*t*gateTurn.x,
+      y:u*u*u*gateStart.y+3*u*u*t*gateControls[0].y+3*u*t*t*gateControls[1].y+t*t*t*gateTurn.y};})
+      .concat(sampleCurve(gateTurn,byId.get('base-gate')).slice(1));
+    const expandedNetwork=new RoadNetwork(roads,nodes);
+    for(const building of militaryBase.buildings) {
+      // The Blender models place doors on their north face. Hangars open to
+      // the flight apron; the compound buildings face the road to the south.
+      building.angle=building.militaryModel==='hangar'?0:building.militaryModel==='gatehouse'?-Math.PI/2:Math.PI;
+      const front=expandedNetwork.nearestRoad({x:building.x+building.w/2,y:building.y+building.h/2});
+      building.blockId=building.id+'-lot';building.roadId=front.roadId;building.roadS=front.s;
+      building.frontAngle=wrap(building.angle-Math.PI/2);
+      if(building.militaryModel==='hangar')building.frontagePoint={x:building.x+building.w/2,y:building.y-50};
+      buildings.push(building);
+      const lot={id:building.blockId,district:'military',x:building.x-40,y:building.y-40,w:building.w+80,h:building.h+80,angle:0,
+        kind:'military',landUse:'military',mapColor:DISTRICTS.military.mapColor,buildings:[building],density:building.w*building.h/((building.w+80)*(building.h+80)),
+        driveway:{x:building.x+building.w/2-25,y:building.y+building.h,w:50,h:40,angle:0}};
+      lot.points=footprintCorners(lot);blocks.push(lot);
+    }
+    for(const spawn of militaryBase.vehicleSpawns) {
+      const front=expandedNetwork.nearestRoad(spawn),id=spawn.id+'-parking',w=65,h=42;
+      Object.assign(spawn,{roadId:front.roadId,s:front.s,parkingBayId:id});vehicleSpawns.push(spawn);
+      const center={x:(front.x+spawn.x)/2,y:(front.y+spawn.y)/2},length=distance(front,spawn),angle=heading(front,spawn);
+      parkingBays.push({id,x:spawn.x-w/2,y:spawn.y-h/2,w,h,angle:spawn.angle,district:'military',roadId:front.roadId,
+        accessPoint:{x:front.x,y:front.y,roadId:front.roadId,s:front.s},access:{x:center.x-length/2-35,y:center.y-35,w:length+70,h:70,angle}});
+    }
+    for(const path of militaryBase.pedestrianPaths)pedPaths.push({...path,points:path.points.map(p=>({...p})),closed:true,count:3});
+    militaryBase.fenceObjects=[];
+    for(let i=1;i<militaryBase.fence.length;i++) {
+      const a=militaryBase.fence[i-1],b=militaryBase.fence[i];
+      if(a.y===-750&&b.y===-750&&Math.abs(a.x-b.x)===militaryBase.gate.width)continue;
+      const length=distance(a,b),count=Math.ceil(length/160),angle=heading(a,b);
+      for(let j=0;j<count;j++) {
+        const t=(j+.5)/count,x=a.x+(b.x-a.x)*t,y=a.y+(b.y-a.y)*t,span=length/count;
+        const object={id:'base-fence-'+i+'-'+j,kind:'military-fence',militaryRendered:true,district:'military',x,y,angle,
+          destructible:false,parts:[{shape:'box',offset:[0,1.1,0],half:[span/40,1.1,.06],color:'#788578'}]};
+        staticObjects.push(object);militaryBase.fenceObjects.push(object);
+      }
+    }
+    const baseAnchor=anchor('base-inner-gate');missionAnchors.military=[baseAnchor];
+    for(const [id] of militaryBase.roadNodes)missionAnchors.byName[id]=anchor(id);
+    landscape.militaryBase=militaryBase;landscape.landmarks.push({id:'military',label:'NORTHWATCH AIRBASE',...baseAnchor});
+    landscape.mountainRoads.push(...militaryBase.roadLinks.map(link=>link[0]));
+    areas.push({id:'area-military',district:'military',mapColor:DISTRICTS.military.mapColor,points:footprintCorners(militaryBase.bounds)});
+    Railway.extendNorth(railway);
+    const result={size:SIZE,mapWidth:MAP_WIDTH,mapHeight:12000,mapMinY:-4000,referenceMapWidth:MAP_WIDTH,referenceMapHeight:MAP_HEIGHT,
+      bounds:{...Military.BOUNDS},militaryBase,sidewalkWidth:SIDEWALK_WIDTH,districts:DISTRICTS,roads,nodes,network:expandedNetwork,buildings,blocks,lots:blocks,areas,staticObjects,services,start,spawn:start,pedPaths,vehicleSpawns,parkingBays,missionAnchors,landscape};
     result.railway=railway;
     Object.assign(railway.helipad,{label:'CENTRAL STATION',w:200,h:200,angle:0});
     (landscape.helipads??=[]).push(railway.helipad);
@@ -631,6 +690,13 @@
       point.elevation=building?building.elevation+building.height+.05:result.terrain.surfaceHeight(point.x,point.y);
     }
     for(const route of airport.taxiRoutes)for(const point of route.points)point.elevation=result.terrain.surfaceHeight(point.x,point.y);
+    militaryBase.elevation=result.terrain.surfaceHeight(militaryBase.runways[0].x+militaryBase.runways[0].w/2,militaryBase.runways[0].y+militaryBase.runways[0].h/2);
+    for(const rect of [...militaryBase.runways,...militaryBase.taxiways,...militaryBase.aprons,militaryBase.motorPool])rect.elevation=result.terrain.surfaceHeight(rect.x+rect.w/2,rect.y+rect.h/2);
+    for(const point of [...militaryBase.stands,...militaryBase.storageStands,...militaryBase.helipads,...militaryBase.runways.flatMap(r=>r.thresholds)])point.elevation=result.terrain.surfaceHeight(point.x,point.y);
+    for(const pad of militaryBase.helipads)Object.assign(pad,{w:pad.radius*2,h:pad.radius*2,angle:0});
+    for(const route of [...militaryBase.taxiRoutes,...militaryBase.arrivalTaxiRoutes,...militaryBase.pedestrianPaths])for(const point of route.points)point.elevation=result.terrain.surfaceHeight(point.x,point.y);
+    for(const path of pedPaths.filter(p=>p.district==='military'))for(const point of path.points)point.elevation=result.terrain.surfaceHeight(point.x,point.y);
+    militaryBase.gate.elevation=result.terrain.surfaceHeight(militaryBase.gate.x,militaryBase.gate.y);
     return result;
   }
 

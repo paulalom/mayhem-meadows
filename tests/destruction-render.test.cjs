@@ -42,6 +42,19 @@ function matrixOf(slot) {
   return matrix;
 }
 
+test('custom military fence visuals retain shared aim and camera collision proxies',()=>{
+  const fence={id:'base-fence',kind:'military-fence',militaryRendered:true,destructible:false,x:2000,y:-1000,elevation:14,angle:0,
+    parts:[{shape:'box',offset:[0,1.1,0],half:[4,1.1,.06],color:'#788578'}]};
+  const scene=makeScene({staticObjects:[fence],world:{terrain:{surfaceHeight:()=>14}}});
+  context.MayhemMilitaryRender={};
+  try{scene._physicalProps();}finally{delete context.MayhemMilitaryRender;}
+  assert.equal(scene._staticParts.size,0,'the custom renderer owns the visible fence');
+  assert.equal(scene._propAimMeshes.length,1);assert.equal(scene._propVolumes.length,1);
+  scene._ray.set(new T.Vector3(100,15,-55),new T.Vector3(0,0,1));
+  const hit=scene._ray.intersectObjects(scene._propAimMeshes)[0];
+  assert.ok(hit);assert.equal(hit.object.propObject,fence);assert.ok(hit.distance<5);
+});
+
 test('destruction removes all owned prop parts and signs while reusing shared batches', () => {
   const scene = makeScene(), objects = scene.game.staticObjects;
   const planter = { kind: 'planter', x: 100, y: 100, parts: [{ offset: [0, .3, 0], half: [.6, .3, .3] }] };

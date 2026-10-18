@@ -345,7 +345,7 @@
     if (!inventoryView) return;
     const available = game.garageAvailable, fallen = !!game.physics?.get('player');
     const atService = inventoryView === 'hangar' ? game.hangarAvailable === true : available;
-    $('inventory-location').textContent = inventoryView === 'hangar' ? (atService ? 'At the airfield · store, retrieve or service your aircraft.' : 'Browse anywhere. Land and stop at the airport apron to manage aircraft.') : available ? 'At Sprinkle Garage · supplies, toys and car care are open.' : 'Browse anywhere. Visit Sprinkle Garage and stop to shop or manage rides.';
+    $('inventory-location').textContent = inventoryView === 'hangar' ? (atService ? 'At the airfield · store, retrieve or service your aircraft.' : 'Browse anywhere. Land and stop at either airfield apron to manage aircraft.') : available ? 'At Sprinkle Garage · supplies, toys and car care are open.' : 'Browse anywhere. Visit Sprinkle Garage and stop to shop or manage rides.';
     $('inventory-location').dataset.available = String(atService);
     $('inventory-location').classList.toggle('available', atService);
     for (const id of Object.keys(POCKET_ITEMS)) {
@@ -472,6 +472,11 @@
     toast('Airport marked on your compass. Follow Terminal Avenue to the airfield in the northeast.');
     canvas.focus(); hud();
   });
+  $('military-route').addEventListener('click',()=>{
+    const base=game.world.militaryBase;if(!base)return;
+    navigationTarget={x:base.gate.x,y:base.gate.y,name:base.name};
+    if(!started)start();toast('Northwatch Airbase marked. Follow Pine Ridge Road north through the pass.');canvas.focus();hud();
+  });
   canvas.addEventListener('contextmenu', event => event.preventDefault());
   // Mouse edges fire for each button in a chord, including aim + fire.
   canvas.addEventListener('mousedown', event => {
@@ -586,11 +591,11 @@
   const minimap = $('minimap-canvas'), mini = minimap.getContext('2d');
   const terrainMap = document.createElement('canvas');
   if (game.world.terrain) {
-    const ground = game.world.terrain, n = ground.count;
+    const ground = game.world.terrain, n = ground.count,bounds=game.world.bounds||{minX:0,minY:0,maxX:SIZE,maxY:SIZE};
     terrainMap.width = terrainMap.height = n;
     const context = terrainMap.getContext('2d'), pixels = context.createImageData(n, n);
     for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
-      const index = y * n + x, height = ground.heights[index], water = height < .05;
+      const index = y * n + x, height = ground.heightAt(bounds.minX+x/(n-1)*(bounds.maxX-bounds.minX),bounds.minY+y/(n-1)*(bounds.maxY-bounds.minY)), water = height < .05;
       const shade = Math.min(1, Math.max(0, height / 42));
       const color = water ? [40, 113, 147] : height < .9 ? [198, 191, 143]
         : [91 + shade * 62, 140 + shade * 26, 94 + shade * 40];
@@ -613,7 +618,8 @@
   function target() { return game.mission?.targets?.[game.mission.targetIndex] || navigationTarget; }
   function drawAircraftMarker(aircraft, scale, w, h) {
     const controlled = game.player.vehicleId === aircraft.id, helicopter = isHelicopter(aircraft);
-    const x = clamp(aircraft.x * scale, 5, w - 5), y = clamp(aircraft.y * scale, 5, h - 5);
+    const bounds=game.world.bounds||{minX:0,minY:0,maxX:SIZE,maxY:SIZE};
+    const x = clamp(aircraft.x * scale, bounds.minX*scale+5,bounds.maxX*scale-5), y = clamp(aircraft.y * scale,bounds.minY*scale+5,bounds.maxY*scale-5);
     const altitude = Math.max(0, aircraft.altitudeAGL ?? aircraft.agl ?? 0);
     mini.save(); mini.translate(x, y);
     mini.strokeStyle = controlled ? '#fff8d9' : aircraft.aircraftType === 'policeheli' ? '#ff8294' : aircraft.aircraftType === 'news' ? '#f5d96c' : '#70e6db';
@@ -635,6 +641,7 @@
     const r = minimap.getBoundingClientRect(), w = r.width, h = r.height, scale = w / SIZE;
     mini.clearRect(0, 0, w, h); mini.fillStyle = '#608d76'; mini.fillRect(0, 0, w, h);
     if (terrainMap.width > 0 && game.world.terrain) mini.drawImage(terrainMap, 0, 0, w, h);
+    const bounds=game.world.bounds||{minX:0,minY:0,maxX:SIZE,maxY:SIZE};mini.save();mini.translate(-bounds.minX*scale,-bounds.minY*scale);
     mini.globalAlpha = game.world.terrain ? .22 : 1;
     for (const area of game.areas || []) {
       mini.fillStyle = DISTRICTS[area.district]?.mapColor || '#7e9f83';
@@ -666,10 +673,10 @@
     }
     for (const service of game.services) { mini.fillStyle = service.id === 'wash' ? '#70e6db' : '#e6f77c'; mini.fillRect(service.x * scale - 2, service.y * scale - 2, 4, 4); }
     const airport = game.world.landscape?.airport || game.world.airport;
-    for (const runway of airport?.runways || []) {
+    for (const runway of [...(airport?.runways || []),...(game.world.militaryBase?.runways||[])]) {
       mini.fillStyle = '#eef4dd'; mini.fillRect(runway.x * scale, runway.y * scale, Math.max(1.5, runway.w * scale), runway.h * scale);
     }
-    for (const pad of airport?.helipads || []) {
+    for (const pad of [...(airport?.helipads || []),...(game.world.militaryBase?.helipads||[])]) {
       mini.strokeStyle = '#70e6db'; mini.lineWidth = 0.8; mini.strokeRect(pad.x * scale - 2, pad.y * scale - 2, 4, 4);
     }
     const t = target();
@@ -678,9 +685,10 @@
     for (const aircraft of game.aircraft || []) if (aircraft.active !== false && aircraft.visible !== false && !aircraft.exploded) drawAircraftMarker(aircraft, scale, w, h);
     for(const car of game.trainCars || [])if(car.visible){mini.save();mini.translate(car.x*scale,car.y*scale);mini.rotate(car.angle);mini.fillStyle=car.model==='passenger'?'#6ee4d5':'#f3c568';mini.fillRect(-2.5,-1.2,5,2.4);mini.restore();}
     if (!isAircraft(game.current)) {
-      mini.save(); mini.translate(clamp(game.current.x * scale, 5, w - 5), clamp(game.current.y * scale, 5, h - 5)); mini.rotate(game.current.angle);
+      mini.save(); mini.translate(clamp(game.current.x * scale,bounds.minX*scale+5,bounds.maxX*scale-5), clamp(game.current.y * scale,bounds.minY*scale+5,bounds.maxY*scale-5)); mini.rotate(game.current.angle);
       mini.fillStyle = '#fff8d9'; mini.beginPath(); mini.moveTo(6, 0); mini.lineTo(-4, -4); mini.lineTo(-3, 0); mini.lineTo(-4, 4); mini.closePath(); mini.fill(); mini.restore();
     }
+    mini.restore();
   }
   function render(dt) {
     if (aiming && (!playActive() || !mouseLocked() || game.player.vehicleId || game.physics?.get('player'))) setAim(false);
@@ -776,7 +784,7 @@
     $('objective-title').textContent = mission?.title || 'Your town. Your terrible ideas.';
     const objective = target();
     const aerialMission = mission && ['airtaxi', 'aircargo', 'sightseeing', 'airrace'].includes(mission.type);
-    $('objective-detail').textContent = aerialMission ? (['airtaxi', 'aircargo'].includes(mission.type) ? 'HELICOPTER · ' + (objective?.name || 'Reach the marked pad') + '. Land and stop for 2 seconds.' : mission.type === 'sightseeing' && mission.targetIndex === mission.targets.length - 1 ? 'Return to the airport pad. Land and stop to finish.' : 'Fly through ' + (objective?.name || 'the elevated rings') + ' at the marked altitude.') : mission ? (mission.type === 'party' ? 'Drive to the ring. Press H to start the party.' : mission.stage === 'pickup' ? 'Reach the glowing ring to pick up the disco ball.' : mission.stage === 'dropoff' ? 'Deliver that disco ball to the glowing ring.' : 'Drive through the glowing rings in order.') : navigationTarget ? 'Follow the compass to Meadows Airport. E borrows a parked plane or helicopter.' : 'Borrow a ride with E. Find planes and helicopters at the airport in the northeast.';
+    $('objective-detail').textContent = aerialMission ? (['airtaxi', 'aircargo'].includes(mission.type) ? 'HELICOPTER · ' + (objective?.name || 'Reach the marked pad') + '. Land and stop for 2 seconds.' : mission.type === 'sightseeing' && mission.targetIndex === mission.targets.length - 1 ? 'Return to the airport pad. Land and stop to finish.' : 'Fly through ' + (objective?.name || 'the elevated rings') + ' at the marked altitude.') : mission ? (mission.type === 'party' ? 'Drive to the ring. Press H to start the party.' : mission.stage === 'pickup' ? 'Reach the glowing ring to pick up the disco ball.' : mission.stage === 'dropoff' ? 'Deliver that disco ball to the glowing ring.' : 'Drive through the glowing rings in order.') : navigationTarget ? 'Follow the compass to '+navigationTarget.name+'. E borrows a parked vehicle or aircraft.' : 'Borrow a ride with E. Find aircraft at Meadows Airport or Northwatch Airbase beyond Pine Ridge.';
     $('mission-time').textContent = mission ? (mission.timeLeft > 0 ? Math.ceil(mission.timeLeft) + 's bonus' : 'OVERTIME · finish for base pay') : 'FREE ROAM';
     $('mission-progress').textContent = mission ? `${mission.targetIndex + 1}/${mission.targets.length} · ${Math.round(dist(objective, game.current) / 20)}m` + (mission.type === 'airtaxi' ? ` · COMFORT ${Math.round(game.missionStats.comfort ?? 100)}%` : '') : 'No rush. Cause a little joy.';
     $('mission-status').textContent = mission ? 'Gig in progress · base pay ' + money(mission.reward) : `${game.completed || 0} gigs delivered. Choose your next questionable errand.`;

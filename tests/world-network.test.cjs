@@ -18,7 +18,8 @@ function propParts(objects) {
 
 test('the reference-map regions form a connected graph with city loops, suburban courts and mountain hairpins', () => {
   assert.equal(world.size,12000); assert.equal(World.SIZE,12000);
-  assert.equal(world.mapWidth,12000); assert.equal(world.mapHeight,8000);
+  assert.equal(world.mapWidth,12000); assert.equal(world.mapHeight,12000);assert.equal(world.referenceMapHeight,8000);
+  assert.deepEqual(world.bounds,{minX:0,minY:-4000,maxX:12000,maxY:8000});
   assert.ok(world.roads.length>=60); assert.ok(world.nodes.length>=45);
   const visited=new Set(),queue=[world.nodes[0].id];
   while(queue.length) {
@@ -134,11 +135,11 @@ test('opposing lanes stay separate through straight junctions and sharp tangent 
 test('oriented buildings keep continuous sidewalks clear and preserve varied suburban gardens', () => {
   assert.ok(world.buildings.length>=140&&world.buildings.length<=190);
   for(const building of world.buildings) {
-    for(const point of World.footprintCorners(building)) assert.ok(point.x>100&&point.y>100&&point.x<world.size-100&&point.y<world.size-100);
+    for(const point of World.footprintCorners(building)) assert.ok(point.x>world.bounds.minX+100&&point.y>world.bounds.minY+100&&point.x<world.bounds.maxX-100&&point.y<world.bounds.maxY-100);
     for(const road of world.roads) for(let i=1;i<road.points.length;i++) {
       assert.ok(World.segmentBoxDistance(road.points[i-1],road.points[i],building)>=road.width/2+World.SIDEWALK_WIDTH+7.99,building.id+' crowds '+road.id);
     }
-    const roadPoint=world.network.pointOnRoad(building.roadId,building.roadS),front={x:Math.cos(building.frontAngle),y:Math.sin(building.frontAngle)},position=centre(building);
+    const roadPoint=building.frontagePoint||world.network.pointOnRoad(building.roadId,building.roadS),front={x:Math.cos(building.frontAngle),y:Math.sin(building.frontAngle)},position=centre(building);
     assert.ok((roadPoint.x-position.x)*front.x+(roadPoint.y-position.y)*front.y>0,'each building faces its frontage');
   }
   for(let i=0;i<world.buildings.length;i++) for(let j=i+1;j<world.buildings.length;j++) assert.equal(World.boxesOverlap(world.buildings[i],world.buildings[j],11.99),false);
@@ -186,7 +187,7 @@ test('services, varied lane spawns, and contracts use reachable road locations',
   assert.ok(road.distance<1e-8);
   assert.ok(angleDistance(wash.angle,road.angle+Math.PI/2)<1e-8,'wash posts straddle the road');
   assert.deepEqual([...new Set(world.vehicleSpawns.map(spawn=>spawn.kind))].sort(),['compact','sports','van']);
-  assert.equal(new Set(world.vehicleSpawns.map(spawn=>spawn.color)).size,6);
+  assert.equal(new Set(world.vehicleSpawns.filter(spawn=>!spawn.militaryModel).map(spawn=>spawn.color)).size,6);
   for(const spawn of world.vehicleSpawns.filter(spawn=>spawn.traffic)) {
     const centreLine=world.network.pointOnRoad(spawn.roadId,spawn.s),cross=(spawn.x-centreLine.x)*-Math.sin(centreLine.angle)+(spawn.y-centreLine.y)*Math.cos(centreLine.angle);
     assert.ok(angleDistance(spawn.angle,centreLine.angle+(cross<0?Math.PI:0))<1e-8,'opposing lane traffic faces the opposite direction');
@@ -223,7 +224,7 @@ test('every nonstarter parked ride has a clear bay and an unobstructed full-widt
       assert.equal(World.boxesOverlap(bay.access,other,2.99),false,'another parked ride cannot block this exit');
     }
     assert.ok(world.network.route(world.start.player,bay.accessPoint).length>0,'each bay joins a reachable street');
-    assert.ok(distance(bay.accessPoint,spawn)<180,'cars stay beside the street rather than in distant backyards');
+    assert.ok(distance(bay.accessPoint,spawn)<(spawn.militaryModel?420:180),'city bays stay beside streets and the paved military motor pool has a reachable driveway');
   }
 });
 
@@ -250,8 +251,9 @@ test('world generation is deterministic and region density follows the reference
   assert.deepEqual(again.buildings,world.buildings);
   assert.deepEqual(again.staticObjects,world.staticObjects);
   assert.deepEqual(again.parkingBays,world.parkingBays);
-  assert.equal(Object.keys(World.DISTRICTS).length,8);
-  assert.equal(Object.values(World.DISTRICTS).reduce((sum,district)=>sum+district.pedCount,0),48);
+  assert.equal(Object.keys(World.DISTRICTS).length,9);
+  assert.equal(Object.values(World.DISTRICTS).filter(district=>district.id!=='military').reduce((sum,district)=>sum+district.pedCount,0),48);
+  assert.equal(World.DISTRICTS.military.pedCount,6);
   const count=id=>world.buildings.filter(building=>building.district===id).length;
   assert.ok(count('market')>count('orchard')*4,'Downtown is denser than the airport');
   assert.ok(count('willow')>count('ridge')*6,'Northside has garden neighborhoods, the mountains stay open');
@@ -260,5 +262,5 @@ test('world generation is deterministic and region density follows the reference
   assert.ok(world.buildings.some(building=>building.style==='control-tower'));
   assert.ok(world.buildings.some(building=>building.style==='hangar'));
   assert.equal(world.landscape.airport.runways[0].role,'runway');
-  assert.ok(world.staticObjects.every(object=>['garage','rail-platform'].includes(object.kind)?!object.destructible:object.destructible&&object.health===object.maxHealth));
+  assert.ok(world.staticObjects.every(object=>['garage','rail-platform','military-fence'].includes(object.kind)?!object.destructible:object.destructible&&object.health===object.maxHealth));
 });

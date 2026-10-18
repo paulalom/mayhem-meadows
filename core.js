@@ -13,6 +13,7 @@
   const VehicleStats = root.MayhemVehicleStats || (typeof require === 'function' ? require('./vehicle-stats.js') : null);
   const { CAR_TYPES, CAR_MODELS } = VehicleStats;
   const COLORS = ['#ffd15b', '#fb8097', '#67d3c8', '#a6a0fa', '#90c66b', '#6fb5eb'];
+  const MILITARY_COLORS = ['#73806a', '#8c9275'];
   const GADGETS = {
     popper: { name: 'Confetti Popper', description: 'Unlimited bursts of close-up silliness.', price: 0, cooldown: 0.55 },
     hammer: { name: 'Inflatable Hammer', description: 'A short, satisfying shove. No refills needed.', price: 120, cooldown: 0.9 },
@@ -24,6 +25,8 @@
     refill: { name: 'Party Refill', description: 'Add 6 Party Cannon shots, up to 12.', price: 30, cap: 3 }
   };
   const owns = (object, key) => typeof key === 'string' && Object.prototype.hasOwnProperty.call(object, key);
+  const isMilitaryUtility = vehicle => vehicle?.militaryModel === 'utility-truck' && vehicle.kind === 'van' &&
+    owns(CAR_MODELS, vehicle.modelId) && CAR_MODELS[vehicle.modelId].kind === 'van';
   const starterInventory = () => ({ equipped: 'popper', unlocked: ['popper'], pockets: { biscuits: 2, repairTape: 1, refill: 1 }, ammo: { cannon: 0 } });
   const CURSES = ['SON OF A BISCUIT!', 'HECKITY HECK!', 'FLIPPIN’ TURNIPS!', 'OH, CRUMBS!', 'YOU ABSOLUTE WAFFLE!'];
   const PROP_SOUND_MATERIALS = { fence: 'wood', bench: 'wood', lamp: 'metal', wash: 'metal', wayfinding: 'metal', fountain: 'stone', tree: 'foliage' };
@@ -150,6 +153,10 @@
 
     get current() { return this.cars.find(car => car.id === this.player.vehicleId) || this.aircraft?.find(craft => craft.id === this.player.vehicleId) || this.player; }
     districtAt(point = this.current) { return districtAt(point); }
+    _worldBounds() {
+      const bounds = this.world?.bounds;
+      return { minX: finite(bounds?.minX, 0), minY: finite(bounds?.minY, 0), maxX: finite(bounds?.maxX, SIZE), maxY: finite(bounds?.maxY, SIZE) };
+    }
     _ground(point,y) {
       const x=typeof point==='object' ? point.x : point;
       y=typeof point==='object' ? point.y : y;
@@ -206,6 +213,7 @@
         if (!this._vehicleFree(candidate) || this._vehicles().some(other => this._vehicleContact(candidate, other))) continue;
         const car = this._addCar(spawn.x, spawn.y, spawn.angle, spawn.kind, spawn.color, spawn.traffic);
         car.roadId = spawn.roadId;
+        if(spawn.militaryModel){car.militaryModel=spawn.militaryModel;car.modelId=spawn.modelId||car.modelId;car.baseId='military';}
         if (car.traffic) car.route = this._wanderRoute(car);
       }
       this._makePedestrians();
@@ -259,7 +267,8 @@
     vehicleStats(vehicle = this.current) { return Aircraft.isAircraft(vehicle) ? Aircraft.getModel(vehicle) : VehicleStats.performance(vehicle); }
 
     _isFree(x, y, radius = PLAYER_RADIUS, elevation=this._ground(x,y)) {
-      if (x < radius || y < radius || x > SIZE - radius || y > SIZE - radius) return false;
+      const bounds = this._worldBounds();
+      if (x < bounds.minX + radius || y < bounds.minY + radius || x > bounds.maxX - radius || y > bounds.maxY - radius) return false;
       return !this.buildings.some(b => { const volume=this._buildingVolume(b); return this._heightOverlap({elevation},volume,PERSON_HEIGHT,volume.height) && this._circlePart({ x, y }, radius, { box: this._buildingBox(b) }); }) &&
         !this._staticParts().some(part => part.bottom<elevation+PERSON_HEIGHT-.025 && part.top>elevation+.025 && this._circlePart({ x, y }, radius, part));
     }
@@ -292,7 +301,8 @@
       const box = this._vehicleBox(entity);
       const ex = Math.abs(box.axes[0].x) * box.half[0] + Math.abs(box.axes[1].x) * box.half[1];
       const ey = Math.abs(box.axes[0].y) * box.half[0] + Math.abs(box.axes[1].y) * box.half[1];
-      return entity.x >= ex && entity.x <= SIZE - ex && entity.y >= ey && entity.y <= SIZE - ey &&
+      const bounds = this._worldBounds();
+      return entity.x >= bounds.minX + ex && entity.x <= bounds.maxX - ex && entity.y >= bounds.minY + ey && entity.y <= bounds.maxY - ey &&
         !this.buildings.some(b => { const volume=this._buildingVolume(b); return this._heightOverlap(entity,volume,VehiclePhysics.height(entity),volume.height) && boxContact(box,this._buildingBox(b)); }) &&
         !this._staticParts().some(part => part.bottom<this._base(entity)+VehiclePhysics.height(entity)-.025 && part.top>this._base(entity)+.025 && boxContact(box, part.box));
     }
@@ -405,7 +415,7 @@
         const box = this._vehicleBox(entity);
         const ex = Math.abs(box.axes[0].x) * box.half[0] + Math.abs(box.axes[1].x) * box.half[1];
         const ey = Math.abs(box.axes[0].y) * box.half[0] + Math.abs(box.axes[1].y) * box.half[1];
-        const x = clamp(entity.x, ex, SIZE - ex), y = clamp(entity.y, ey, SIZE - ey);
+        const bounds = this._worldBounds(), x = clamp(entity.x, bounds.minX + ex, bounds.maxX - ex), y = clamp(entity.y, bounds.minY + ey, bounds.maxY - ey);
         if (x !== entity.x || y !== entity.y) { entity.x = x; entity.y = y; changed = collided = true; }
         for (const b of this.buildings) {
           const volume=this._buildingVolume(b);
@@ -460,8 +470,9 @@
 
     _moveCircleBuildings(entity, dx, dy, radius) {
       const oldX = entity.x, oldY = entity.y;
-      entity.x = clamp(entity.x + dx, radius, SIZE - radius);
-      entity.y = clamp(entity.y + dy, radius, SIZE - radius);
+      const bounds = this._worldBounds();
+      entity.x = clamp(entity.x + dx, bounds.minX + radius, bounds.maxX - radius);
+      entity.y = clamp(entity.y + dy, bounds.minY + radius, bounds.maxY - radius);
       let collision = entity.x !== oldX + dx || entity.y !== oldY + dy;
       for (let pass = 0; pass < 3; pass++) {
         let changed = false;
@@ -918,7 +929,8 @@
           const people = this.peds.some(ped => atHeight(this._base(ped)+.1,this._base(ped)+PERSON_HEIGHT+.35*CHARACTER_SCALE) && ped.stunned <= 0 && distance(ped, projectile) < 16 * CHARACTER_SCALE);
           const surface=this._ground(projectile),ground=projectile.height<=surface+.12;
           if (ground) projectile.height = surface+.12;
-          burst = walls || vehicles || people || ground || projectile.life <= 0.000001 || projectile.x < 0 || projectile.y < 0 || projectile.x > SIZE || projectile.y > SIZE;
+          const bounds = this._worldBounds();
+          burst = walls || vehicles || people || ground || projectile.life <= 0.000001 || projectile.x < bounds.minX || projectile.y < bounds.minY || projectile.x > bounds.maxX || projectile.y > bounds.maxY;
         }
         if (burst) this._burstParty(projectile); else remaining.push(projectile);
       }
@@ -1061,7 +1073,8 @@
       const floor=this.vehiclePhysics.support(p.x,p.y,previous+.1);
       if(p.elevation<=floor+.02) {
         p.elevation=floor; p.parachuting=false; p.grounded=true; p.verticalVelocity=0;
-        if(p.x<PLAYER_RADIUS || p.y<PLAYER_RADIUS || p.x>SIZE-PLAYER_RADIUS || p.y>SIZE-PLAYER_RADIUS) { this.recover(); return; }
+        const groundBounds = this._worldBounds();
+        if(p.x<groundBounds.minX+PLAYER_RADIUS || p.y<groundBounds.minY+PLAYER_RADIUS || p.x>groundBounds.maxX-PLAYER_RADIUS || p.y>groundBounds.maxY-PLAYER_RADIUS) { this.recover(); return; }
         this._sound('land',{x:p.x,y:p.y,intensity:.3}); this._toast('Touchdown! E to find another ride.');
       } else p.grounded=false;
     }
@@ -1155,6 +1168,8 @@
         if (deployed) {
           record.health = clamp(finite(deployed.health, 0), 0, this.maxHealth); record.color = deployed.color;
           record.modelId = VehicleStats.getModel(deployed).id;
+          if (isMilitaryUtility(deployed)) record.militaryModel = 'utility-truck';
+          else delete record.militaryModel;
           record.engineHealth = clamp(finite(deployed.engineHealth, 100), 0, 100);
           record.handlingHealth = clamp(finite(deployed.handlingHealth, 100), 0, 100);
           record.burning = Boolean(deployed.burning); record.fireTime = clamp(finite(deployed.fireTime, 0), 0, 8);
@@ -1165,18 +1180,20 @@
     }
 
     get hangarAvailable() {
-      const airport=this.world?.landscape?.airport;
-      if(!airport || this.ragdolls.get(this.player.id) || this.player.parachuting) return false;
       const entity=this.current;
+      const airportId=this.aviation?.airportAt(entity),landscape=this.world?.landscape;
+      const airport=airportId==='military'?(landscape?.militaryBase || this.world?.militaryBase):airportId==='civilian'?landscape?.airport:null;
+      if(!airport || this.ragdolls.get(this.player.id) || this.player.parachuting) return false;
       if(this.player.vehicleId && (!Aircraft.isAircraft(entity) || !entity.grounded || Math.abs(entity.speed)>20)) return false;
       if(!this.player.vehicleId && !this.player.grounded) return false;
-      const apron=(airport.aprons || []).some(pad=>entity.x>=pad.x-180 && entity.x<=pad.x+pad.w+180 && entity.y>=pad.y-180 && entity.y<=pad.y+pad.h+180);
-      return apron || [...(airport.stands || []),...(airport.helipads || []).filter(pad=>/airport/.test(pad.id))].some(pad=>distance(entity,pad)<220 && Math.abs(this._base(entity)-finite(pad.elevation,this._ground(pad)))<3);
+      const nearHeight=pad=>Math.abs(this._base(entity)-finite(pad.elevation,this._ground(pad)))<3;
+      const apron=(airport.aprons || []).some(pad=>entity.x>=pad.x-180 && entity.x<=pad.x+pad.w+180 && entity.y>=pad.y-180 && entity.y<=pad.y+pad.h+180 && nearHeight(pad));
+      return apron || [...(airport.stands || []),...(airport.storageStands || []),...(airport.militaryStands || []),...(airport.helipads || [])].some(pad=>distance(entity,pad)<220 && nearHeight(pad));
     }
 
     _requireHangar() {
       if(this.hangarAvailable) return true;
-      this._toast('Stop at the airport apron or helipad to manage your hangar.'); return false;
+      this._toast('Stop at an airfield apron or helipad to manage your hangar.'); return false;
     }
 
     _syncHangar() {
@@ -1206,11 +1223,13 @@
       if(!record) return false;
       if(record.health<=0 || record.burning || record.exploded) { this._toast('Repair this saved aircraft before retrieving it.'); return false; }
       const deployed=this.aircraft.find(value=>value.hangarId===id) || this.aircraft.find(value=>value.aircraftType===record.aircraftType && !value.hangarId && !value.borrowed && !value.npc && value.grounded && value.visible!==false && value.health>0 && !value.burning);
-      const position=this.aviation.parkingPosition(record.aircraftType,deployed);
+      const airportId=this.aviation.airportAt(this.current) || 'civilian';
+      const position=this.aviation.parkingPosition(record.aircraftType,deployed,airportId);
       if(!position) { this._toast('The aircraft stand is crowded. Clear it and try again.'); return false; }
       if(this.player.vehicleId) { this.current.speed=this.current.vx=this.current.vy=0; this.current.throttle=0; }
-      const craft=deployed || this.aviation.spawn(record.aircraftType,position,{npc:false});
-      Object.assign(craft,record,{x:position.x,y:position.y,angle:finite(position.angle,0),id:craft.id,hangarId:record.id,visible:true,npc:false,phase:'parked',flightPhase:'parked',speed:0,vx:0,vy:0,vz:0,verticalVelocity:0,pitch:0,roll:0,throttle:0,grounded:true,burning:false,exploded:false,borrowed:true});
+      const craft=deployed || this.aviation.spawn(record.aircraftType,position,{npc:false,airportId,standId:position.id});
+      this.aviation._releaseRunway(craft);
+      Object.assign(craft,record,{x:position.x,y:position.y,angle:finite(position.angle,0),id:craft.id,hangarId:record.id,airportId,standId:position.id,home:{...position},visible:true,npc:false,phase:'parked',flightPhase:'parked',phaseTime:0,speed:0,vx:0,vy:0,vz:0,verticalVelocity:0,pitch:0,roll:0,throttle:0,grounded:true,upright:true,altitudeAGL:0,agl:0,burning:false,exploded:false,borrowed:true});
       craft.elevation=finite(position.elevation,this._ground(position));
       Object.assign(this.player,{vehicleId:craft.id,x:craft.x,y:craft.y,elevation:craft.elevation,angle:craft.angle,verticalVelocity:0,grounded:true,parachuting:false});
       this._toast(Aircraft.getModel(craft).name+' ready on the stand.','success'); this._sound('enter',{x:craft.x,y:craft.y,kind:'aircraft'}); return true;
@@ -1279,6 +1298,7 @@
       Object.assign(car, { modelId: VehicleStats.getModel(record).id, maxHealth: this.maxHealth,
         engineHealth: finite(record.engineHealth, 100), handlingHealth: finite(record.handlingHealth, 100),
         burning: false, fireTime: 0, exploded: false });
+      if (isMilitaryUtility(record)) car.militaryModel = 'utility-truck';
       delete car.explosionTime;
       car.speed = car.vx = car.vy = 0; car.traffic = false; car.borrowed = true;
       car.elevation=position.elevation; this.vehiclePhysics.reset(car);
@@ -1395,7 +1415,7 @@
       }
       this._projectiles(dt);
       this._propExplosions();
-      const finished = this.ragdolls.step(dt, { buildings: this.buildings, staticObjects: this.staticObjects, cars: this.cars, police: this.police, aircraft:(this.aircraft || []).filter(craft=>craft.visible!==false), railVehicles:this.railTraffic.colliders, size: SIZE, terrain:this.world?.terrain });
+      const finished = this.ragdolls.step(dt, { buildings: this.buildings, staticObjects: this.staticObjects, cars: this.cars, police: this.police, aircraft:(this.aircraft || []).filter(craft=>craft.visible!==false), railVehicles:this.railTraffic.colliders, size: SIZE, bounds:this._worldBounds(), terrain:this.world?.terrain });
       for (const body of finished) {
         const owner = body.owner;
         owner.stunned = 0; owner.ragdollGrace = 1.4;
@@ -1812,11 +1832,13 @@
       const cars = [];
       for (const record of records.slice(0, 30)) {
         if (cars.length >= 3) break;
+        const military = isMilitaryUtility(record);
         if (!record || typeof record !== 'object' || typeof record.id !== 'string' || !/^ride-[1-9][0-9]{0,3}$/.test(record.id) ||
-          cars.some(car => car.id === record.id) || !owns(CAR_TYPES, record.kind) || !COLORS.includes(record.color)) continue;
+          cars.some(car => car.id === record.id) || !owns(CAR_TYPES, record.kind) || !(COLORS.includes(record.color) || (military && MILITARY_COLORS.includes(record.color)))) continue;
         const health = clamp(finite(record.health, 0), 0, this.maxHealth);
         const legacyCondition = health / this.maxHealth * 100;
         cars.push({ id: record.id, kind: record.kind, modelId: VehicleStats.getModel(record).id,
+          ...(military ? { militaryModel: 'utility-truck' } : {}),
           color: record.color, health, maxHealth: this.maxHealth,
           engineHealth: clamp(finite(record.engineHealth, legacyCondition), 0, 100),
           handlingHealth: clamp(finite(record.handlingHealth, legacyCondition), 0, 100),

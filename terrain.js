@@ -2,6 +2,7 @@
 (function(root) {
   'use strict';
   const Data=root.MayhemHeightData||(typeof require==='function'?require('./height-data.js'):null);
+  const North=root.MayhemNorthHeightData||(typeof require==='function'?require('./north-height-data.js'):null);
   const Railway=root.MayhemRailway||(typeof require==='function'?require('./railway.js'):null);
   const UNIT=20, COUNT=257, MAX_ROAD_GRADE=.14;
   const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -12,24 +13,54 @@
     const t=length2?clamp(((x-a.x)*dx+(y-a.y)*dy)/length2,0,1):0;
     return {t,distance:Math.hypot(x-a.x-dx*t,y-a.y-dy*t)};
   }
+  function militaryEarthworks(pads,x,y,height,step=12000/(COUNT-1)) {
+    // Full neighboring triangles support rigid aircraft, including wheelsets
+    // just beyond the painted runway. Shoulders meet the untouched hills.
+    for(const pad of pads||[]) {
+      const support=pad.support??step*Math.SQRT2,blend=pad.blend??140;
+      const cx=pad.x+pad.w/2,cy=pad.y+pad.h/2,c=Math.cos(pad.angle||0),s=Math.sin(pad.angle||0);
+      const edge=Math.max(Math.abs((x-cx)*c+(y-cy)*s)-pad.w/2,Math.abs(-(x-cx)*s+(y-cy)*c)-pad.h/2);
+      if(edge>support+blend)continue;
+      const weight=edge<=support?1:1-smooth((edge-support)/blend);
+      height=mix(height,pad.elevation,weight);
+    }
+    return height;
+  }
+  function militarySupport(pads,x,y,step) {
+    let level=null;
+    for(const pad of pads||[]) {
+      const cx=pad.x+pad.w/2,cy=pad.y+pad.h/2,c=Math.cos(pad.angle||0),s=Math.sin(pad.angle||0);
+      const edge=Math.max(Math.abs((x-cx)*c+(y-cy)*s)-pad.w/2,Math.abs(-(x-cx)*s+(y-cy)*c)-pad.h/2);
+      if(edge<=(pad.support??step*Math.SQRT2))level=pad.elevation;
+    }
+    return level;
+  }
   function createTerrain(world) {
     const size=world.size||12000,mapWidth=world.mapWidth||12000,mapHeight=world.mapHeight||8000;
-    const count=COUNT,step=size/(count-1),heights=new Float32Array(count*count);
+    const referenceMapWidth=world.referenceMapWidth||12000,referenceMapHeight=world.referenceMapHeight||8000;
+    const count=COUNT,step=size/(count-1),minY=world.bounds?.minY??world.mapMinY??0,maxY=world.bounds?.maxY??(minY+mapHeight);
+    // Anchor every existing city vertex at the original multiple of step. The
+    // north extension adds rows rather than resampling the old city triangles.
+    const originX=0,originY=minY<0?Math.floor(minY/step)*step:0;
+    const rows=minY<0?Math.ceil((maxY-originY)/step)+1:count,heights=new Float32Array(count*rows);
+    const pads=world.militaryBase?.pads||[];
+    const waterRaw=(x,y)=>y<0&&North?North.isWaterRaw(x,y):Data.isWaterRaw(x,y,referenceMapWidth,referenceMapHeight);
     const rawHeight=(x,y)=>{
-      const original=Data.rawHeight(x,y,mapWidth,mapHeight);
-      return world.railway?Railway.earthworks(world.railway,x,y,original,Data.isWaterRaw(x,y,mapWidth,mapHeight)):original;
+      const original=y<0&&North?North.rawHeight(x,y):Data.rawHeight(x,y,referenceMapWidth,referenceMapHeight);
+      const graded=world.railway?Railway.earthworks(world.railway,x,y,original,waterRaw(x,y)):original;
+      return militaryEarthworks(pads,x,y,graded,step);
     };
-    for(let row=0;row<count;row++) for(let col=0;col<count;col++) heights[row*count+col]=rawHeight(col*step,row*step);
+    for(let row=0;row<rows;row++) for(let col=0;col<count;col++) heights[row*count+col]=rawHeight(originX+col*step,originY+row*step);
     function heightAt(x,y) {
-      const gx=clamp(x/step,0,count-1),gy=clamp(y/step,0,count-1);
-      const col=Math.min(count-2,Math.floor(gx)),row=Math.min(count-2,Math.floor(gy)),fx=gx-col,fy=gy-row;
+      const gx=clamp((x-originX)/step,0,count-1),gy=clamp((y-originY)/step,0,rows-1);
+      const col=Math.min(count-2,Math.floor(gx)),row=Math.min(rows-2,Math.floor(gy)),fx=gx-col,fy=gy-row;
       const a=heights[row*count+col],b=heights[row*count+col+1],c=heights[(row+1)*count+col],d=heights[(row+1)*count+col+1];
       // Cannon's Heightfield splits each cell on fx+fy=1, not bilinearly.
       return fx+fy<=1 ? a+(b-a)*fx+(c-a)*fy : d+(c-d)*(1-fx)+(b-d)*(1-fy);
     }
     function normalAt(x,y) {
-      const gx=clamp(x/step,0,count-1),gy=clamp(y/step,0,count-1);
-      const col=Math.min(count-2,Math.floor(gx)),row=Math.min(count-2,Math.floor(gy)),fx=gx-col,fy=gy-row;
+      const gx=clamp((x-originX)/step,0,count-1),gy=clamp((y-originY)/step,0,rows-1);
+      const col=Math.min(count-2,Math.floor(gx)),row=Math.min(rows-2,Math.floor(gy)),fx=gx-col,fy=gy-row;
       const a=heights[row*count+col],b=heights[row*count+col+1],c=heights[(row+1)*count+col],d=heights[(row+1)*count+col+1];
       const dx=(fx+fy<=1?b-a:d-c)/(step/UNIT),dz=(fx+fy<=1?c-a:d-b)/(step/UNIT),length=Math.hypot(dx,1,dz);
       return {x:-dx/length,y:1/length,z:-dz/length};
@@ -43,7 +74,7 @@
         const point=road.points[i],end=i===0?road.a:i===road.points.length-1?road.b:null;
         let vertex=end?junctions.get(end):null;
         if(!vertex) {
-          vertex={height:Math.max(.35,rawHeight(point.x,point.y)),points:[]};
+          vertex={height:Math.max(.35,rawHeight(point.x,point.y)),minimum:militarySupport(pads,point.x,point.y,step),points:[]};
           if(end) junctions.set(end,vertex);
         }
         vertex.points.push(point); point._terrainVertex=vertex;
@@ -57,7 +88,7 @@
           if(i===0||i===road.points.length-1)return point._terrainVertex.height;
           let sum=0,weight=0;
           for(let k=Math.max(0,i-8);k<=Math.min(road.points.length-1,i+8);k++) {const w=9-Math.abs(k-i);sum+=road.points[k]._terrainVertex.height*w;weight+=w;}
-          return sum/weight;
+          return Math.max(sum/weight,point._terrainVertex.minimum??-Infinity);
         });
         for(let i=1;i<road.points.length-1;i++)road.points[i]._terrainVertex.height=smoothed[i];
       }
@@ -80,10 +111,10 @@
     // Unlike iterative relaxation, this converges even on long fine-sampled
     // mountain roads and keeps exactly shared junction heights.
     while(heap.length){const item=pop();if(item.height>item.vertex.height+.000001)continue;
-      for(const edge of item.vertex.edges){const candidate=item.height+edge.cost;if(candidate<edge.vertex.height){edge.vertex.height=candidate;push({vertex:edge.vertex,height:candidate});}}}
+      for(const edge of item.vertex.edges){const candidate=Math.max(item.height+edge.cost,edge.vertex.minimum??-Infinity);if(candidate<edge.vertex.height){edge.vertex.height=candidate;push({vertex:edge.vertex,height:candidate});}}}
     // Raise a bounded road approach to clear the railway. Propagate to shared
     // junctions, including the adjoining river deck, so no ramp ends in a step.
-    const raised=[];
+    const raised=[...vertices].filter(vertex=>vertex.minimum!==null);
     for(const road of world.roads||[])for(const crossing of world.railway?.crossings.filter(c=>c.roadId===road.id)||[]) {
       const minimum=Railway.elevationAt(crossing.y)+(crossing.kind==='overpass'?crossing.clearance+.4:0);
       for(let i=0;i<road.points.length;i++)if(Math.abs(road.arc[i]-crossing.s)<=(crossing.deckHalfLength||150)+30) {
@@ -94,19 +125,20 @@
       const value=raised[i].height-edge.cost;if(value>edge.vertex.height+.00001){edge.vertex.height=value;raised.push(edge.vertex);}
     }
     for(const road of world.roads||[]) for(const point of road.points) {point.elevation=point._terrainVertex.height;delete point._terrainVertex;}
-    const gradeHeight=new Float32Array(heights.length),gradeDistance=new Float32Array(heights.length),gradeMax=new Float32Array(heights.length);
+    const gradeHeight=new Float32Array(heights.length),gradeDistance=new Float32Array(heights.length),gradeMax=new Float32Array(heights.length),militaryRoadCells=new Set();
     gradeDistance.fill(Infinity);
     function cells(minX,minY,maxX,maxY,visit) {
-      for(let row=Math.max(0,Math.floor(minY/step));row<=Math.min(count-1,Math.ceil(maxY/step));row++)
-        for(let col=Math.max(0,Math.floor(minX/step));col<=Math.min(count-1,Math.ceil(maxX/step));col++)visit(col*step,row*step,row*count+col);
+      for(let row=Math.max(0,Math.floor((minY-originY)/step));row<=Math.min(rows-1,Math.ceil((maxY-originY)/step));row++)
+        for(let col=Math.max(0,Math.floor((minX-originX)/step));col<=Math.min(count-1,Math.ceil((maxX-originX)/step));col++)visit(originX+col*step,originY+row*step,row*count+col);
     }
     for(const segment of segments) {
       const {a,b,road}=segment,inner=road.width/2+(world.sidewalkWidth||32)+step*.6,outer=inner+step*1.3;
       cells(Math.min(a.x,b.x)-outer,Math.min(a.y,b.y)-outer,Math.max(a.x,b.x)+outer,Math.max(a.y,b.y)+outer,(x,y,index)=>{
         const hit=closest(x,y,a,b);if(hit.distance>outer)return;
         // Only bridge approaches touch ground. The river keeps its seabed.
-        if(road.bridge&&Data.isWaterRaw(x,y,mapWidth,mapHeight))return;
+        if(road.bridge&&waterRaw(x,y))return;
         const weight=hit.distance<=inner?1:1-smooth((hit.distance-inner)/(outer-inner));
+        if(road.district==='military'&&weight>.98)militaryRoadCells.add(index);
         const normalizedDistance=hit.distance/inner;
         if(normalizedDistance<gradeDistance[index]) {
           gradeDistance[index]=normalizedDistance;gradeHeight[index]=mix(a.elevation,b.elevation,hit.t);gradeMax[index]=weight;
@@ -124,7 +156,7 @@
     while(gridHeap.length){const item=gridPop();if(item.height>heights[item.index]+.00001)continue;
       const col=item.index%count,row=Math.floor(item.index/count);
       for(const [dx,dy] of [[-1,0],[1,0],[0,-1],[0,1],[-1,1],[1,-1]]) {
-        if(col+dx<0||col+dx>=count||row+dy<0||row+dy>=count)continue;
+        if(col+dx<0||col+dx>=count||row+dy<0||row+dy>=rows)continue;
         const index=item.index+dy*count+dx;if(!active(index))continue;
         const candidate=item.height+step/UNIT*.13*Math.hypot(dx,dy);
         if(candidate<heights[index]){heights[index]=candidate;gridPush({index,height:heights[index]});}
@@ -181,7 +213,7 @@
         const localX=(x-cx)*c+(y-cy)*s,localY=-(x-cx)*s+(y-cy)*c;
         const edge=Math.max(Math.abs(localX)-hw,Math.abs(localY)-hh);
         if(edge>support+blend)return;
-        if(!Data.isWaterRaw(x,y,mapWidth,mapHeight))parkingShoulders.add(index);
+        if(!waterRaw(x,y))parkingShoulders.add(index);
         const weight=edge<=support?1:1-smooth((edge-support)/blend);
         heights[index]=mix(heights[index],base,weight);
       });
@@ -205,7 +237,7 @@
     while(gridHeap.length){const item=gridPop();if(item.height>heights[item.index]+.00001)continue;
       const col=item.index%count,row=Math.floor(item.index/count);
       for(const [dx,dy] of [[-1,0],[1,0],[0,-1],[0,1],[-1,1],[1,-1]]){
-        if(col+dx<0||col+dx>=count||row+dy<0||row+dy>=count)continue;
+        if(col+dx<0||col+dx>=count||row+dy<0||row+dy>=rows)continue;
         const index=item.index+dy*count+dx;if(!padGradeActive(index))continue;
         lowerPadGrade(index,item.height+step/UNIT*.13*Math.hypot(dx,dy));
       }
@@ -213,9 +245,9 @@
     // Restore the engineered formation after road/lot grading. This leaves the
     // original water mask untouched and keeps the track bed below road decks.
     const railRaised=[],railLocked=new Set();
-    if(world.railway)for(let row=0;row<count;row++)for(let col=0;col<count;col++) {
-      const x=col*step,y=row*step,index=row*count+col;
-      const previous=heights[index],graded=Railway.earthworks(world.railway,x,y,previous,Data.isWaterRaw(x,y,mapWidth,mapHeight),true);heights[index]=graded.height;
+    if(world.railway)for(let row=0;row<rows;row++)for(let col=0;col<count;col++) {
+      const x=originX+col*step,y=originY+row*step,index=row*count+col;
+      const previous=heights[index],graded=Railway.earthworks(world.railway,x,y,previous,waterRaw(x,y),true);heights[index]=graded.height;
       if(graded.locked)railLocked.add(index);
       if(heights[index]>previous+.00001)railRaised.push(index);
     }
@@ -224,9 +256,9 @@
     for(let i=0;i<railRaised.length;i++) {
       const index=railRaised[i],col=index%count,row=Math.floor(index/count);
       for(const [dx,dy] of [[-1,0],[1,0],[0,-1],[0,1],[-1,1],[1,-1]]) {
-        if(col+dx<0||col+dx>=count||row+dy<0||row+dy>=count)continue;
+        if(col+dx<0||col+dx>=count||row+dy<0||row+dy>=rows)continue;
         const neighbor=index+dy*count+dx;if(!padGradeActive(neighbor))continue;
-        const x=(col+dx)*step,y=(row+dy)*step;if(Data.isWaterRaw(x,y,mapWidth,mapHeight))continue;
+        const x=originX+(col+dx)*step,y=originY+(row+dy)*step;if(waterRaw(x,y))continue;
         const value=heights[index]-step/UNIT*.13*Math.hypot(dx,dy);
         if(heights[neighbor]<value-.00001){heights[neighbor]=value;railRaised.push(neighbor);}
       }
@@ -237,10 +269,74 @@
         const item=gridPop();if(item.height>heights[item.index]+.00001)continue;
         const col=item.index%count,row=Math.floor(item.index/count);
         for(const [dx,dy] of [[-1,0],[1,0],[0,-1],[0,1],[-1,1],[1,-1]]) {
-          if(col+dx<0||col+dx>=count||row+dy<0||row+dy>=count)continue;
+          if(col+dx<0||col+dx>=count||row+dy<0||row+dy>=rows)continue;
           const index=item.index+dy*count+dx;if(!padGradeActive(index)||railLocked.has(index))continue;
           lowerPadGrade(index,item.height+step/UNIT*.13*Math.hypot(dx,dy));
         }
+      }
+    }
+    // Reapply the engineered base surface after neighboring road and lot cuts.
+    // This also keeps runway shoulders level across both physical triangles.
+    const militaryRaised=[];
+    if(pads.length)for(let row=0;row<rows;row++)for(let col=0;col<count;col++) {
+      const index=row*count+col;
+      const before=heights[index];
+      heights[index]=militaryEarthworks(pads,originX+col*step,originY+row*step,before,step);
+      if(padGradeActive(index)&&(heights[index]>before+.00001||militarySupport(pads,originX+col*step,originY+row*step,step)!==null))militaryRaised.push(index);
+    }
+    // A fixed airfield formation is the upper constraint for its road cuts.
+    // Carry its fill out along graded approach cells instead of ending a road
+    // below the level pad and creating a short cliff under the entrance.
+    for(let i=0;i<militaryRaised.length;i++) {
+      const index=militaryRaised[i],col=index%count,row=Math.floor(index/count);
+      for(const [dx,dy] of [[-1,0],[1,0],[0,-1],[0,1],[-1,1],[1,-1]]) {
+        if(col+dx<0||col+dx>=count||row+dy<0||row+dy>=rows)continue;
+        const next=index+dy*count+dx;if(!padGradeActive(next))continue;
+        const level=heights[index]-step/UNIT*.13*Math.hypot(dx,dy);
+        if(heights[next]<level-.00001){heights[next]=level;militaryRaised.push(next);}
+      }
+    }
+    // The old city's axis bounds admit steeper diagonal road directions.
+    // Bound the new mountain corridor on both grid axes so either triangular
+    // face stays below 14% in every heading, without resculpting old streets.
+    const militaryGrade=.095,militaryFixed=new Map(),militaryFill=[];
+    for(const index of militaryRoadCells) {
+      const col=index%count,row=Math.floor(index/count),level=militarySupport(pads,originX+col*step,originY+row*step,step);
+      if(level!==null){militaryFixed.set(index,level);heights[index]=level;militaryFill.push(index);}
+      gridPush({index,height:heights[index]});
+    }
+    while(gridHeap.length) {
+      const item=gridPop();if(item.height>heights[item.index]+.00001)continue;
+      const col=item.index%count,row=Math.floor(item.index/count);
+      for(const [dx,dy] of [[-1,0],[1,0],[0,-1],[0,1],[-1,1],[1,-1]]) {
+        if(col+dx<0||col+dx>=count||row+dy<0||row+dy>=rows)continue;
+        const next=item.index+dy*count+dx;if(!militaryRoadCells.has(next))continue;
+        const level=Math.max(item.height+step/UNIT*militaryGrade*Math.hypot(dx,dy),militaryFixed.get(next)??-Infinity);
+        if(level<heights[next]-.00001){heights[next]=level;gridPush({index:next,height:level});}
+      }
+    }
+    for(let i=0;i<militaryFill.length;i++) {
+      const index=militaryFill[i],col=index%count,row=Math.floor(index/count);
+      for(const [dx,dy] of [[-1,0],[1,0],[0,-1],[0,1],[-1,1],[1,-1]]) {
+        if(col+dx<0||col+dx>=count||row+dy<0||row+dy>=rows)continue;
+        const next=index+dy*count+dx;if(!militaryRoadCells.has(next))continue;
+        const level=heights[index]-step/UNIT*militaryGrade*Math.hypot(dx,dy);
+        if(heights[next]<level-.00001){heights[next]=level;militaryFill.push(next);}
+      }
+    }
+    // A new mountain cut can share cells with Pine Ridge Road. Carry that cut
+    // along its existing graded neighbors instead of ending at the district
+    // boundary with a steep lip in the older street or a nearby parking bay.
+    for(const index of militaryRoadCells)gridPush({index,height:heights[index]});
+    while(gridHeap.length) {
+      const item=gridPop();if(item.height>heights[item.index]+.00001)continue;
+      const col=item.index%count,row=Math.floor(item.index/count);
+      for(const [dx,dy] of [[-1,0],[1,0],[0,-1],[0,1],[-1,1],[1,-1]]) {
+        if(col+dx<0||col+dx>=count||row+dy<0||row+dy>=rows)continue;
+        const next=item.index+dy*count+dx;if(!padGradeActive(next)||railLocked.has(next))continue;
+        const grade=militaryRoadCells.has(item.index)&&militaryRoadCells.has(next)?militaryGrade:.13;
+        const minimum=militarySupport(pads,originX+(col+dx)*step,originY+(row+dy)*step,step)??-Infinity;
+        lowerPadGrade(next,Math.max(minimum,item.height+step/UNIT*grade*Math.hypot(dx,dy)));
       }
     }
     // Recheck after all neighboring pads have blended. Solid foundations cover
@@ -292,9 +388,10 @@
       return road.bridge||Railway.isOverpassSegment(road,i+1)?mix(road.points[i].elevation,road.points[i+1].elevation,t)
         :heightAt(mix(road.points[i].x,road.points[i+1].x,t),mix(road.points[i].y,road.points[i+1].y,t));
     }
-    const terrain={size,mapWidth,mapHeight,count,step,heights,waterLevel:0,sourceBitDepth:Data.sourceBitDepth,sourceSha256:Data.sourceSha256,
+    const terrain={size,mapWidth,mapHeight,referenceMapWidth,referenceMapHeight,count,rows,step,originX,originY,minY,maxY,heights,waterLevel:0,sourceBitDepth:Data.sourceBitDepth,sourceSha256:Data.sourceSha256,
+      northSourceSha256:North?.sourceSha256||null,
       heightAt,surfaceHeight,normalAt,surfaceNormalAt,roadHeight,rawHeight,
-      isWater:(x,y)=>Data.isWaterRaw(x,y,mapWidth,mapHeight)&&heightAt(x,y)<.05};
+      isWater:(x,y)=>waterRaw(x,y)&&heightAt(x,y)<.05};
     for(const object of world.staticObjects||[])object.elevation=surfaceHeight(object.x,object.y);
     for(const service of world.services||[])service.elevation=surfaceHeight(service.x,service.y);
     for(const spawn of world.vehicleSpawns||[])spawn.elevation=surfaceHeight(spawn.x,spawn.y);
@@ -302,6 +399,6 @@
     for(const entity of Object.values(world.start||{}))if(entity&&Number.isFinite(entity.x))entity.elevation=surfaceHeight(entity.x,entity.y);
     return terrain;
   }
-  const api={createTerrain,COUNT,MAX_ROAD_GRADE};root.MayhemTerrain=api;
+  const api={createTerrain,militaryEarthworks,COUNT,MAX_ROAD_GRADE};root.MayhemTerrain=api;
   if(typeof module!=='undefined'&&module.exports)module.exports=api;
 })(globalThis);

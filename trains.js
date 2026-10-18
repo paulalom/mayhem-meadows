@@ -4,10 +4,10 @@
   const Rail=root.MayhemRailway||(typeof require==='function'?require('./railway.js'):null);
   const clamp=(v,a,b)=>Math.max(a,Math.min(b,v)),distance=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
   const SCHEDULE=Object.freeze([
-    {id:'local-1',name:'Northport Local',destination:'Central Station · Platform 1',track:'platform-1',interval:360,offset:8,dwell:18,kind:'passenger'},
-    {id:'local-2',name:'Northport Local',destination:'Central Station · Platform 2',track:'platform-2',interval:360,offset:188,dwell:18,kind:'passenger'},
-    {id:'dock-freight',name:'Docklands Shuttle',destination:'Docklands freight terminal',track:'freight-main',interval:720,offset:270,dwell:28,kind:'freight'},
-    {id:'yard-freight',name:'Container Shuttle',destination:'Container yard siding',track:'freight-siding',interval:720,offset:630,dwell:28,kind:'freight'}
+    {id:'local-1',name:'Northport Local',destination:'Central Station · Platform 1',track:'platform-1',interval:600,offset:8,dwell:18,kind:'passenger'},
+    {id:'local-2',name:'Northport Local',destination:'Central Station · Platform 2',track:'platform-2',interval:600,offset:308,dwell:18,kind:'passenger'},
+    {id:'dock-freight',name:'Docklands Shuttle',destination:'Docklands freight terminal',track:'freight-main',interval:1200,offset:230,dwell:28,kind:'freight'},
+    {id:'yard-freight',name:'Container Shuttle',destination:'Container yard siding',track:'freight-siding',interval:1200,offset:830,dwell:28,kind:'freight'}
   ]);
   const MODELS=Object.freeze({passenger:{length:170,width:45.1,height:2.71},cab:{length:120,width:45.1,height:2.71},container:{length:140,width:44,height:2.55}});
   function sample(line,s){
@@ -109,7 +109,8 @@
     }
     _pose(train,dt){const reverse=train.leg==='outbound',order=reverse?train.cars.slice().reverse():train.cars;let offset=0;
       for(const car of order){const center=train.front-offset-car.railModel.length/2,a=sample(train.route,center-car.railModel.length*.32),b=sample(train.route,center+car.railModel.length*.32),p=sample(train.route,center),field=this.game.world.terrain;
-        const ground=q=>field.heightAt(q.x,Math.max(0,q.y)),ha=ground(a),hb=ground(b),x=car.x,y=car.y,h=car.elevation;car.x=p.x;car.y=p.y;car.angle=Math.atan2(b.y-a.y,b.x-a.x)+(reverse?Math.PI:0);car.pitch=Math.atan2(hb-ha,car.railModel.length*.64/20)*(reverse?-1:1);car.elevation=(ha+hb)/2+.19;car.speed=train.speed;car.visible=car.active=p.y>-car.railModel.length/2;car.vx=car.visible&&car._posed?(car.x-x)/dt:0;car.vy=car.visible&&car._posed?(car.y-y)/dt:0;car.verticalVelocity=car.visible&&car._posed?(car.elevation-h)/dt:0;car._posed=true;offset+=car.railModel.length+12;
+        const minY=Number.isFinite(field.minY)?field.minY:0,portalY=Number.isFinite(this.layout.portalY)?this.layout.portalY:0;
+        const ground=q=>field.heightAt(q.x,Math.max(minY,q.y)),ha=ground(a),hb=ground(b),x=car.x,y=car.y,h=car.elevation;car.x=p.x;car.y=p.y;car.angle=Math.atan2(b.y-a.y,b.x-a.x)+(reverse?Math.PI:0);car.pitch=Math.atan2(hb-ha,car.railModel.length*.64/20)*(reverse?-1:1);car.elevation=(ha+hb)/2+.19;car.speed=train.speed;car.visible=car.active=p.y>portalY-car.railModel.length/2;car.vx=car.visible&&car._posed?(car.x-x)/dt:0;car.vy=car.visible&&car._posed?(car.y-y)/dt:0;car.verticalVelocity=car.visible&&car._posed?(car.elevation-h)/dt:0;car._posed=true;offset+=car.railModel.length+12;
       }
     }
     roadSpeedLimit(car,heading,desired){let limit=desired;for(const gate of this.gates){if(gate.state==='open'||gate.state==='opening')continue;for(const stop of gate.stopLines){const angle=stop.angle+(stop.end===1?Math.PI:0),c=Math.cos(angle),s=Math.sin(angle),dx=stop.x-car.x,dy=stop.y-car.y,ahead=dx*c+dy*s,across=Math.abs(-dx*s+dy*c),direction=Math.cos(heading)*c+Math.sin(heading)*s;

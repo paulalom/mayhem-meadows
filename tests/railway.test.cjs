@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
-const World=require('../world.js'),Railway=require('../railway.js'),Data=require('../height-data.js');
+const World=require('../world.js'),Railway=require('../railway.js'),Data=require('../height-data.js'),North=require('../north-height-data.js');
 const {decode,generate}=require('../tools/build-railway-heightmap.cjs');
 const world=World.createWorld(),railway=world.railway;
 function distanceToTrack(p,line) {
@@ -12,7 +12,7 @@ function distanceToTrack(p,line) {
   return best;
 }
 test('cleaned heightmap preserves source water and all pixels outside the earthworks',()=>{
-  const source=decode(fs.readFileSync(path.join(__dirname,'../assets/reference-heightmap.png'))),built=generate(),clean=decode(built.image);
+  const source=decode(fs.readFileSync(path.join(__dirname,'../assets/reference-heightmap.png'))),built=generate(),clean=decode(built.image),cityRailway=Railway.createRailway();
   assert.equal(source.width,clean.width);assert.equal(source.height,clean.height);
   assert.ok(built.image.equals(fs.readFileSync(path.join(__dirname,'../assets/railway-heightmap.png'))));
   let changed=0;
@@ -21,7 +21,7 @@ test('cleaned heightmap preserves source water and all pixels outside the earthw
     assert.equal(value<=8,original<=8,'the coastline and channels are unchanged');
     if(value!==original) {
       const h=.35+32*Math.pow((original-8)/247,2);
-      assert.notEqual(Railway.earthworks(railway,x/(source.width-1)*12000,y/(source.height-1)*8000,h),h,'only engineered earthworks change');changed++;
+      assert.notEqual(Railway.earthworks(cityRailway,x/(source.width-1)*12000,y/(source.height-1)*8000,h),h,'only engineered earthworks change');changed++;
     } else for(let c=0;c<3;c++)assert.equal(clean.pixels[index+c],source.pixels[index+c]);
   }
   assert.ok(changed>20000&&changed<100000);
@@ -30,7 +30,7 @@ test('rail corridors stay dry, clear occupied lots and have a gentle physical pr
   let grade=0;
   for(const line of railway.tracks)for(let i=0;i<line.points.length;i++) {
     const p=line.points[i],height=world.terrain.heightAt(p.x,p.y);
-    assert.equal(Data.isWaterRaw(p.x,p.y),false,line.id+' stays on the original land');
+    assert.equal(p.y<0?North.isWaterRaw(p.x,p.y):Data.isWaterRaw(p.x,p.y),false,line.id+' stays on dry source land');
     if(i){const previous=line.points[i-1],span=Math.hypot(p.x-previous.x,p.y-previous.y)/20;if(span>.01)grade=Math.max(grade,Math.abs(height-world.terrain.heightAt(previous.x,previous.y))/span);}
   }
   assert.ok(grade<.04,'arcade railway formation remains below four percent');
