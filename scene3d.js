@@ -83,6 +83,7 @@
       this._lights();
       this._town();
       this._bakeStatics();
+      this._freezeStaticWorld();
       this._player = this._person('#7b64df', true);
       this.scene.add(this._player.group);
       for (const resident of game.peds) {
@@ -117,6 +118,7 @@
         const material = options.unlit
           ? new T.MeshBasicMaterial({ color, transparent: Boolean(options.opacity), opacity: options.opacity ?? 1, depthWrite: options.depthWrite ?? true })
           : new T.MeshLambertMaterial({ color, flatShading: true, transparent: Boolean(options.opacity), opacity: options.opacity ?? 1 });
+        material.userData.staticPaletteColor = !options.unlit && !options.opacity;
         this._materials.set(key, material);
       }
       return this._materials.get(key);
@@ -150,17 +152,23 @@
         this._destructibleParts.get(key).parts.push({ object: this._activePropObject, matrix: object.matrix.clone() });
         return;
       }
-      const key = material.uuid + ':' + shadow;
-      if (!this._staticParts.has(key)) this._staticParts.set(key, { material, shadow, parts: [] });
-      this._staticParts.get(key).parts.push({ geometry, matrix: object.matrix.clone() });
+      // Opaque town paint shares one shader; keep its exact linear colors in
+      // vertex attributes instead of issuing a draw for each paint swatch.
+      const colored = material.userData.staticPaletteColor && !material.transparent && material.opacity === 1;
+      const key = (colored ? 'static-colors' : material.uuid) + ':' + shadow;
+      if (!this._staticParts.has(key)) {
+        if (colored && !this._materials.has('static-colors')) this._materials.set('static-colors', new T.MeshLambertMaterial({ color: '#ffffff', flatShading: true, vertexColors: true }));
+        this._staticParts.set(key, { material: colored ? this._materials.get('static-colors') : material, shadow, colored, parts: [] });
+      }
+      this._staticParts.get(key).parts.push({ geometry, matrix: object.matrix.clone(), color: colored ? material.color : null });
     }
 
     _staticBox(color, x, y, z, sx, sy, sz, shadow = true) {
       this._static(this._cube, typeof color === 'string' ? this._material(color) : color, x, y, z, sx, sy, sz, null, shadow);
     }
 
-    // The decorative town is merged by material, keeping hundreds of windows and
-    // road markings inexpensive without requiring an extra geometry library.
+    // Compatible opaque paint shares a vertex-colored batch. Transparent and
+    // unlit materials, and separate shadow behavior, retain their own batches.
     _bakeStatics() {
       const T = this.T;
       const vector = new T.Vector3(), normal = new T.Vector3(), normalMatrix = new T.Matrix3();
@@ -168,6 +176,7 @@
         let vertices = 0, indices = 0;
         for (const part of batch.parts) { vertices += part.geometry.attributes.position.count; indices += part.geometry.index ? part.geometry.index.count : part.geometry.attributes.position.count; }
         const positions = new Float32Array(vertices * 3), normals = new Float32Array(vertices * 3);
+        const colors = batch.colored ? new Float32Array(vertices * 3) : null;
         const index = vertices > 65535 ? new Uint32Array(indices) : new Uint16Array(indices);
         let vertexOffset = 0, indexOffset = 0;
         for (const part of batch.parts) {
@@ -179,6 +188,7 @@
             const at = (vertexOffset + i) * 3;
             positions[at] = vector.x; positions[at + 1] = vector.y; positions[at + 2] = vector.z;
             normals[at] = normal.x; normals[at + 1] = normal.y; normals[at + 2] = normal.z;
+            if (colors) { colors[at] = part.color.r; colors[at + 1] = part.color.g; colors[at + 2] = part.color.b; }
           }
           const sourceIndex = part.geometry.index;
           const count = sourceIndex ? sourceIndex.count : p.count;
@@ -188,6 +198,7 @@
         const geometry = this._geometry(new T.BufferGeometry());
         geometry.setAttribute('position', new T.BufferAttribute(positions, 3));
         geometry.setAttribute('normal', new T.BufferAttribute(normals, 3));
+        if (colors) geometry.setAttribute('color', new T.BufferAttribute(colors, 3));
         geometry.setIndex(new T.BufferAttribute(index, 1));
         geometry.computeBoundingSphere();
         const mesh = new T.Mesh(geometry, batch.material);
@@ -212,6 +223,17 @@
       }
       this._destructibleParts?.clear();
       this._syncDestructibleProps();
+    }
+
+    _freezeStaticWorld() {
+      // Only the town exists at this point: people, cars, aircraft, trains and
+      // mission effects are added afterward. Instance-buffer edits and prop
+      // visibility still work; moving lights keep automatic transforms.
+      this.scene.updateMatrixWorld(true);
+      this.scene.traverse(object => {
+        if (object.isLight || object === this._sun.target) return;
+        object.matrixAutoUpdate = false;
+      });
     }
 
     _propRenderState(object) {
@@ -1222,6 +1244,9 @@
       if (!this._materials.has('vertex-colors')) this._materials.set('vertex-colors', new T.MeshLambertMaterial({ color: '#ffffff', flatShading: true, vertexColors: true }));
       const mesh = new T.Mesh(geometry, this._materials.get('vertex-colors'));
       mesh.castShadow = true; mesh.receiveShadow = true;
+      // All piece transforms were baked into the vertices; animation belongs
+      // to the containing limb, wheel, gate arm or vehicle group.
+      mesh.matrixAutoUpdate = false;
       group.add(mesh);
       return { mesh, ranges };
     }
@@ -1854,7 +1879,21 @@
       this._desiredCamera.set(mix(x, endX, safeFraction), mix(targetY, endY, safeFraction), mix(z, endZ, safeFraction));
       const snap = !this._hasCamera || Math.hypot(this.camera.position.x - x, this.camera.position.z - z) > Math.max(18, distance * 2);
       if (snap) this.camera.position.copy(this._desiredCamera);
-      else this.camera.position.lerp(this._desiredCamera, 1 - Math.exp(-dt * (obstructed ? 18 : 9)));
+      else {
+        const smoothing = 1 - Math.exp(-dt * (obstructed ? 18 : 9));
+        this.camera.position.lerp(this._desiredCamera, smoothing);
+        if (!obstructed) {
+          // Cartesian orbit smoothing cuts across the orbit's circle, pulling
+          // the view toward the player during a fast turn. Smooth boom length
+          // separately, then retain the existing collision sweep below.
+          const desiredLength = this._desiredCamera.distanceTo(this._cameraTarget);
+          const length = mix(this._cameraInfo.distance ?? desiredLength, desiredLength, smoothing);
+          const offset = this._cameraBoomOffset ??= new this.T.Vector3();
+          offset.copy(this.camera.position).sub(this._cameraTarget);
+          if (offset.lengthSq() > .000001) this.camera.position.copy(this._cameraTarget).add(offset.setLength(length));
+          else this.camera.position.copy(this._desiredCamera);
+        }
+      }
       // Position interpolation can cut a corner. Recheck the interpolated boom
       // and clamp it immediately, so no frame renders from inside a building.
       const actualFraction = this._boomFraction(x, targetY, z, this.camera.position.x, this.camera.position.y, this.camera.position.z);

@@ -318,6 +318,8 @@
 
     _circlePart(entity, radius, part) {
       const box = part.box, dx = entity.x - box.x, dy = entity.y - box.y;
+      const reach = box.half[0] + box.half[1] + radius;
+      if (Math.abs(dx) > reach || Math.abs(dy) > reach) return null;
       let u = dx * box.axes[0].x + dy * box.axes[0].y, v = dx * box.axes[1].x + dy * box.axes[1].y;
       if (part.cylinder) {
         const d = Math.hypot(u, v), depth = radius + box.half[0] - d;
@@ -372,9 +374,10 @@
         }
         for (const other of people) {
           if (other === entity) continue;
-          if (!this._heightOverlap(entity, other)) continue;
           const otherRadius = other === this.player ? PLAYER_RADIUS : NPC_RADIUS;
-          const dx = entity.x - other.x, dy = entity.y - other.y, d = Math.hypot(dx, dy), depth = radius + otherRadius - d;
+          const dx = entity.x - other.x, dy = entity.y - other.y, reach = radius + otherRadius;
+          if (dx * dx + dy * dy >= reach * reach || !this._heightOverlap(entity, other)) continue;
+          const d = Math.hypot(dx, dy), depth = reach - d;
           if (depth <= 0) continue;
           const nx = d > 0.001 ? dx / d : Math.cos(entity.angle + Math.PI / 2), ny = d > 0.001 ? dy / d : Math.sin(entity.angle + Math.PI / 2);
           entity.x += nx * (depth + 0.001); entity.y += ny * (depth + 0.001); changed = collision = true;

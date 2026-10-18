@@ -67,6 +67,21 @@ function place(scene, point, heading) {
   if (scene.game.player.vehicleId) Object.assign(scene.game.player, { x: point.x, y: point.y, elevation, angle: heading });
 }
 
+test('fast unobstructed camera orbits keep a stable boom length at varied frame intervals', () => {
+  const scene = makeScene();
+  scene._buildingVolumes = []; scene._surfaceY = () => 0;
+  place(scene, { ...OPEN_POINT, elevation: 0 }, 0);
+  frames(scene, 1);
+  const distance = scene.cameraInfo.distance;
+  const intervals = [1 / 120, 1 / 60, 1 / 30, .05, 1 / 60];
+  for (let i = 0; i < 180; i++) {
+    scene.orbit(i < 90 ? 120 : -120, 0);
+    frames(scene, 1, intervals[i % intervals.length]);
+    assert.equal(scene.cameraInfo.obstructed, false);
+    assert.ok(Math.abs(scene.cameraInfo.distance - distance) < 1e-8, 'fast turning must not pull the camera inward');
+  }
+});
+
 test('initial on-foot and driving cameras have comfortable viewing distance through entry and exit', () => {
   const scene = makeScene();
   frames(scene, 1);

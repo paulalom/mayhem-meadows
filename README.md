@@ -147,6 +147,8 @@ For camera stutter, use **http://127.0.0.1:4173/?profile=1&camera=1**. This ligh
 
 Run `node tools/performance-check.cjs before` for a deterministic ten-second simulation benchmark covering driving, recovery, dismounting, and a ragdoll tumble. Repeat with another label after making changes; reports include timings, collision-pair counts, and simulation snapshots for comparison. `MAYHEM_BENCHMARK_ROOT` can point at another complete checkout for a baseline run. Keep other CPU-heavy work stopped while measuring; timing results are diagnostic rather than test thresholds.
 
+With `npm start` running, use `node tools/render-performance-check.cjs firefox before` (or `chrome`) for repeatable headless camera turns in three scenes. It requires Playwright with the selected browser installed and saves CPU timings, draw counts, camera distances, and screenshots under **playtest-evidence/performance/**. Repeat with an `after` label to compare changes. `GAME_URL` selects another local server; `RENDER_BENCH_SCENE` and `RENDER_BENCH_TRAINS` can serve saved baseline source files. This isolates rendering from simulation; check the reported browser version and GPU before comparing it with an interactive recording.
+
 If you change or upgrade the engine, recreate the locally bundled rendering and physics engines with:
 
 ```sh
