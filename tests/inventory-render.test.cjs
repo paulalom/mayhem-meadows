@@ -230,7 +230,7 @@ test('the playable map renders its shared hills, coast and actual supported rive
   assert.equal(water.position.y, 0);
   assert.ok(scene.worldInfo.landscape.waterGlints > 100);
   scene._bridges();
-  assert.equal(scene.worldInfo.bridges.roads, scene.game.roads.filter(road => road.bridge).length);
+  assert.equal(scene.worldInfo.bridges.roads, scene.game.roads.filter(road => road.bridge || road.railOverpasses?.length).length);
   assert.ok(scene._bridgePiers.count > 0);
   scene.reducedMotion=true;scene._landscapeStep(0);
   const calm=Array.from(scene._riverFlow.instanceMatrix.array);scene._landscapeStep(20);

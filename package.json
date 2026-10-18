@@ -8,6 +8,7 @@
     "build": "node tools/build-site.cjs",
     "vendor": "node tools/vendor.cjs",
     "audio-assets": "node tools/build-audio-assets.cjs",
+    "railway-heightmap": "node tools/build-railway-heightmap.cjs",
     "test": "node --test tests/*.test.cjs",
     "check": "node tools/build-audio-assets.cjs --check && node --check assets/audio/samples.js && node --check height-data.js && node --check terrain.js && node --check world.js && node --check physics.js && node --check vehicle-stats.js && node --check vehicle-physics.js && node --check core.js && node --check scene3d.js && node --check audio.js && node --check game.js && node --test tests/*.test.cjs"
   },

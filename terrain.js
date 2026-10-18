@@ -2,6 +2,7 @@
 (function(root) {
   'use strict';
   const Data=root.MayhemHeightData||(typeof require==='function'?require('./height-data.js'):null);
+  const Railway=root.MayhemRailway||(typeof require==='function'?require('./railway.js'):null);
   const UNIT=20, COUNT=257, MAX_ROAD_GRADE=.14;
   const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
   const mix=(a,b,t)=>a+(b-a)*t;
@@ -14,7 +15,10 @@
   function createTerrain(world) {
     const size=world.size||12000,mapWidth=world.mapWidth||12000,mapHeight=world.mapHeight||8000;
     const count=COUNT,step=size/(count-1),heights=new Float32Array(count*count);
-    const rawHeight=(x,y)=>Data.rawHeight(x,y,mapWidth,mapHeight);
+    const rawHeight=(x,y)=>{
+      const original=Data.rawHeight(x,y,mapWidth,mapHeight);
+      return world.railway?Railway.earthworks(world.railway,x,y,original,Data.isWaterRaw(x,y,mapWidth,mapHeight)):original;
+    };
     for(let row=0;row<count;row++) for(let col=0;col<count;col++) heights[row*count+col]=rawHeight(col*step,row*step);
     function heightAt(x,y) {
       const gx=clamp(x/step,0,count-1),gy=clamp(y/step,0,count-1);
@@ -59,7 +63,7 @@
       }
       for(let i=1;i<road.points.length;i++) {
         const a=road.points[i-1],b=road.points[i],segment={a,b,road,length:Math.hypot(b.x-a.x,b.y-a.y)};
-        segments.push(segment);if(road.bridge)bridgeSegments.push(segment);
+        segments.push(segment);if(road.bridge||Railway.isOverpassSegment(road,i))bridgeSegments.push(segment);
       }
     }
     const vertices=new Set(),heap=[];
@@ -77,6 +81,18 @@
     // mountain roads and keeps exactly shared junction heights.
     while(heap.length){const item=pop();if(item.height>item.vertex.height+.000001)continue;
       for(const edge of item.vertex.edges){const candidate=item.height+edge.cost;if(candidate<edge.vertex.height){edge.vertex.height=candidate;push({vertex:edge.vertex,height:candidate});}}}
+    // Raise a bounded road approach to clear the railway. Propagate to shared
+    // junctions, including the adjoining river deck, so no ramp ends in a step.
+    const raised=[];
+    for(const road of world.roads||[])for(const crossing of world.railway?.crossings.filter(c=>c.roadId===road.id)||[]) {
+      const minimum=Railway.elevationAt(crossing.y)+(crossing.kind==='overpass'?crossing.clearance+.4:0);
+      for(let i=0;i<road.points.length;i++)if(Math.abs(road.arc[i]-crossing.s)<=(crossing.deckHalfLength||150)+30) {
+        const vertex=road.points[i]._terrainVertex;if(vertex.height<minimum){vertex.height=minimum;raised.push(vertex);}
+      }
+    }
+    for(let i=0;i<raised.length;i++)for(const edge of raised[i].edges) {
+      const value=raised[i].height-edge.cost;if(value>edge.vertex.height+.00001){edge.vertex.height=value;raised.push(edge.vertex);}
+    }
     for(const road of world.roads||[]) for(const point of road.points) {point.elevation=point._terrainVertex.height;delete point._terrainVertex;}
     const gradeHeight=new Float32Array(heights.length),gradeDistance=new Float32Array(heights.length),gradeMax=new Float32Array(heights.length);
     gradeDistance.fill(Infinity);
@@ -187,6 +203,39 @@
         lowerPadGrade(index,item.height+step/UNIT*.13*Math.hypot(dx,dy));
       }
     }
+    // Restore the engineered formation after road/lot grading. This leaves the
+    // original water mask untouched and keeps the track bed below road decks.
+    const railRaised=[],railLocked=new Set();
+    if(world.railway)for(let row=0;row<count;row++)for(let col=0;col<count;col++) {
+      const x=col*step,y=row*step,index=row*count+col;
+      const previous=heights[index],graded=Railway.earthworks(world.railway,x,y,previous,Data.isWaterRaw(x,y,mapWidth,mapHeight),true);heights[index]=graded.height;
+      if(graded.locked)railLocked.add(index);
+      if(heights[index]>previous+.00001)railRaised.push(index);
+    }
+    // A formation alongside a street can raise a shared triangle. Feather that
+    // fill up the street as well, retaining its physical grade at the join.
+    for(let i=0;i<railRaised.length;i++) {
+      const index=railRaised[i],col=index%count,row=Math.floor(index/count);
+      for(const [dx,dy] of [[-1,0],[1,0],[0,-1],[0,1],[-1,1],[1,-1]]) {
+        if(col+dx<0||col+dx>=count||row+dy<0||row+dy>=count)continue;
+        const neighbor=index+dy*count+dx;if(!padGradeActive(neighbor))continue;
+        const x=(col+dx)*step,y=(row+dy)*step;if(Data.isWaterRaw(x,y,mapWidth,mapHeight))continue;
+        const value=heights[index]-step/UNIT*.13*Math.hypot(dx,dy);
+        if(heights[neighbor]<value-.00001){heights[neighbor]=value;railRaised.push(neighbor);}
+      }
+    }
+    if(world.railway) {
+      for(let index=0;index<heights.length;index++)if(padGradeActive(index))gridPush({index,height:heights[index]});
+      while(gridHeap.length) {
+        const item=gridPop();if(item.height>heights[item.index]+.00001)continue;
+        const col=item.index%count,row=Math.floor(item.index/count);
+        for(const [dx,dy] of [[-1,0],[1,0],[0,-1],[0,1],[-1,1],[1,-1]]) {
+          if(col+dx<0||col+dx>=count||row+dy<0||row+dy>=count)continue;
+          const index=item.index+dy*count+dx;if(!padGradeActive(index)||railLocked.has(index))continue;
+          lowerPadGrade(index,item.height+step/UNIT*.13*Math.hypot(dx,dy));
+        }
+      }
+    }
     // Recheck after all neighboring pads have blended. Solid foundations cover
     // the full footprint down to its lowest ground point instead of leaving
     // accessible gaps beneath level walls on slopes.
@@ -196,14 +245,14 @@
       for(let i=0;i<=4;i++)for(let j=0;j<=4;j++){const x=-hw+building.w*i/4,y=-hh+building.h*j/4;samples.push(heightAt(cx+x*c-y*s,cy+x*s+y*c));}
       building.elevation=Math.max(...samples);building.foundationBottom=Math.min(...samples)-.12;
     }
-    for(const road of world.roads||[])if(!road.bridge)for(const point of road.points)point.elevation=heightAt(point.x,point.y);
+    for(const road of world.roads||[])if(!road.bridge)for(let i=0;i<road.points.length;i++)if(!Railway.isOverpassSegment(road,Math.max(1,i))&&!Railway.isOverpassSegment(road,Math.min(road.points.length-1,i+1)))road.points[i].elevation=heightAt(road.points[i].x,road.points[i].y);
     function bridgeAt(x,y) {
       let best=null;
       for(const segment of bridgeSegments) {
         const hit=closest(x,y,segment.a,segment.b);
-        if(hit.distance>segment.road.width/2+(world.sidewalkWidth||32))continue;
+        if(hit.distance>segment.road.width/2+(world.sidewalkWidth||32)+2)continue;
         const height=mix(segment.a.elevation,segment.b.elevation,hit.t);
-        if(!best||height>best.height)best={height,segment};
+        if(!best||hit.distance<best.distance-.000001||Math.abs(hit.distance-best.distance)<.000001&&height>best.height)best={height,segment,distance:hit.distance};
       }
       return best;
     }
@@ -218,7 +267,7 @@
       s=clamp(s,0,road.length);let i=0;
       while(i<road.arc.length-2&&road.arc[i+1]<s)i++;
       const span=road.arc[i+1]-road.arc[i],t=span?(s-road.arc[i])/span:0;
-      return road.bridge?mix(road.points[i].elevation,road.points[i+1].elevation,t)
+      return road.bridge||Railway.isOverpassSegment(road,i+1)?mix(road.points[i].elevation,road.points[i+1].elevation,t)
         :heightAt(mix(road.points[i].x,road.points[i+1].x,t),mix(road.points[i].y,road.points[i+1].y,t));
     }
     const terrain={size,mapWidth,mapHeight,count,step,heights,waterLevel:0,sourceBitDepth:Data.sourceBitDepth,sourceSha256:Data.sourceSha256,

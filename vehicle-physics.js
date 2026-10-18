@@ -170,7 +170,7 @@
       for (const body of this.bridgeBodies || []) this.world.removeBody(body);
       this.bridgeBodies = [];
       const roads = this.game.roads || this.game.world?.roads || NO_ROADS;
-      if (this._terrain()) for (const road of roads) if (road.bridge) {
+      if (this._terrain()) for (const road of roads) if (road.bridge || road.railOverpasses?.length) {
         for (let i = 1; i < road.points.length; i++) {
           const a = road.points[i - 1], b = road.points[i];
           const dx = (b.x - a.x) / SCALE, dz = (b.y - a.y) / SCALE;

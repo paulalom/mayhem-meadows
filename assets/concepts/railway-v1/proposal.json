@@ -1,8 +1,15 @@
 {
   "title": "Central Station and Docklands railway proposal",
   "created": "2026-10-18",
-  "status": "preview-only-awaiting-user-review",
-  "appliedToGame": false,
+  "status": "approved-and-implemented",
+  "appliedToGame": true,
+  "implementation": {
+    "geometry": "../../../railway.js",
+    "renderer": "../../../railway-render.js",
+    "cleanedHeightmap": "../../railway-heightmap.png",
+    "heightmapValidation": "../../railway-heightmap.json",
+    "note": "The original imagegen drafts remain design history. Runtime uses exact shared numeric earthworks, the existing playable road graph, two road approach overpasses, gated local crossings, solid platforms and a depot-roof landing pad. Moving train service is not part of this infrastructure update."
+  },
   "files": {
     "cityMap": "city-map.png",
     "heightmap": "heightmap-draft.png",

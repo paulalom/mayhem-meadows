@@ -555,6 +555,12 @@
       mini.stroke();
     }
     mini.fillStyle = '#b3b7a0';
+    mini.strokeStyle = '#dfc792';mini.lineWidth = 1.3;mini.setLineDash([2,1]);
+    for(const track of game.world.railway?.tracks||[]) {
+      mini.beginPath();track.points.forEach((point,i)=>i?mini.lineTo(point.x*scale,point.y*scale):mini.moveTo(point.x*scale,point.y*scale));mini.stroke();
+    }
+    mini.setLineDash([]);
+
     for (const building of game.buildings) {
       mini.save(); mini.translate((building.x + building.w / 2) * scale, (building.y + building.h / 2) * scale);
       mini.rotate(building.angle || 0);

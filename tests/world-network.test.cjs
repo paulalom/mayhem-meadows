@@ -260,5 +260,5 @@ test('world generation is deterministic and region density follows the reference
   assert.ok(world.buildings.some(building=>building.style==='control-tower'));
   assert.ok(world.buildings.some(building=>building.style==='hangar'));
   assert.equal(world.landscape.airport.runways[0].role,'runway');
-  assert.ok(world.staticObjects.every(object=>object.kind==='garage'?!object.destructible:object.destructible&&object.health===object.maxHealth));
+  assert.ok(world.staticObjects.every(object=>['garage','rail-platform'].includes(object.kind)?!object.destructible:object.destructible&&object.health===object.maxHealth));
 });

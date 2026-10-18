@@ -265,6 +265,7 @@
       this._park();
       this._physicalProps();
       this._services();
+      root.MayhemRailwayRender?.render(this);
     }
 
     _groundY(x, z) {
@@ -360,7 +361,7 @@
     }
 
     _bridges() {
-      const T = this.T, underside = [], piers = [], roads = this.game.roads.filter(road => road.bridge);
+      const T = this.T, underside = [], piers = [], roads = this.game.roads.filter(road => road.bridge || road.railOverpasses?.length);
       const field = this.game.world?.terrain;
       if (!field || !roads.length) return;
       const group = new T.Group();
@@ -382,7 +383,7 @@
           while (nextPier < distance + length) {
             const fraction = (nextPier - distance) / length, px = mix(a.x, b.x, fraction) / UNIT, pz = mix(a.y, b.y, fraction) / UNIT;
             const top = mix(ay, by, fraction) - .32, bottom = this._groundY(px, pz);
-            if (top - bottom > .6) {
+            if (top - bottom > .6 && (!road.railOverpasses?.length || root.MayhemRailway && !root.MayhemRailway.intersectsBox(this.game.world.railway, {x:px*UNIT-10,y:pz*UNIT-10,w:20,h:20},60))) {
               this._dummy.position.set(px, (top + bottom) / 2, pz);
               this._dummy.rotation.set(0, -heading, 0);
               this._dummy.scale.set(.70, top - bottom, Math.max(1, width - .8));

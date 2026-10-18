@@ -1,0 +1,15 @@
+{
+  "source": "reference-heightmap.png",
+  "sourceSha256": "37e459207534dfb43b50e01142adccafc98fb20d2e6074e446a66ed21d39f03b",
+  "output": "railway-heightmap.png",
+  "outputSha256": "07940a002c4002b679ea8b3a24dc6a23f8ab771341fc1b965fbe679f46b53956",
+  "width": 1536,
+  "height": 1024,
+  "bitDepth": 8,
+  "colorType": 2,
+  "gradingModule": "../railway.js",
+  "modifiedPixels": 57069,
+  "waterMaskChanges": 0,
+  "untouchedPixelsPreserved": true,
+  "runtime": "terrain.js applies the same railway.js earthworks to the preserved numeric source, then reconciles road and building grading. No image decoding or network access is needed."
+}

@@ -10,6 +10,8 @@ const runtimeFiles = [
   'index.html',
   'styles.css',
   'height-data.js',
+  'railway.js',
+  'railway-render.js',
   'terrain.js',
   'world.js',
   'physics.js',

@@ -51,7 +51,7 @@ test('destruction removes all owned prop parts and signs while reusing shared ba
   scene._bakeStatics();
   assert.ok(scene._propInstances.length < 32, 'prop parts use a bounded set of shared material/shape batches');
   assert.ok(scene._propInstances.length < objects.length);
-  for (const object of objects.filter(object => object.kind !== 'garage')) {
+  for (const object of objects.filter(object => object.destructible !== false)) {
     assert.ok(scene._propRenderStates.get(object).slots.length >= object.parts.length, object.kind + ' owns all physical parts');
   }
   const tree = objects.find(object => object.kind === 'tree');
@@ -63,6 +63,7 @@ test('destruction removes all owned prop parts and signs while reusing shared ba
   assert.equal(scene._propRenderStates.get(planter).slots.length, planter.parts.length + 3, 'planter owns foliage and flowers');
   const garage = objects.find(object => object.kind === 'garage');
   assert.equal(scene._propRenderStates.has(garage), false, 'garage building stays in permanent static geometry');
+  for(const platform of objects.filter(object=>object.kind==='rail-platform'))assert.equal(scene._propRenderStates.has(platform),false,'station structures stay in permanent static geometry');
   const permanentMeshes = scene.scene.children.filter(mesh => mesh.isMesh && !mesh.isInstancedMesh && !mesh.material.map);
   const permanentBuffers = permanentMeshes.map(mesh => Array.from(mesh.geometry.attributes.position.array));
   const meshes = [...scene._propInstances], geometryCount = scene._geometries.length, materialCount = scene._materials.size;
@@ -76,7 +77,7 @@ test('destruction removes all owned prop parts and signs while reusing shared ba
   }
   assert.equal(scene._propRenderStates.get(wayfinding).signs.length, 1);
   assert.equal(scene._propRenderStates.get(wash).signs.length, 1);
-  for (const object of objects.filter(object => !object.destroyed && object.kind !== 'garage')) {
+  for (const object of objects.filter(object => !object.destroyed && object.destructible !== false)) {
     for (const slot of scene._propRenderStates.get(object).slots) assert.ok(matrixOf(slot).determinant() > 0, 'neighboring prop remains visible');
   }
   assert.equal(scene._propInstances.length, meshes.length);

@@ -4,6 +4,7 @@
   const SIZE = 12000, MAP_WIDTH=12000, MAP_HEIGHT=8000, SIDEWALK_WIDTH = 32;
   const HeightData=typeof module!=='undefined'&&module.exports?require('./height-data.js'):root.MayhemHeightData;
   const Terrain=typeof module!=='undefined'&&module.exports?require('./terrain.js'):root.MayhemTerrain;
+  const Railway=typeof module!=='undefined'&&module.exports?require('./railway.js'):root.MayhemRailway;
   const DISTRICTS = Object.freeze({
     heights: Object.freeze({ id: 'heights', name: 'Old Town', color: '#bcd2ae', mapColor: '#bcd2ae',pedCount:8 }),
     works: Object.freeze({ id: 'works', name: 'Docklands', color: '#b8c7cd', mapColor: '#b8c7cd',pedCount:5 }),
@@ -331,7 +332,10 @@
       ['ridge',[[800,700],[4650,300],[6150,1000],[5800,2200],[3300,2650],[950,2200]]],
       ['marsh',[[9750,5600],[11800,5500],[11850,7050],[9700,7050]]]
     ].map(([district,vertices])=>({id:'area-'+district,district,mapColor:DISTRICTS[district].mapColor,points:vertices.map(([x,y])=>({x,y}))}));
+    const railway=Railway.createRailway();
+    Railway.crossings(railway,roads);
     const buildings = [], blocks = [], staticObjects = [];
+
     const targets = { heights: 26, works: 24, market: 42, riverfront: 16, willow: 42, orchard: 8, ridge:4, marsh:0 };
     const counts = Object.fromEntries(Object.keys(targets).map(id => [id, 0]));
     const styles = { heights:'cottage',works:'warehouse',market:'shop',riverfront:'cafe',willow:'cottage',orchard:'hangar',ridge:'cottage',marsh:'cottage' };
@@ -378,7 +382,7 @@
       const cx = along.x + nx * setback, cy = along.y + ny * setback, angle = wrap(along.angle + (side > 0 ? Math.PI : 0));
       const box = { x: cx - w / 2, y: cy - h / 2, w, h, angle };
       const margin=suburban?40:18,lot={x:box.x-margin,y:box.y-margin,w:w+margin*2,h:h+margin*2,angle};
-      if (!landBox(lot)||protectedPads.some(pad=>boxesOverlap(lot,pad,12))||
+      if (!landBox(lot)||Railway.intersectsBox(railway,lot,35)||railway.pads.some(pad=>boxesOverlap(lot,pad,12))||protectedPads.some(pad=>boxesOverlap(lot,pad,12))||
         !roadClear(box) || buildings.some(other => boxesOverlap(box, other, 12)) || reserved.some(point => distance(point, {x:cx,y:cy}) < point.radius + Math.hypot(w,h)/2)) return false;
       const number = counts[district]++, id = 'lot-' + district + '-' + number;
       const height = district === 'works' ? 5 + random() * 3 : district === 'market' ? 4.6 + random() * 4.7 : 3.4 + random() * 2.1;
@@ -418,8 +422,17 @@
         addLot(street, s, pass % 2 ? -1 : 1); addLot(street, s + 40, pass % 2 ? 1 : -1);
       }
     }
+    for(const building of railway.buildings) {
+      const point=network.nearestRoad({x:building.x+building.w/2,y:building.y+building.h/2});
+      building.blockId=building.id+'-lot';building.roadId=point.roadId;building.roadS=point.s;
+      building.angle=point.y<building.y+building.h/2?Math.PI:0;
+      building.frontAngle=wrap(building.angle+Math.PI/2);
+      buildings.push(building);
+      const lot={id:building.blockId,district:'works',x:building.x-25,y:building.y-25,w:building.w+50,h:building.h+50,angle:0,kind:'yard',mapColor:'#b8c7cd',buildings:[building],density:building.w*building.h/((building.w+50)*(building.h+50))};
+      lot.points=footprintCorners(lot);lot.driveway={x:building.x,y:building.y-20,w:40,h:20,angle:0};blocks.push(lot);
+    }
     const propBox = (x,y,w,h,angle=0) => ({x:x-w/2,y:y-h/2,w,h,angle});
-    const decorationClear=box=>landBox(box)&&!protectedPads.some(pad=>boxesOverlap(box,pad,8))&&roadClear(box,SIDEWALK_WIDTH+8)&&!buildings.some(building=>boxesOverlap(box,building,8));
+    const decorationClear=box=>landBox(box)&&!Railway.intersectsBox(railway,box,30)&&!railway.pads.some(pad=>boxesOverlap(box,pad,8))&&!protectedPads.some(pad=>boxesOverlap(box,pad,8))&&roadClear(box,SIDEWALK_WIDTH+8)&&!buildings.some(building=>boxesOverlap(box,building,8));
     const propClear = box => decorationClear(box) &&
       !reserved.some(point => distance(point,{x:box.x+box.w/2,y:box.y+box.h/2}) < point.radius + Math.hypot(box.w,box.h)/2);
     const addProp = object => {
@@ -519,7 +532,7 @@
         const accessPoint=network.pointOnRoad(street.id,s),accessCentre={x:(accessPoint.x+point.x)/2,y:(accessPoint.y+point.y)/2};
         const access={x:accessCentre.x-(type.length+10)/2,y:accessCentre.y-(Math.abs(offset)+type.width+10)/2,
           w:type.length+10,h:Math.abs(offset)+type.width+10,angle:point.angle};
-        if(!decorationClear(bay)||!landBox(access)||
+        if(!decorationClear(bay)||!landBox(access)||Railway.intersectsBox(railway,access,20)||
           solidParts.some(part=>part.bottom<(spawn.kind==='van'?1.7:1.3)&&boxesOverlap(bay,part.box,3))||
           parkedBoxes.some(other=>boxesOverlap(bay,other,5))||buildings.some(building=>boxesOverlap(access,building,3))||
           solidParts.some(part=>part.bottom<(spawn.kind==='van'?1.7:1.3)&&boxesOverlap(access,part.box,3))||
@@ -546,7 +559,17 @@
         {id:'marina',label:'MARINA',...anchor('marina-gate')},{id:'marsh',label:'TIDEWELL MARSH',...anchor('marsh-lookout')}],
       beach:{x:2480,y:4520,w:280,h:420,angle:-.42},mountainRoads:roads.filter(road=>road.district==='ridge').map(road=>road.id)};
     const result={size:SIZE,mapWidth:MAP_WIDTH,mapHeight:MAP_HEIGHT,sidewalkWidth:SIDEWALK_WIDTH,districts:DISTRICTS,roads,nodes,network,buildings,blocks,lots:blocks,areas,staticObjects,services,start,spawn:start,pedPaths,vehicleSpawns,parkingBays,missionAnchors,landscape};
+    result.railway=railway;
+    Object.assign(railway.helipad,{label:'CENTRAL STATION',w:200,h:200,angle:0});
+    (landscape.helipads??=[]).push(railway.helipad);
+    for(const platform of railway.platforms) {
+      const x=platform.x+platform.w/2,y=platform.y+platform.h/2,parts=[{shape:'box',offset:[0,platform.height/2,0],half:[platform.w/40,platform.height/2,platform.h/40],color:'#c5c3b3'},
+        {shape:'box',offset:[1.25,2.75,0],half:[(platform.w-170)/40,.07,platform.h/40+.125],color:'#708e91'}];
+      for(let at=platform.x+150;at<platform.x+platform.w-60;at+=160)parts.push({shape:'box',offset:[(at-x)/20,1.58,0],half:[.06,1.15,.06],color:'#586e76'});
+      staticObjects.push({id:platform.id,kind:'rail-platform',x,y,angle:0,district:'works',destructible:false,parts});
+    }
     result.terrain=Terrain.createTerrain(result);
+    railway.helipad.elevation=railway.buildings[1].elevation+railway.buildings[1].height+.05;
     return result;
   }
 

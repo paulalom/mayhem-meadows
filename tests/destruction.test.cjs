@@ -22,11 +22,11 @@ const advance = (game, seconds, input = {}) => {
   for (let t = 0; t < seconds - .00001; t += 1 / 60) game.update(1 / 60, input);
 };
 
-test('all outdoor physical scenery has durability, while buildings and the garage kiosk remain intact', () => {
+test('outdoor props have durability while buildings, platforms and the garage kiosk remain intact', () => {
   const game = new Game({ seed: 42 }), buildings = JSON.stringify(game.buildings), services = JSON.stringify(game.services);
   const kinds = new Set();
   for (const object of game.staticObjects) {
-    if (object.kind === 'garage') {
+    if (['garage','rail-platform'].includes(object.kind)) {
       assert.equal(object.destructible, false);
       assert.equal(game._damageProp(object, 10000), false);
       assert.equal(object.destroyed, undefined);
