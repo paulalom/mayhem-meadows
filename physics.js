@@ -30,7 +30,7 @@
   ].map(([from, to, radius, kind]) => Object.freeze({ from, to, radius: radius * CHARACTER_SCALE, kind }));
   const BRACES = [['leftShoulder', 'rightShoulder'], ['leftHip', 'rightHip'], ['leftShoulder', 'leftHip'], ['rightShoulder', 'rightHip'], ['leftShoulder', 'rightHip'], ['rightShoulder', 'leftHip'], ['head', 'leftShoulder'], ['head', 'rightShoulder']];
   const BENDS = [['leftShoulder', 'leftHand', 0.18], ['rightShoulder', 'rightHand', 0.18], ['leftHip', 'leftFoot', 0.22], ['rightHip', 'rightFoot', 0.22], ['pelvis', 'head', 0.63]].map(([a, b, min]) => [a, b, min * CHARACTER_SCALE]);
-  const CAR_DIMENSIONS = { compact: [46, 27, 1.40], sports: [49, 28, 1.35], van: [55, 32, 1.64], tank: [104, 48, 2.6] };
+  const CAR_DIMENSIONS = { compact: [46, 27, 1.40], sports: [49, 28, 1.35], van: [55, 32, 1.64], tank: [104, 48, 2.6], truck: [116, 48, 2.8] };
   const vectorDistance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
   const restDistance = (a, b) => Math.hypot(ANATOMY[a][0] - ANATOMY[b][0], ANATOMY[a][1] - ANATOMY[b][1], ANATOMY[a][2] - ANATOMY[b][2]);
 
@@ -284,7 +284,7 @@
     clearAll() { this.bodies.clear(); this._accumulator = 0; }
 
     trigger(entity, impulse = {}, options = {}) {
-      if (!entity || entity.id === undefined || !Number.isFinite(entity.x) || !Number.isFinite(entity.y)) return false;
+      if (!entity || entity.transportedBy || entity.id === undefined || !Number.isFinite(entity.x) || !Number.isFinite(entity.y)) return false;
       const existing = this.bodies.get(entity.id);
       if (existing) {
         if (existing.age - existing.lastImpact < 0.28 || existing.phase === 'recover') return false;
@@ -369,7 +369,7 @@
         const height = clamp(finite(car.colliderHeight, dimension[2]), 0.5, 4), c = Math.cos(angle), s = Math.sin(angle);
         // The rigid body is centred at elevation + height/2. Older yaw-only
         // callers retain their wheel clearance above the ground.
-        const bottom = car.orientation ? 0 : 0.13;
+        const bottom = car.orientation || car.kind === 'truck' ? 0 : 0.13;
         boxes.push(prepareBox({ x: car.x / UNIT, z: car.y / UNIT, y: finite(car.elevation) + (height + bottom) / 2, hx: length / 2, hy: (height - bottom) / 2, hz: width / 2, angle, orientation: car.orientation,
           vx: clamp(finite(car.vx, finite(car.speed) * c) / UNIT, -20, 20), vy: clamp(finite(car.verticalVelocity), -20, 20), vz: clamp(finite(car.vy, finite(car.speed) * s) / UNIT, -20, 20), angularVelocity: car.angularVelocity, dynamic: true }));
       }

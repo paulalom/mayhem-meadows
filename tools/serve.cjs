@@ -9,6 +9,7 @@ const allowed = new Set(['/index.html', '/styles.css', '/height-data.js', '/terr
 allowed.add('/railway.js');allowed.add('/railway-render.js');
 allowed.add('/north-height-data.js');allowed.add('/military.js');allowed.add('/military-models.js');allowed.add('/military-render.js');
 allowed.add('/tanks.js');allowed.add('/tank-models.js');allowed.add('/tanks-render.js');
+allowed.add('/soldiers.js');allowed.add('/military-transport.js');allowed.add('/troop-models.js');allowed.add('/troops-render.js');
 allowed.add('/trains.js');allowed.add('/train-models.js');allowed.add('/trains-render.js');
 allowed.add('/assets/audio/samples.js');
 allowed.add('/assets/city-map.png');

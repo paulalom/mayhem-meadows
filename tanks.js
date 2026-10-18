@@ -80,7 +80,7 @@
     }
     _propRadius(object){return Math.max(1,...(object.parts||[]).map(part=>{const half=part.half||[.3,1,.3],offset=part.offset||[0,half[1],0];return Math.hypot(Math.abs(offset[0])+half[0],Math.abs(offset[2])+half[2])*SCALE;}));}
     _vehicles(){return [...new Set((this.game.cars||[]).concat(this.game.police||[],this.game.aircraft||[],this.game.railTraffic?.colliders||[]))];}
-    _model(entity){if(Aircraft?.isAircraft(entity))return Aircraft.getModel(entity);if(entity.railModel)return entity.railModel;if(entity.tank)return TANK;return {...Stats.getModel(entity),height:entity.kind==='van'?1.7:1.3};}
+    _model(entity){if(Aircraft?.isAircraft(entity))return Aircraft.getModel(entity);if(entity.railModel)return entity.railModel;if(entity.tank)return TANK;const model=Stats.getModel(entity);return {...model,height:model.height||(entity.kind==='van'?1.7:1.3)};}
     _groundTarget(){const p=this.game.current||this.game.player;return this.game.player?.vehicleId&&p&&p.kind!=='aircraft'&&!p.railModel&&p.health>0&&!p.exploded&&finite(p.elevation)-this._ground(p)<3?p:null;}
     reportBaseAttack(incident={}){
       if(!this.base||incident.playerCaused===false)return false;

@@ -6,6 +6,8 @@
   const MAX_HEAT = 4;
   const MAX_POLICE_HEAT = 3;
   const Tanks = root.MayhemTanks || (typeof require === 'function' ? require('./tanks.js') : null);
+  const Soldiers = root.MayhemSoldiers || (typeof require === 'function' ? require('./soldiers.js') : null);
+  const MilitaryTransport = root.MayhemMilitaryTransport || (typeof require === 'function' ? require('./military-transport.js') : null);
   // Kept as a compatibility export for old tools; routing uses RoadNetwork.
   const ROAD_CENTERS = [180, 540, 900, 1260, 1620, 1980];
   const ROAD_WIDTH = 104;
@@ -154,6 +156,9 @@
       this.aliens = new Aliens.AlienSystem(this);
       this.tankTraffic = new Tanks.TankSystem(this);
       this.tanks = this.tankTraffic.tanks;
+      this.soldierTraffic = new Soldiers.SoldierSystem(this);
+      this.soldiers = this.soldierTraffic.soldiers;
+      this.militaryTransport = new MilitaryTransport.TransportSystem(this);
     }
 
     get current() { return this.cars.find(car => car.id === this.player.vehicleId) || this.aircraft?.find(craft => craft.id === this.player.vehicleId) || this.player; }
@@ -266,7 +271,7 @@
     }
 
     _vehicleState(kind) {
-      const model=VehicleStats.getModel({kind}),maxHealth=kind==='tank'?model.maxHealth:this.maxHealth;
+      const model=VehicleStats.getModel({kind}),maxHealth=finite(model.maxHealth,this.maxHealth);
       return { kind, modelId: model.id, maxHealth,
         health: maxHealth, engineHealth: 100, handlingHealth: 100, burning: false, fireTime: 0, exploded: false };
     }
@@ -364,8 +369,10 @@
       return VehiclePhysics.personContact(person, entry && entry.snapshot.angle !== vehicle.angle ? { ...vehicle, orientation: null } : vehicle, radius, type);
     }
 
+    _activePeds() { return this.peds.filter(ped=>!ped.transportedBy); }
+
     _standingPeople() {
-      const people = this.player.vehicleId ? this.peds : [this.player].concat(this.peds);
+      const people = this.player.vehicleId ? this._activePeds() : [this.player].concat(this._activePeds());
       return people.filter(person => !this.ragdolls.get(person.id));
     }
 
@@ -458,7 +465,8 @@
         this._moveCircleBuildings(person, 0, 0, person === this.player ? PLAYER_RADIUS : NPC_RADIUS);
         if (speed > 35 && !(person.ragdollGrace > 0) && (person !== this.player || this.graceTimer <= 0)) {
           const kick = clamp(speed / 20 * 0.58 + 1.2, 2.5, 11);
-          this._knockDown(person, { x: velocityX / speed * kick, y: clamp(2.1 + speed / 200, 2.1, 4.5), z: velocityY / speed * kick });
+          const knocked=this._knockDown(person, { x: velocityX / speed * kick, y: clamp(2.1 + speed / 200, 2.1, 4.5), z: velocityY / speed * kick });
+          if(knocked&&entity.id===this.player.vehicleId&&person.soldier)this._reportBaseHit(person,person,{playerCaused:true,ownerId:entity.id});
           entity.speed *= 0.90;
           if (entity.id === this.player.vehicleId) this._raiseHeat(1, 'Reckless driving', { position: person, noise: 120, victims: [person] });
         }
@@ -510,7 +518,7 @@
     _roadPosition(point) { return this.network.nearestRoad(point); }
 
     _safeRoadPosition(point, radius = 18, ignore = null) {
-      const network=ignore?.kind==='tank'?(this.tankTraffic?.network||this.network):this.network;
+      const network=(ignore?.kind==='tank'?this.tankTraffic?.network:ignore?.kind==='truck'?this.militaryTransport?.network:null)||this.network;
       const road = network.nearestRoad(point);
       const free = candidate => {
         if(!this._dry(candidate)) return false;
@@ -521,7 +529,7 @@
         }
         return this._personFree(candidate.x,candidate.y,radius);
       };
-      for (const arc of [0,60,-60,120,-120,200,-200,320,-320]) for (const lane of (ignore?.kind==='tank'?[0]:[0,18,-18])) {
+      for (const arc of [0,60,-60,120,-120,200,-200,320,-320]) for (const lane of (['tank','truck'].includes(ignore?.kind)?[0]:[0,18,-18])) {
         const candidate = network.pointOnRoad(road.roadId,road.s + arc,lane);
         if (free(candidate)) return candidate;
       }
@@ -624,7 +632,10 @@
       const bounds=this.world?.militaryBase?.bounds;
       if(!bounds||!point||point.x<bounds.x||point.x>bounds.x+bounds.w||point.y<bounds.y||point.y>bounds.y+bounds.h)return false;
       if(!(target.district==='military'||target.baseId==='military'||target.airportId==='military'||target.militaryModel))return false;
-      return Boolean(this.tankTraffic?.reportBaseAttack({position:{x:point.x,y:point.y,height:finite(point.height,this._base(target)+.8)},targetId:target.id,kind:target.kind||target.militaryModel||'building',playerCaused:true}));
+      const incident={position:{x:point.x,y:point.y,height:finite(point.height,this._base(target)+.8)},targetId:target.id,kind:target.kind||target.militaryModel||'building',playerCaused:true};
+      let reported=false;
+      for(const system of [this.tankTraffic,this.soldierTraffic,this.militaryTransport])reported=Boolean(system?.reportBaseAttack(incident))||reported;
+      return reported;
     }
 
     _reportBaseAttackSegment(from,to,ownerId=this.player.vehicleId) {
@@ -749,7 +760,8 @@
 
       // Victims can call after a tumble. Other residents must actually see it.
       const victims = incident.victims || [];
-      const reporter = this.peds.find(ped => victims.includes(ped)) || this.peds.find(ped =>
+      const residents=this._activePeds().filter(ped=>!ped.soldier);
+      const reporter = residents.find(ped => victims.includes(ped)) || residents.find(ped =>
         !(ped.stunned > 0) && !this.ragdolls.get(ped.id) && this._seesIncident(ped, position, 200));
       if (!reporter || this._troubleCooldown > 0 || this._witnessReports.length) return false;
       reporter.bubble = 'HELP! CALLING POLICE...'; reporter.bubbleTimer = 2;
@@ -774,6 +786,8 @@
     _clearHeat() {
       this.heat = 0; this.escapeTimer = 0; this.policeSeen = false; this.airPoliceSeen = false; this._policeSearching = false;
       this.militaryTankSeen=false;this.tankTraffic?.clearHeat();
+      this.militarySoldierSeen=false;this.militaryTransportSeen=false;
+      this.soldierTraffic?.clearHeat();this.militaryTransport?.clearHeat();
       this._reportedLocation = null;
       for (const { reporter } of this._witnessReports) if (reporter.bubble === 'HELP! CALLING POLICE...') {
         reporter.bubble = ''; reporter.bubbleTimer = 0;
@@ -904,7 +918,7 @@
           return range < reach && inAimHeight(person) && (range < 1 || (dx * forwardX + dy * forwardY) / range > 0.5) &&
             !this._blockedLine(this.player,person,this.player.elevation+MUZZLE_HEIGHT,this._base(person)+MUZZLE_HEIGHT);
         };
-        for (const ped of this.peds) if (ped.stunned <= 0 && inReach(ped)) {
+        for (const ped of this._activePeds()) if (ped.stunned <= 0 && inReach(ped)) {
           if (this._knockDown(ped, { x: forwardX * 5.8, y: 3.2, z: forwardY * 5.8 })) { victims.push(ped); hit = true; }
         }
         for (const cop of this.police) if (this._activePolice(cop) && inReach(cop)) { officers.push(cop); cop.distracted = 2.3; this._confetti(cop.x, cop.y, 25); hit = true; }
@@ -916,7 +930,7 @@
       this._confetti(pop.x, pop.y, 25, this.player.elevation + MUZZLE_HEIGHT + sinPitch * 2.2); this._sound('pop', { x: pop.x, y: pop.y });
       let hit = this._strikeProps(angle, pitch, 100, 10, .65);
       const victims = [], officers = [];
-      for (const ped of this.peds) if (ped.stunned <= 0 && !this.ragdolls.get(ped.id) && inAimHeight(ped) && distance(ped, pop) < 60 && this._startle(ped, angle)) { victims.push(ped); hit = true; }
+      for (const ped of this._activePeds()) if (ped.stunned <= 0 && !this.ragdolls.get(ped.id) && inAimHeight(ped) && distance(ped, pop) < 60 && this._startle(ped, angle)) { victims.push(ped); hit = true; }
       for (const cop of this.police) if (this._activePolice(cop) && inAimHeight(cop) && distance(cop, pop) < 65) { officers.push(cop); cop.distracted = 1.8; hit = true; this._confetti(cop.x, cop.y, 20); }
       for(const victim of victims)this._reportBaseHit(victim,victim,{playerCaused:true});
       if (hit) this._raiseHeat(1, 'Confetti disturbance', { noise: 140, victims, officers });
@@ -929,7 +943,7 @@
       if (projectile.aimed && projectile.height > this._ground(projectile)+2.6) return;
       let hit = false;
       const victims = [], officers = [];
-      for (const ped of this.peds) if (ped.stunned <= 0 && distance(ped, projectile) < 85 && Math.abs(projectile.height-this._base(ped))<2.6 &&
+      for (const ped of this._activePeds()) if (ped.stunned <= 0 && distance(ped, projectile) < 85 && Math.abs(projectile.height-this._base(ped))<2.6 &&
         !this._blockedLine(projectile,ped,projectile.height,this._base(ped)+MUZZLE_HEIGHT)) {
         const angle = distance(ped, projectile) > 1 ? Math.atan2(ped.y - projectile.y, ped.x - projectile.x) : projectile.angle;
         if (this._knockDown(ped, { x: Math.cos(angle) * 4.8, y: 3.8, z: Math.sin(angle) * 4.8 })) { victims.push(ped); hit = true; }
@@ -960,7 +974,7 @@
           const vehicles = Boolean(vehicleHit);
           if(vehicleHit)this._reportBaseHit(vehicleHit.source||vehicleHit.body?.entity,vehicleHit,{playerCaused:true});
           if(!walls && Aircraft.isAircraft(vehicleHit?.body?.entity)) this.aviation.damage(vehicleHit.body.entity,35);
-          const people = this.peds.some(ped => atHeight(this._base(ped)+.1,this._base(ped)+PERSON_HEIGHT+.35*CHARACTER_SCALE) && ped.stunned <= 0 && distance(ped, projectile) < 16 * CHARACTER_SCALE);
+          const people = this._activePeds().some(ped => atHeight(this._base(ped)+.1,this._base(ped)+PERSON_HEIGHT+.35*CHARACTER_SCALE) && ped.stunned <= 0 && distance(ped, projectile) < 16 * CHARACTER_SCALE);
           const surface=this._ground(projectile),ground=projectile.height<=surface+.12;
           if (ground) projectile.height = surface+.12;
           const bounds = this._worldBounds();
@@ -976,7 +990,7 @@
       if (this._hornCooldown > 0) return false;
       const car = this.current;
       this._hornCooldown = 0.55; this._sound('horn', { x: car.x, y: car.y, kind: car.kind });
-      this.peds.filter(p => distance(p, car) < 100 && p.stunned <= 0).forEach(p => { p.bubble = this._pick(['TOOT TOOT!', 'NICE HORN!', 'OH, CRUMBS!']); p.bubbleTimer = 2; });
+      this._activePeds().filter(p => distance(p, car) < 100 && p.stunned <= 0).forEach(p => { p.bubble = this._pick(['TOOT TOOT!', 'NICE HORN!', 'OH, CRUMBS!']); p.bubbleTimer = 2; });
       if (this.mission && this.mission.type === 'party') {
         const target = this.mission.targets[this.mission.targetIndex];
         if (distance(car, target) < 95 && Math.abs(car.speed) < 65 && Math.abs(this._base(car)-this._base(target))<3) {
@@ -988,6 +1002,7 @@
     }
 
     _knockDown(person, impulse) {
+      if(person.transportedBy)return false;
       if (this.ragdolls.get(person.id) || person.ragdollGrace > 0) return false;
       const body = this.ragdolls.trigger(person, impulse,{terrain:this.world?.terrain});
       if (!body) return false;
@@ -1291,7 +1306,7 @@
     }
 
     garageStore() {
-      if(this.current.kind==='tank'){this._toast('The Warden is too large for a civilian garage bay.');return false;}
+      if(['tank','truck'].includes(this.current.kind)){this._toast('This military vehicle is too large for a civilian garage bay.');return false;}
       if (!this._requireGarage()) return false;
       if (!this.player.vehicleId || !this.cars.includes(this.current)) { this._toast('Drive a civilian car here to save it in your collection.'); return false; }
       const car = this.current;
@@ -1323,7 +1338,7 @@
         const candidate = { ...preview, x: garage.x + dx, y: garage.y + dy, elevation:this._ground(garage.x+dx,garage.y+dy) };
         if(!this._dry(candidate)) continue;
         if (this._vehicleFree(candidate) && !this._vehicles().some(other => other !== deployed && this._vehicleContact(candidate, other)) &&
-          !this.peds.some(ped => this._personVehicleContact(ped, candidate, 9))) position = candidate;
+          !this._activePeds().some(ped => this._personVehicleContact(ped, candidate, 9))) position = candidate;
       }
       if (!position) { this._toast('Garage exit is crowded. Clear a little space and try again.'); return false; }
       if (this.player.vehicleId) { this.current.speed = this.current.vx = this.current.vy = 0; this.current.traffic = false; }
@@ -1391,7 +1406,7 @@
         this._syncGarage();
         this.money -= price; this.upgrades[item]++;
         if (item === 'armor') {
-          this.cars.filter(car=>car.kind!=='tank').forEach(car => { if (car.health > 0) car.health = Math.min(this.maxHealth, car.health + 25); car.maxHealth = this.maxHealth; });
+          this.cars.filter(car=>!['tank','truck'].includes(car.kind)).forEach(car => { if (car.health > 0) car.health = Math.min(this.maxHealth, car.health + 25); car.maxHealth = this.maxHealth; });
           this.garage.cars.forEach(record => { if (record.health > 0 && !this.cars.some(car => car.garageId === record.id)) record.health = Math.min(this.maxHealth, record.health + 25); });
         }
       } else return false;
@@ -1430,8 +1445,11 @@
       this._updateWitnessReports(dt);
       this.aviation.step(dt,input);
       this.tankTraffic.step(dt,input);
+      this.militaryTransport.step(dt);
+      this.soldierTraffic.step(dt);
       this._updatePolice(dt);
       const contacts = this.vehiclePhysics.step(dt);
+      this.militaryTransport.syncPassengers?.();
       for(const contact of contacts)if(contact.entity.id===this.player.vehicleId&&contact.speed>75&&(input.up||input.down)) {
         const target=contact.prop||contact.other;if(target)this._reportBaseHit(target,{x:target.x,y:target.y,height:this._base(target)+.8},{playerCaused:true,ownerId:contact.entity.id});
       }
@@ -1693,7 +1711,7 @@
         if(Aircraft.isAircraft(other)) {other.speed+=Math.cos(heading-other.angle)*120*strength;other.vz+=3*strength;other.verticalVelocity=other.vz;}
         else this.vehiclePhysics.impulse(other, { x: Math.cos(heading) * 6 * strength, y: 3 * strength, z: Math.sin(heading) * 6 * strength });
       }
-      for (const person of this.peds.concat(this.player.vehicleId ? [] : [this.player])) {
+      for (const person of this._activePeds().concat(this.player.vehicleId ? [] : [this.player])) {
         const reach = Math.hypot(distance(car, person), (finite(person.elevation, 0) + PERSON_HEIGHT / 2 - height) * VehiclePhysics.SCALE);
         if (reach >= radius || person === this.player && this.graceTimer > 0) continue;
         const strength = 1 - reach / radius, heading = Math.atan2(person.y - car.y, person.x - car.x);
@@ -1751,6 +1769,7 @@
 
     _pedestrians(dt) {
       for (const ped of this.peds) {
+        if(ped.soldier)continue;
         ped.ragdollGrace = Math.max(0, (ped.ragdollGrace || 0) - dt);
         ped.bubbleTimer = Math.max(0, ped.bubbleTimer - dt);
         if (!ped.bubbleTimer) ped.bubble = '';
@@ -1795,7 +1814,7 @@
         this.police.push({ id: 'police-' + this._nextId++, ...this._vehicleState('compact'), x:point.x,y:point.y,angle:point.angle || 0,elevation:this._ground(point),verticalVelocity:0,grounded:true,speed: 0, route: [], routeTimer: 0, lastSeen: { x: (this._reportedLocation || this.current).x, y: (this._reportedLocation || this.current).y } });
         activeCount++;
       }
-      let seen = Boolean((this.airPoliceSeen||this.militaryTankSeen) && this.heat>0 && this.graceTimer<=0), contact = false;
+      let seen = Boolean((this.airPoliceSeen||this.militaryTankSeen||this.militarySoldierSeen||this.militaryTransportSeen) && this.heat>0 && this.graceTimer<=0), contact = false;
       if(seen) {
         this._reportedLocation={x:this.current.x,y:this.current.y,elevation:this._base(this.current)};
         for(const cop of this.police) cop.lastSeen={...this._reportedLocation};
@@ -1834,7 +1853,8 @@
         this.escapeTimer = seen ? 0 : this.escapeTimer + dt;
         if (this.escapeTimer >= this.escapeGoal) { this._clearHeat(); this._toast('Fun Police escaped! Back to the biscuits.', 'success'); this._sound('escape'); this._addScore(25); }
       } else { this.escapeTimer = 0; this._policeSearching = false; }
-      this.player.composure = clamp(this.player.composure + (contact ? -27 : 7) * dt, 0, 100);
+      const recoveryRate=this.time-finite(this.player.lastSoldierHitAt,-Infinity)<3?0:7;
+      this.player.composure = clamp(this.player.composure + (contact ? -27 : recoveryRate) * dt, 0, 100);
       if (this.player.composure <= 0) this._caught();
     }
 
@@ -1859,7 +1879,7 @@
       const oldArmor = this.upgrades.armor;
       this.upgrades.boost = numeric(upgrades.boost, 0, 0, 3);
       this.upgrades.armor = numeric(upgrades.armor, 0, 0, 3);
-      this.cars.filter(car=>car.kind!=='tank').forEach(car => { if (car.health > 0) car.health = clamp(car.health + (this.upgrades.armor - oldArmor) * 25, 0, this.maxHealth); car.maxHealth = this.maxHealth; });
+      this.cars.filter(car=>!['tank','truck'].includes(car.kind)).forEach(car => { if (car.health > 0) car.health = clamp(car.health + (this.upgrades.armor - oldArmor) * 25, 0, this.maxHealth); car.maxHealth = this.maxHealth; });
       const defaults = starterInventory();
       const inventory = data.version === 2 && data.inventory && typeof data.inventory === 'object' && !Array.isArray(data.inventory) ? data.inventory : {};
       const unlocked = ['popper'];
@@ -1877,7 +1897,7 @@
         if (cars.length >= 3) break;
         const military = isMilitaryUtility(record);
         if (!record || typeof record !== 'object' || typeof record.id !== 'string' || !/^ride-[1-9][0-9]{0,3}$/.test(record.id) ||
-          cars.some(car => car.id === record.id) || !owns(CAR_TYPES, record.kind) || record.kind==='tank' || !(COLORS.includes(record.color) || (military && MILITARY_COLORS.includes(record.color)))) continue;
+          cars.some(car => car.id === record.id) || !owns(CAR_TYPES, record.kind) || ['tank','truck'].includes(record.kind) || !(COLORS.includes(record.color) || (military && MILITARY_COLORS.includes(record.color)))) continue;
         const health = clamp(finite(record.health, 0), 0, this.maxHealth);
         const legacyCondition = health / this.maxHealth * 100;
         cars.push({ id: record.id, kind: record.kind, modelId: VehicleStats.getModel(record).id,

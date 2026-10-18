@@ -7,7 +7,8 @@
     compact: Object.freeze({ name: 'Pocket Rocket', maxSpeed: 300, acceleration: 430, handling: 2.7, grip: 9, mass: 1, width: 27, length: 46 }),
     sports: Object.freeze({ name: 'Sprinkle GT', maxSpeed: 370, acceleration: 490, handling: 2.5, grip: 6, mass: 0.9, width: 28, length: 49 }),
     van: Object.freeze({ name: 'Party Wagon', maxSpeed: 260, acceleration: 340, handling: 2.1, grip: 10, mass: 1.4, width: 32, length: 55 }),
-    tank: Object.freeze({ name: 'Northwatch Warden', maxSpeed: 125, acceleration: 110, handling: 0.8, grip: 12, mass: 7.5, width: 48, length: 104, height: 2.6, maxHealth: 600 })
+    tank: Object.freeze({ name: 'Northwatch Warden', maxSpeed: 125, acceleration: 110, handling: 0.8, grip: 12, mass: 7.5, width: 48, length: 104, height: 2.6, maxHealth: 600 }),
+    truck: Object.freeze({ name: 'Northwatch Carrier', maxSpeed: 215, acceleration: 180, handling: 1.25, grip: 11, mass: 3.5, width: 48, length: 116, height: 2.8, maxHealth: 240 })
   });
   const model = (id, kind, make, name, stats) => Object.freeze({ ...CAR_TYPES[kind], id, kind, make, model: name, name, ...stats });
   const CAR_MODELS = Object.freeze({
@@ -17,9 +18,10 @@
     'fable-comet-rs': model('fable-comet-rs', 'sports', 'Fable', 'Comet RS', { maxSpeed: 400, acceleration: 525, handling: 2.3, grip: 5.4, durability: 0.8, engineDurability: 0.82 }),
     'mirth-party-wagon': model('mirth-party-wagon', 'van', 'Mirth Motors', 'Party Wagon', { durability: 1.2, engineDurability: 1.15 }),
     'tumble-hauler': model('tumble-hauler', 'van', 'Tumble', 'Hauler', { maxSpeed: 240, acceleration: 315, handling: 1.9, grip: 11, mass: 1.55, durability: 1.4, engineDurability: 1.3 }),
-    'northwatch-warden': model('northwatch-warden', 'tank', 'Northwatch', 'Warden', { durability: 4, engineDurability: 4 })
+    'northwatch-warden': model('northwatch-warden', 'tank', 'Northwatch', 'Warden', { durability: 4, engineDurability: 4 }),
+    'northwatch-carrier': model('northwatch-carrier', 'truck', 'Northwatch', 'Carrier', { durability: 1.8, engineDurability: 1.6 })
   });
-  const DEFAULT_MODELS = Object.freeze({ compact: 'bramble-pocket-rocket', sports: 'glitterline-sprinkle-gt', van: 'mirth-party-wagon', tank: 'northwatch-warden' });
+  const DEFAULT_MODELS = Object.freeze({ compact: 'bramble-pocket-rocket', sports: 'glitterline-sprinkle-gt', van: 'mirth-party-wagon', tank: 'northwatch-warden', truck: 'northwatch-carrier' });
   // Metres, relative to the vehicle's ground anchor. The Blender mesh and
   // every contact system share these articulated solid volumes.
   const TANK_GEOMETRY = Object.freeze({

@@ -15,13 +15,14 @@
     const Aircraft=root.MayhemAircraft||(typeof require==='function'?require('./aircraft.js'):null);
     return Aircraft?.AIRCRAFT_TYPES[entity.aircraftType]||null;
   }
-  const height = entity => aircraftModel(entity)?.height ?? (entity.kind === 'tank' ? VehicleStats.TANK_GEOMETRY.height : entity.kind === 'van' ? 1.7 : 1.3);
+  const height = entity => aircraftModel(entity)?.height ?? VehicleStats.getModel(entity)?.height ?? (entity.kind === 'van' ? 1.7 : 1.3);
   function quaternion(entity) {
     const pose=aircraftModel(entity)?Physics.aircraftOrientation(entity):entity.orientation;
     return pose?new C.Quaternion(pose.x,pose.y,pose.z,pose.w):new C.Quaternion().setFromEuler(0,-finite(entity.angle),0);
   }
 
   function personContact(person, vehicle, radius, type) {
+    if (person.transportedBy) return null;
     if (vehicle.kind === 'tank') return tankPersonContact(person, vehicle, radius);
     const q = quaternion(vehicle);
     const inverse = q.conjugate(), h = height(vehicle), r = radius / SCALE;
@@ -515,7 +516,7 @@
       body.force.x += body.mass * (forward.x * acceleration - side.x * lateral * grip);
       body.force.y += body.mass * (forward.y * acceleration - side.y * lateral * grip);
       body.force.z += body.mass * (forward.z * acceleration - side.z * lateral * grip);
-      const turning = entity.kind === 'tank' ? (type.driveable ? 1 : 0) : clamp(Math.abs(speed) / 7.5, 0.2, 1) * Math.sign(speed);
+      const turning = entity.kind === 'tank' ? (type.driveable ? 1 : 0) : clamp(Math.abs(speed) / 7.5, entity.kind === 'truck' ? 0 : 0.2, 1) * Math.sign(speed);
       const yawRate = steer * type.handling * turning * (command.brake && entity.kind !== 'tank' ? 1.35 : 1);
       // Steering controls only yaw. Collision roll/pitch are never overwritten.
       body.angularVelocity.y += (-yawRate - body.angularVelocity.y) * Math.min(1, 8 * dt);

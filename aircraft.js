@@ -31,6 +31,10 @@
   });
   const isAircraft = entity => Boolean(entity && entity.kind === 'aircraft' && Object.hasOwn(AIRCRAFT_TYPES, entity.aircraftType));
   const getModel = entity => AIRCRAFT_TYPES[typeof entity === 'string' ? entity : entity?.aircraftType] || AIRCRAFT_TYPES.trainer;
+  const roadModel = entity => {
+    const model = VehicleStats?.getModel(entity);
+    return model ? { ...model, height: model.height ?? (entity.kind === 'van' ? 1.7 : 1.3) } : { length: 48, width: 32, height: 1.7 };
+  };
   function boardingDistance(entity,point) {
     const model=getModel(entity),c=Math.cos(finite(entity.angle)),s=Math.sin(finite(entity.angle)),dx=point.x-entity.x,dy=point.y-entity.y;
     return Math.hypot(Math.max(0,Math.abs(dx*c+dy*s)-model.length/2),Math.max(0,Math.abs(-dx*s+dy*c)-model.width/2));
@@ -213,12 +217,12 @@
       }
       for (const other of this.aircraft.concat(this.game.cars || [], this.game.police || [])) {
         if (other === ignore || other.id === ignore?.id || other.visible === false) continue;
-        const otherModel = isAircraft(other) ? getModel(other) : { length: other.kind === 'van' ? 55 : 48, width: 32, height: 1.7 };
+        const otherModel = isAircraft(other) ? getModel(other) : roadModel(other);
         if (top <= finite(other.elevation) || bottom >= finite(other.elevation) + otherModel.height) continue;
         if (footprintOverlap(candidate, model, other, otherModel, 12)) return false;
       }
       for (const person of (this.game.peds || []).concat(this.game.player?.vehicleId ? [] : [this.game.player].filter(Boolean))) {
-        if (person === ignore || person.id === ignore?.id || top <= finite(person.elevation) || bottom >= finite(person.elevation) + 1.9) continue;
+        if (person.transportedBy || person === ignore || person.id === ignore?.id || top <= finite(person.elevation) || bottom >= finite(person.elevation) + 1.9) continue;
         if (footprintOverlap(candidate, model, person, { length: 24, width: 24 }, 12)) return false;
       }
       for (const object of this.game.staticObjects || []) {
@@ -288,7 +292,7 @@
         if (Math.abs(support - entity.elevation) > .5 || this.game._isFree && !this.game._isFree(point.x, point.y, 12, support)) continue;
         const person={...point,elevation:support};
         if(this.game._personVehicleContact && this.aircraft.concat(this.game.cars || [],this.game.police || []).some(other=>other!==entity && other.visible!==false && this.game._personVehicleContact(person,other,12))) continue;
-        if((this.game.peds || []).some(ped=>Math.abs(finite(ped.elevation)-support)<1.9 && distance(ped,person)<28)) continue;
+        if((this.game.peds || []).some(ped=>!ped.transportedBy && Math.abs(finite(ped.elevation)-support)<1.9 && distance(ped,person)<28)) continue;
         Object.assign(player, point, { vehicleId: null, elevation: support, verticalVelocity: 0, vz: 0, grounded: true, parachuting: false });
         entity.throttle = 0; entity.npc = false; this._phase(entity, 'parked');
         this._toast('Aircraft parked.'); return true;
@@ -511,7 +515,7 @@
       for (const other of this.aircraft.concat(this.game.cars || [], this.game.police || [])) {
         if (other === entity || other.visible === false || other.exploded) continue;
         if (distance(entity, other) > model.width + model.length + Math.hypot(delta.x, delta.y) + 180) continue;
-        const otherModel = isAircraft(other) ? getModel(other) : VehicleStats ? {...VehicleStats.getModel(other),height:other.kind==='tank'?2.6:other.kind==='van'?1.7:1.3} : {length:48,width:32,height:1.7};
+        const otherModel = isAircraft(other) ? getModel(other) : roadModel(other);
         consider({ x: other.x - otherModel.length / 2, y: other.y - otherModel.width / 2, w: otherModel.length, h: otherModel.width, angle: other.angle }, finite(other.elevation), otherModel.height, other);
       }
       if (!hit) return;
@@ -595,7 +599,7 @@
       }
       const center = { x: field.runway.x + field.runway.w / 2, y: field.runway.y + field.runway.h / 2 };
       const runwayHeight = this._ground(center);
-      return !this.aircraft.concat(this.game.cars || [], this.game.police || [], this.game.peds || [], this.game.player?.vehicleId ? [] : [this.game.player].filter(Boolean)).some(other => other !== entity && other.visible !== false && finite(other.elevation) < runwayHeight + 12 && inBox(other, field.runway, isAircraft(other) ? getModel(other).width * .4 : 25));
+      return !this.aircraft.concat(this.game.cars || [], this.game.police || [], this.game.peds || [], this.game.player?.vehicleId ? [] : [this.game.player].filter(Boolean)).some(other => other !== entity && !other.transportedBy && other.visible !== false && finite(other.elevation) < runwayHeight + 12 && inBox(other, field.runway, isAircraft(other) ? getModel(other).width * .4 : 25));
     }
 
     _npc(entity, dt) {
@@ -1039,7 +1043,7 @@
       const aim = target && entity.militaryResponse ? { x: target.x + finite(target.vx) * travel, y: target.y + finite(target.vy) * travel } : target;
       const shotAngle = aim ? Math.atan2(aim.y - y, aim.x - x) : aimAngle;
       const shotTravel = aim ? Math.max(.04, Math.hypot(aim.x - x, aim.y - y) / 1400) : travel;
-      const targetHeight = isAircraft(target) ? getModel(target).height * .5 : target?.kind === 'van' ? .85 : .65;
+      const targetHeight = isAircraft(target) ? getModel(target).height * .5 : roadModel(target || {}).height * .5;
       const projectile = { id: 'air-round-' + this._nextId++, x, y, elevation, height: elevation,
         vx: Math.cos(shotAngle) * 1400, vy: Math.sin(shotAngle) * 1400,
         vz: target ? (finite(target.elevation) + targetHeight - elevation) / shotTravel : Math.tan(clamp(finite(aimPitch), -.8, .8)) * 70,
@@ -1104,20 +1108,20 @@
         let fraction = this._obstructionFraction(before, round), targetHit = null;
         if (fraction === null && this.game._blockedLine?.(before, round, before.elevation, round.elevation)) fraction = 0;
         const candidates = round.npc ? [this.current || this.game.current || this.game.player].filter(Boolean).concat(this.aircraft, this.game.cars || [], this.game.police || []) : this.aircraft.concat(this.game.cars || [], this.game.police || [], this.game.peds || []);
-        const tankRay = candidates.some(target=>target.kind==='tank') && this.game.vehiclePhysics?.firstHit?.(
+        const solidRay = candidates.some(target=>target.kind==='tank'||target.kind==='truck') && this.game.vehiclePhysics?.firstHit?.(
           {...before,height:before.elevation},{...round,height:round.elevation},round.ownerId);
         for (const target of new Set(candidates)) {
-          if (target.id === round.ownerId || target.visible === false || target.exploded) continue;
+          if (target.id === round.ownerId || target.transportedBy || target.visible === false || target.exploded) continue;
           const road = VehicleStats && Object.hasOwn(VehicleStats.CAR_TYPES, target.kind);
-          const model = isAircraft(target) ? getModel(target) : road ? { ...VehicleStats.getModel(target), height: target.kind === 'van' ? 1.7 : 1.3 } : { length: 24, width: 24, height: 1.9 };
+          const model = isAircraft(target) ? getModel(target) : road ? roadModel(target) : { length: 24, width: 24, height: 1.9 };
           const box = { x: target.x - model.length / 2, y: target.y - model.width / 2, w: model.length, h: model.width, angle: target.angle };
           let hit;
-          if(target.kind==='tank') {
+          if(target.kind==='tank'||target.kind==='truck'&&this.game.vehiclePhysics?.get?.(target.id)) {
             if(this.game.vehiclePhysics?.get?.(target.id)) {
-              // Cannon resolves the same posed hull, turret and barrel used
-              // for vehicles and people, including the empty gun overhang.
+              // Cannon resolves the actual truck pose or articulated tank
+              // solids used by contacts, including the empty gun overhang.
               const dx=round.x-before.x,dy=round.y-before.y,dz=(round.elevation-before.elevation)*SCALE,length2=dx*dx+dy*dy+dz*dz;
-              hit=tankRay?.body.entity===target ? clamp(((tankRay.x-before.x)*dx+(tankRay.y-before.y)*dy+(tankRay.height-before.elevation)*SCALE*dz)/(length2||1),0,1) : null;
+              hit=solidRay?.body.entity===target ? clamp(((solidRay.x-before.x)*dx+(solidRay.y-before.y)*dy+(solidRay.height-before.elevation)*SCALE*dz)/(length2||1),0,1) : null;
             } else {
               // Standalone flight simulations may omit the Cannon world.
               const hits=Physics.tankBoxes(target).map(solid=>{

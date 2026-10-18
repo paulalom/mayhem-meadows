@@ -108,6 +108,8 @@ test('forty-eight city residents and six base personnel start on safe paths', ()
 
 test('ordinary residents follow curved sidewalks in both directions without entering fixed objects', () => {
   const game=makeGame(); game.cars=[]; game.police=[];
+  // Armed base guards use the infantry controller, covered by its own patrol checks.
+  game.peds=game.peds.filter(ped=>!ped.soldier);assert.ok(game.peds.length>0);
   const traveled=new Map(game.peds.map(ped=>[ped.id,0]));
   for(let frame=0;frame<240;frame++) {
     const before=game.peds.map(ped=>({x:ped.x,y:ped.y})); game._pedestrians(.1);

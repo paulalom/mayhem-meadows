@@ -86,14 +86,7 @@
       this._freezeStaticWorld();
       this._player = this._person('#7b64df', true);
       this.scene.add(this._player.group);
-      for (const resident of game.peds) {
-        const model = this._person(resident.color, false);
-        const bubble = this._bubble();
-        model.group.add(bubble.sprite);
-        model.bubble = bubble;
-        this._residents.set(resident.id, model);
-        this.scene.add(model.group);
-      }
+      this._syncResidents();
       this._makeTarget();
       this._confetti = new T.InstancedMesh(this._cube, this._material('#ffffff', { unlit: true }), 360);
       this._confetti.instanceMatrix.setUsage(T.DynamicDrawUsage);
@@ -1006,6 +999,9 @@
     }
 
     _vehicle(entity, police) {
+      if(entity.kind==='truck'&&root.MayhemTroopRender){
+        const model=root.MayhemTroopRender.createVehicle(this,entity);if(model)return model;
+      }
       if(entity.kind==='tank'&&root.MayhemTankRender){
         const model=root.MayhemTankRender.createVehicle(this,entity);if(model)return model;
       }
@@ -1466,10 +1462,11 @@
       const texture = new T.CanvasTexture(canvas); texture.colorSpace = T.SRGBColorSpace;
       this._textures.push(texture);
       const material = new T.SpriteMaterial({ map: texture, transparent: true, depthTest: true, depthWrite: false });
-      this._materials.set('bubble-' + this._textures.length, material);
+      const materialKey='bubble-'+(this._nextBubbleId=(this._nextBubbleId||0)+1);
+      this._materials.set(materialKey, material);
       const sprite = new T.Sprite(material);
       sprite.position.set(0, 2.27, 0); sprite.scale.set(3.2, 0.80, 1); sprite.visible = false;
-      return { canvas, texture, sprite, text: '' };
+      return { canvas, texture, sprite, text: '', materialKey };
     }
 
     _bubbleText(bubble, text) {
@@ -1713,7 +1710,7 @@
     _ragdollPose(body, model) {
       const j = body.joints, s = this._ragdollScratch;
       const shirt = model.color, skin = model.player ? '#f9c68f' : '#edbd93';
-      const pants = model.player ? '#355267' : '#647386';
+      const pants = model.player ? '#355267' : model.soldier ? '#526b53' : '#647386';
       const point = (vector, name) => vector.set(j[name].x, j[name].y, j[name].z);
       point(s.a, 'pelvis'); point(s.b, 'chest');
       s.up.copy(s.b).sub(s.a);
@@ -1741,7 +1738,7 @@
         point(s.up, side + 'Knee').sub(point(s.a, side + 'Foot'));
         s.right.set(0, 0, 1).applyQuaternion(s.torsoQuaternion);
         this._ragdollFrame(s.up, s.right, s.limbQuaternion);
-        this._ragdollBox(s.a, s.limbQuaternion, 0.33, 0.14, 0.22, '#f2efdf', 0.075, 0, 0);
+        this._ragdollBox(s.a, s.limbQuaternion, 0.33, 0.14, 0.22, model.soldier?'#354555':'#f2efdf', 0.075, 0, 0);
       }
       point(s.a, 'head'); point(s.b, 'chest');
       s.headUp.copy(s.a).sub(s.b);
@@ -1751,7 +1748,7 @@
       dummy.position.copy(s.a); dummy.quaternion.copy(s.headQuaternion); dummy.scale.set(0.235 * CHARACTER_SCALE, 0.26 * CHARACTER_SCALE, 0.23 * CHARACTER_SCALE); dummy.updateMatrix();
       this._ragdollHeads.setMatrixAt(this._ragdollHeadIndex, dummy.matrix);
       this._color.set(skin); this._ragdollHeads.setColorAt(this._ragdollHeadIndex++, this._color);
-      const hat = model.player ? '#f1cf5d' : '#6f5b55';
+      const hat = model.player ? '#f1cf5d' : model.soldier ? '#526b53' : '#6f5b55';
       this._ragdollBox(s.a, s.headQuaternion, 0.37, 0.10, 0.42, hat, -0.02, 0.18, 0);
       this._ragdollBox(s.a, s.headQuaternion, 0.30, 0.055, 0.38, hat, 0.18, 0.16, 0);
       for (const side of [-1, 1]) this._ragdollBox(s.a, s.headQuaternion, 0.035, 0.055, 0.045, '#384657', 0.22, 0.01, side * 0.08);
@@ -1992,6 +1989,23 @@
       this._sun.target.position.set(shadowX, shadowHeight, shadowZ);
     }
 
+    _syncResidents() {
+      const active=new Set();
+      for(const ped of this.game.peds){
+        active.add(ped.id);if(this._residents.has(ped.id))continue;
+        const model=(ped.soldier&&root.MayhemTroopRender?.createSoldier(this,ped))||this._person(ped.color,false);
+        model.bubble=this._bubble();model.group.add(model.bubble.sprite);
+        this._residents.set(ped.id,model);this.scene.add(model.group);
+      }
+      for(const [id,model]of this._residents)if(!active.has(id)){
+        const bubble=model.bubble;
+        bubble.sprite.removeFromParent();bubble.texture.dispose();bubble.sprite.material.dispose();
+        this._textures=this._textures.filter(texture=>texture!==bubble.texture);this._materials.delete(bubble.materialKey);
+        if(model.soldier)root.MayhemTroopRender?.retireSoldier(this,id,model);
+        model.group.removeFromParent();this._residents.delete(id);
+      }
+    }
+
     _people(dt) {
       const game = this.game, player = game.player, model = this._player;
       const playerBody = this._bodyFor(player);
@@ -2033,7 +2047,7 @@
         resident.group.visible = !body;
         resident.group.position.set(ped.x / UNIT, (Number.isFinite(ped.elevation) ? ped.elevation : 0) + 0.03, ped.y / UNIT);
         resident.group.rotation.y = -ped.angle;
-        const walk = !this.reducedMotion && ped.stunned <= 0 ? Math.sin(game.time * ped.pace / UNIT * 5 + Number(ped.id.split('-')[1])) * 0.30 : 0;
+        const walk = !ped.soldier && !this.reducedMotion && ped.stunned <= 0 ? Math.sin(game.time * ped.pace / UNIT * 5 + Number(ped.id.split('-')[1])) * 0.30 : 0;
         resident.leftLeg.rotation.z = walk; resident.rightLeg.rotation.z = -walk;
         resident.leftArm.rotation.z = -walk * 0.8; resident.rightArm.rotation.z = walk * 0.8;
         resident.group.rotation.z = 0;
@@ -2045,7 +2059,7 @@
           if (bubble.parent !== resident.group) { resident.group.add(bubble); bubble.scale.set(3.2, 0.8, 1); }
           bubble.position.set(0, 2.27, 0);
         }
-        this._bubbleText(resident.bubble, ped.bubbleTimer > 0 ? ped.bubble : '');
+        this._bubbleText(resident.bubble, !ped.transportedBy&&ped.bubbleTimer > 0 ? ped.bubble : '');
       }
       this._ragdollPeople();
       this._parachuteStep();
@@ -2225,12 +2239,14 @@
       const step = Number.isFinite(dt) ? clamp(dt, 0, 0.1) : 0;
       if (options.reducedMotion !== undefined) this.reducedMotion = Boolean(options.reducedMotion);
       this._syncDestructibleProps();
+      this._syncResidents();
       this._people(step);
       this._cars(options.paused ? 0 : step);
       this._aircraftStep(options.paused ? 0 : step);
       root.MayhemTrainRender?.step(this);
       root.MayhemMilitaryRender?.step?.(this);
       root.MayhemTankRender?.step?.(this);
+      root.MayhemTroopRender?.step?.(this);
       this._effects();
       this._landscapeStep(this.game.time);
       this._cameraStep(step);
@@ -2238,6 +2254,7 @@
     }
 
     dispose() {
+      root.MayhemTroopRender?.dispose?.(this);
       this._ragdollCubes?.dispose();
       this._ragdollHeads?.dispose();
       this._toyShots?.dispose();

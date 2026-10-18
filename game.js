@@ -697,6 +697,13 @@
       mini.strokeStyle = tank.id === game.player.vehicleId ? '#fff8d9' : '#ffc56f'; mini.lineWidth = 1.5;
       mini.beginPath(); mini.moveTo(x, y); mini.lineTo(x + Math.cos(turret) * 6, y + Math.sin(turret) * 6); mini.stroke();
     }
+    for(const truck of game.militaryTrucks||[])if(!truck.exploded&&truck.health>0){
+      mini.save();mini.translate(truck.x*scale,truck.y*scale);mini.rotate(truck.angle||0);
+      mini.fillStyle=truck.id===game.player.vehicleId?'#fff8d9':'#dec49b';mini.fillRect(-3.5,-2,7,4);mini.restore();
+    }
+    for(const soldier of game.soldiers||[])if(!soldier.transportedBy){
+      mini.fillStyle=game.heatLevel===MAX_HEAT?'#ffc56f':'#c0cdad';mini.beginPath();mini.arc(soldier.x*scale,soldier.y*scale,1.4,0,Math.PI*2);mini.fill();
+    }
     for (const aircraft of game.aircraft || []) if (aircraft.active !== false && aircraft.visible !== false && !aircraft.exploded) drawAircraftMarker(aircraft, scale, w, h);
     for(const car of game.trainCars || [])if(car.visible){mini.save();mini.translate(car.x*scale,car.y*scale);mini.rotate(car.angle);mini.fillStyle=car.model==='passenger'?'#6ee4d5':'#f3c568';mini.fillRect(-2.5,-1.2,5,2.4);mini.restore();}
     if (!isAircraft(game.current)) {
@@ -818,6 +825,13 @@
     $('tank-status').dataset.phase = armourPhase;
     $('tank-status').dataset.reason = armour?.reason || '';
     canvas.dataset.tankResponse = armourPhase;
+    const transport=game.militaryTransport?.status,infantry=game.soldierTraffic?.status;
+    const troopPhase=transport?.phase||'standby';
+    const troopLabel={mobilising:`DISPATCH IN ${Math.max(0,Math.ceil(transport?.warning||0))}s`,approach:'CARRIER EN ROUTE',deployed:`${infantry?.deployed||0} SOLDIERS DEPLOYED`,reboard:'REBOARDING',return:'RETURNING TO BASE',blocked:'CARRIER HOLDING',borrowed:'CARRIER BORROWED',unavailable:'REFORMING'}[troopPhase]||(infantry?.phase==='engaged'?'BASE GUARDS ENGAGING':'ON CALL');
+    $('troop-status').hidden=heatLevel<MAX_HEAT&&!['mobilising','approach','deployed','reboard','return','blocked'].includes(troopPhase);
+    $('troop-status').textContent=`NORTHWATCH INFANTRY · ${troopLabel}`;
+    $('troop-status').dataset.phase=troopPhase;canvas.dataset.troopResponse=troopPhase;
+    canvas.dataset.soldiersDeployed=String(infantry?.deployed||0);
     $('composure-value').textContent = Math.round(game.player.composure) + '%';
     $('composure-bar').style.width = game.player.composure + '%';
     $('composure-meter')?.setAttribute('aria-valuenow', Math.round(game.player.composure));

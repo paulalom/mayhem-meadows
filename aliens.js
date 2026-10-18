@@ -27,7 +27,8 @@
     _phase(phase) { this.saucer.phase = phase; this.saucer.phaseTime = 0; }
 
     _disguiseVisitors(count) {
-      const candidates = (this.game.peds || []).filter(ped => ped.pathId && !['orchard', 'marsh', 'ridge'].includes(ped.district));
+      const candidates = (this.game.peds || []).filter(ped => ped.pathId && !ped.soldier && !ped.militaryUnit && !ped.transportedBy &&
+        !['orchard', 'marsh', 'ridge', 'military'].includes(ped.district));
       const districts = new Set();
       for (let i = 0; i < count && candidates.length; i++) {
         const varied = candidates.filter(ped => !districts.has(ped.district));
@@ -39,7 +40,8 @@
     }
 
     _openSky(ped) {
-      if (!ped || ped === this.game.player || ped.alien || ped.stunned > 0 || this.game.ragdolls?.get(ped.id) || ped.grounded === false) return false;
+      if (!ped || ped === this.game.player || ped.alien || ped.soldier || ped.militaryUnit || ped.transportedBy ||
+        ped.stunned > 0 || this.game.ragdolls?.get(ped.id) || ped.grounded === false) return false;
       const width = this.game.world?.bounds?.maxX || this.game.world?.mapWidth || 12000, height = this.game.world?.bounds?.maxY || this.game.world?.mapHeight || 8000;
       if (ped.x < 250 || ped.x > Math.min(width - 250, 9300) || ped.y < 500 || ped.y > height - 250) return false;
       if (this.game._dry && !this.game._dry(ped)) return false;

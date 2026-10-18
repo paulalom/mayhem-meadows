@@ -64,6 +64,40 @@ test('targets under rotated buildings, ragdolls, aliens and the player cannot be
   assert.equal(system.startVisit(), false); assert.equal(system.saucer.visible, false);
 });
 
+test('deployed soldiers, military units and riding passengers cannot become UFO targets while civilians remain eligible', () => {
+  const { game, system } = fixture();
+  const civilian = { ...game.peds.find(ped => !ped.alien), id: 'civilian' };
+  const protectedPeople = [
+    { ...civilian, id: 'deployed-soldier', soldier: true, district: 'military' },
+    { ...civilian, id: 'military-unit', militaryUnit: true },
+    { ...civilian, id: 'truck-passenger', transportedBy: 'military-truck-1' }
+  ];
+  game.peds = [...protectedPeople];
+  assert.ok(protectedPeople.every(person => system._openSky(person) === false));
+  assert.equal(system.startVisit(), false); assert.equal(system.saucer.visible, false);
+  assert.equal(system.capture, null); assert.equal(game.peds.length, 3);
+  game.peds.push(civilian);
+  assert.equal(system._openSky(civilian), true); assert.equal(system.startVisit(), true);
+  assert.equal(system.targetId, civilian.id, 'the civilian remains the only eligible pickup');
+  Object.assign(system.saucer, { x: civilian.x, y: civilian.y });
+  assert.equal(system._takeResident(), true); assert.equal(system.capture.ped, civilian);
+  assert.deepEqual(game.peds, protectedPeople, 'protected units remain in their simulation population');
+});
+
+test('the six original Northwatch personnel cannot receive civilian alien disguises before enlistment', () => {
+  const { Game } = require('../core.js'), game = new Game({ seed: 42 });
+  const guards = game.peds.filter(person => person.district === 'military');
+  assert.equal(guards.length, 6); assert.ok(guards.every(guard => !guard.alien && !guard.disguised));
+  // Alien population setup runs before SoldierSystem enlistment. Exercise
+  // those original route identities with the enlistment flags still absent.
+  const personnel = guards.map(({ soldier, militaryUnit, ...person }) => ({ ...person }));
+  const civilian = { id: 'civilian-visitor', pathId: 'civilian-route', district: 'market', x: 5500, y: 3500 };
+  const beforeEnlistment = { _seed: 42, peds: personnel.concat(civilian) };
+  new AlienSystem(beforeEnlistment, { visitors: 20 });
+  assert.ok(personnel.every(person => !person.alien && !person.disguised), 'military routes stay on the soldier model');
+  assert.equal(civilian.alien, true); assert.equal(civilian.disguised, true, 'ordinary civilian routes still receive visitors');
+});
+
 test('an unavailable moving target cancels the visit without removing any residents', () => {
   const { game, system } = fixture(), count = game.peds.length;
   system.startVisit(); game.peds.find(ped => ped.id === system.targetId).stunned = 5;

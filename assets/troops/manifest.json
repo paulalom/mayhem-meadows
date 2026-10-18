@@ -1,0 +1,184 @@
+{
+  "author": "Mayhem Meadows",
+  "license": "MIT",
+  "fictional": true,
+  "source": "northwatch-troops.blend",
+  "generator": "../../tools/export-troops.py",
+  "units": "metres",
+  "blenderVersion": "5.2.1 LTS",
+  "coordinates": "X forward, Y up, Z right; roots on ground; local articulation pivots",
+  "models": {
+    "soldier": {
+      "metadata": {
+        "name": "Northwatch Guard",
+        "height": 1.462,
+        "characterScaleBaked": 0.86,
+        "bounds": {
+          "length": 1.077,
+          "width": 0.62,
+          "height": 1.462
+        },
+        "groupPivots": {
+          "hips": [
+            0,
+            0.68,
+            0
+          ],
+          "torso": [
+            0,
+            0.08,
+            0
+          ],
+          "head": [
+            0,
+            0.44,
+            0
+          ],
+          "leftArm": [
+            0,
+            0.36,
+            -0.22
+          ],
+          "rightArm": [
+            0,
+            0.36,
+            0.22
+          ],
+          "leftLeg": [
+            0,
+            -0.04,
+            -0.105
+          ],
+          "rightLeg": [
+            0,
+            -0.04,
+            0.105
+          ],
+          "leftShin": [
+            0,
+            -0.28,
+            0
+          ],
+          "rightShin": [
+            0,
+            -0.28,
+            0
+          ],
+          "weapon": [
+            0,
+            0.24,
+            0
+          ]
+        },
+        "groupParents": {
+          "hips": null,
+          "torso": "hips",
+          "head": "torso",
+          "leftArm": "torso",
+          "rightArm": "torso",
+          "leftLeg": "hips",
+          "rightLeg": "hips",
+          "leftShin": "leftLeg",
+          "rightShin": "rightLeg",
+          "weapon": "torso"
+        },
+        "muzzle": [
+          0.78,
+          0,
+          0
+        ],
+        "muzzleHeight": 1,
+        "seatedHipHeight": 0.68
+      },
+      "parts": 57,
+      "triangles": 772
+    },
+    "truck": {
+      "metadata": {
+        "name": "Northwatch Carrier",
+        "modelId": "northwatch-carrier",
+        "bounds": {
+          "length": 5.8,
+          "width": 2.4,
+          "height": 2.8
+        },
+        "centerHeight": 1.4,
+        "groupPivots": {
+          "hull": [
+            0,
+            0,
+            0
+          ],
+          "wheel": [
+            0,
+            0,
+            0
+          ]
+        },
+        "groupParents": {
+          "hull": null,
+          "wheel": null
+        },
+        "wheelRadius": 0.46,
+        "wheelPositions": [
+          [
+            -1.95,
+            0.46,
+            -1
+          ],
+          [
+            -1.95,
+            0.46,
+            1
+          ],
+          [
+            -0.75,
+            0.46,
+            -1
+          ],
+          [
+            -0.75,
+            0.46,
+            1
+          ],
+          [
+            1.85,
+            0.46,
+            -1
+          ],
+          [
+            1.85,
+            0.46,
+            1
+          ]
+        ],
+        "seats": [
+          {
+            "x": -1.15,
+            "y": 1.2,
+            "z": -0.65
+          },
+          {
+            "x": -0.35,
+            "y": 1.2,
+            "z": -0.65
+          },
+          {
+            "x": -1.15,
+            "y": 1.2,
+            "z": 0.65
+          },
+          {
+            "x": -0.35,
+            "y": 1.2,
+            "z": 0.65
+          }
+        ],
+        "seatRootHeight": 0.52,
+        "bedFloorHeight": 1.03
+      },
+      "parts": 135,
+      "triangles": 1906
+    }
+  }
+}
