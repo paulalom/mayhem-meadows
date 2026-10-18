@@ -17,6 +17,7 @@
   const toyIds = ['popper', 'hammer', 'cannon'];
   const money = n => '$' + Math.round(n).toLocaleString();
   const isAircraft = vehicle => vehicle?.kind === 'aircraft';
+  const isTank = vehicle => vehicle?.kind === 'tank';
   const aircraftModel = vehicle => MayhemAircraft.getModel(vehicle);
   const isHelicopter = vehicle => isAircraft(vehicle) && aircraftModel(vehicle).class === 'helicopter';
   const vehicleName = vehicle => { const model = isAircraft(vehicle) ? aircraftModel(vehicle) : VehicleStats.getModel(vehicle); return model.name || model.make + ' ' + model.model; };
@@ -485,7 +486,7 @@
     event.preventDefault();
     if (!mouseLocked()) { lockMouse(); return; }
     if (event.button === 2) setAim(true);
-    if (event.button === 0) { firing = isAircraft(game.current); useToy(); }
+    if (event.button === 0) { firing = isAircraft(game.current) || isTank(game.current); useToy(); }
   });
   canvas.addEventListener('pointermove', event => {
     if (mouseLocked() && playActive()) scene?.orbit(event.movementX, event.movementY, { sensitivity: cameraSensitivity * (aiming ? 0.55 : 1), invertY: cameraInvertY });
@@ -686,6 +687,16 @@
     const t = target();
     if (t) { mini.strokeStyle = '#effa88'; mini.lineWidth = 2; mini.beginPath(); mini.arc(t.x * scale, t.y * scale, 5, 0, Math.PI * 2); mini.stroke(); }
     for (const police of game.police) { mini.fillStyle = game.heat ? '#ff8294' : '#a7cee4'; mini.beginPath(); mini.arc(police.x * scale, police.y * scale, 2, 0, Math.PI * 2); mini.fill(); }
+    for (const tank of game.cars.filter(isTank)) {
+      if (tank.exploded || tank.health <= 0) continue;
+      const x = tank.x * scale, y = tank.y * scale;
+      mini.save(); mini.translate(x, y); mini.rotate(tank.angle || 0);
+      mini.fillStyle = tank.id === game.player.vehicleId ? '#fff8d9' : '#ffc56f';
+      mini.fillRect(-3.5, -2.5, 7, 5); mini.restore();
+      const turret = tank.tankGun?.turretAngle ?? tank.turretAngle ?? tank.angle ?? 0;
+      mini.strokeStyle = tank.id === game.player.vehicleId ? '#fff8d9' : '#ffc56f'; mini.lineWidth = 1.5;
+      mini.beginPath(); mini.moveTo(x, y); mini.lineTo(x + Math.cos(turret) * 6, y + Math.sin(turret) * 6); mini.stroke();
+    }
     for (const aircraft of game.aircraft || []) if (aircraft.active !== false && aircraft.visible !== false && !aircraft.exploded) drawAircraftMarker(aircraft, scale, w, h);
     for(const car of game.trainCars || [])if(car.visible){mini.save();mini.translate(car.x*scale,car.y*scale);mini.rotate(car.angle);mini.fillStyle=car.model==='passenger'?'#6ee4d5':'#f3c568';mini.fillRect(-2.5,-1.2,5,2.4);mini.restore();}
     if (!isAircraft(game.current)) {
@@ -701,10 +712,15 @@
   function hud() {
     radioUI();
     drawMinimap();
+    const tank = isTank(game.current);
+    const tankReload = Math.max(0, Number.isFinite(game.current.gunCooldown) ? game.current.gunCooldown : 0);
+    const tankGunStatus = game.current.health <= 0 || game.current.exploded ? 'CANNON DISABLED' : tankReload > 0 ? `RELOAD ${tankReload.toFixed(1)}s` : 'CANNON READY';
     const district = game.districtAt(game.current);
     $('district-name').textContent = district.name.toUpperCase();
     canvas.dataset.district = district.id;
-    $('equipped-toy').textContent = GADGETS[game.inventory.equipped].name + (game.inventory.equipped === 'cannon' ? ' · ' + game.inventory.ammo.cannon + ' charges' : '') + ' · TAB';
+    $('equipped-label').textContent = tank ? 'Tank cannon' : 'Equipped toy';
+    $('equipped-shortcut').hidden = tank;
+    $('equipped-toy').textContent = tank ? 'MOUSE AIM · ' + tankGunStatus : GADGETS[game.inventory.equipped].name + (game.inventory.equipped === 'cannon' ? ' · ' + game.inventory.ammo.cannon + ' charges' : '') + ' · TAB';
     canvas.dataset.equippedToy = game.inventory.equipped;
     canvas.dataset.inventoryMode = wheelOpen ? 'wheel' : inventoryView || 'none';
     canvas.dataset.mouseLocked = String(mouseLocked());
@@ -733,12 +749,19 @@
     canvas.dataset.grounded = String(game.current.grounded !== false);
     canvas.dataset.frames = String(renderedFrames);
     const armedAircraft = flying && game.current.aircraftType === 'policeheli';
-    $('aim-reticle').hidden = !playActive() || !mouseLocked() || (!!game.player.vehicleId && !armedAircraft) || !!fallen;
+    $('aim-reticle').hidden = !playActive() || !mouseLocked() || (!!game.player.vehicleId && !armedAircraft && !tank) || !!fallen;
     $('aim-reticle').classList.toggle('aiming', aiming);
+    $('aim-reticle').dataset.weapon = tank ? 'tank' : armedAircraft ? 'side-gun' : 'toy';
+    $('aim-reticle').dataset.reloading = String(tank && tankReload > 0);
+    if (tank) {
+      canvas.dataset.tankReload = tankReload.toFixed(2);
+      canvas.dataset.tankTurretAngle = Number(game.current.tankGun?.turretAngle ?? game.current.turretAngle ?? game.current.angle).toFixed(3);
+      canvas.dataset.tankGunPitch = Number(game.current.tankGun?.pitch ?? game.current.gunPitch ?? 0).toFixed(3);
+    } else { delete canvas.dataset.tankReload; delete canvas.dataset.tankTurretAngle; delete canvas.dataset.tankGunPitch; }
     $('mouse-hint').hidden = !playActive() || mouseLocked();
     $('game-shell').classList.toggle('aiming', aiming);
     $('speed-value').textContent = game.player.vehicleId ? Math.round(Math.abs(game.current.speed || 0) * 3.6 / 20) + ' KM/H' : game.player.parachuting ? 'PARACHUTE' : fallen ? (fallen.phase === 'recover' ? 'GETTING UP' : 'WHOOPS!') : 'ON FOOT';
-    $('speed-caption').textContent = flying ? (helicopter ? 'SPACE CLIMB · CTRL DESCEND · SHIFT HOVER' : 'W/S THROTTLE · SPACE CLIMB · CTRL DESCEND') : game.player.vehicleId ? (game.current.upright === false ? 'R · RIGHT THIS RIDE' : 'SHIFT BOOST · SPACE DRIFT') : game.player.parachuting ? 'WASD · STEER TO A CLEAR LANDING' : fallen ? 'R · SKIP THE DRAMA' : 'SPACE · JUMP   F · FLOP';
+    $('speed-caption').textContent = flying ? (helicopter ? 'SPACE CLIMB · CTRL DESCEND · SHIFT HOVER' : 'W/S THROTTLE · SPACE CLIMB · CTRL DESCEND') : tank ? 'WASD DRIVE · MOUSE TURRET · HOLD LEFT TO FIRE' : game.player.vehicleId ? (game.current.upright === false ? 'R · RIGHT THIS RIDE' : 'SHIFT BOOST · SPACE DRIFT') : game.player.parachuting ? 'WASD · STEER TO A CLEAR LANDING' : fallen ? 'R · SKIP THE DRAMA' : 'SPACE · JUMP   F · FLOP';
     $('flight-panel').hidden = !flying;
     $('game-shell').classList.toggle('flying', flying);
     if (flying) {
@@ -778,6 +801,23 @@
     $('military-status').dataset.phase = military?.phase || 'standby';
     $('military-status').dataset.response = military?.type || '';
     canvas.dataset.militaryResponse = military?.phase || 'standby';
+    const armour = game.tankTraffic?.status;
+    const buildUp = Math.max(0, Math.ceil(60 - (game.tankTraffic?.fourStarTime || 0)));
+    let armourPhase = armour?.phase || 'standby';
+    let armourText = {
+      mobilising: `${armour?.reason === 'base-attack' ? 'BASE ALARM' : 'HEAVY ARMOUR'} · DISPATCH IN ${Math.max(0, Math.ceil(armour?.warning || 0))}s`,
+      approach: 'HEAVY ARMOUR · EN ROUTE', pursuit: 'HEAVY ARMOUR · ENGAGING', search: 'HEAVY ARMOUR · SEARCHING',
+      return: 'HEAVY ARMOUR · RETURNING TO BASE', blocked: 'HEAVY ARMOUR · HOLDING POSITION',
+      unavailable: 'HEAVY ARMOUR · REFORMING', borrowed: 'HEAVY ARMOUR · RIDE BORROWED'
+    }[armourPhase] || 'HEAVY ARMOUR · ON CALL';
+    if (heatLevel === MAX_HEAT && armourPhase === 'standby' && buildUp > 0) {
+      armourPhase = 'buildup'; armourText = `HEAVY ARMOUR · ESCALATION IN ${buildUp}s`;
+    }
+    $('tank-status').hidden = heatLevel < MAX_HEAT && !['mobilising', 'approach', 'pursuit', 'search', 'return', 'blocked'].includes(armourPhase);
+    $('tank-status').textContent = armourText;
+    $('tank-status').dataset.phase = armourPhase;
+    $('tank-status').dataset.reason = armour?.reason || '';
+    canvas.dataset.tankResponse = armourPhase;
     $('composure-value').textContent = Math.round(game.player.composure) + '%';
     $('composure-bar').style.width = game.player.composure + '%';
     $('composure-meter')?.setAttribute('aria-valuenow', Math.round(game.player.composure));
@@ -787,11 +827,11 @@
     $('ride-name').textContent = rideName; $('ride-name').title = rideName;
     $('ride-stats').hidden = !car;
     $('ride-health').hidden = !car;
-    $('ride-status').textContent = car ? flying ? aircraftStatus(car) : VehicleStats.status(car) : game.player.parachuting ? 'Parachute · steer to a clear landing' : 'Ready for a stroll';
+    $('ride-status').textContent = car ? flying ? aircraftStatus(car) : VehicleStats.status(car) + (tank ? ' · ' + tankGunStatus : '') : game.player.parachuting ? 'Parachute · steer to a clear landing' : 'Ready for a stroll';
     $('ride-status').dataset.danger = Boolean(car?.burning);
     if (car) {
       const stats = flying ? aircraftModel(car) : VehicleStats.performance(car);
-      $('ride-stats').textContent = flying ? (helicopter ? 'HELICOPTER' : 'FIXED WING') + ' · TOP ' + Math.round(stats.maxSpeed * 3.6 / 20) + ' km/h · ' + stats.seats + ' SEATS' : 'ACC ' + (stats.acceleration / 20).toFixed(1) + ' m/s² · TOP ' + Math.round(stats.maxSpeed * 3.6 / 20) + ' km/h · TURN ' + stats.handling.toFixed(1);
+      $('ride-stats').textContent = flying ? (helicopter ? 'HELICOPTER' : 'FIXED WING') + ' · TOP ' + Math.round(stats.maxSpeed * 3.6 / 20) + ' km/h · ' + stats.seats + ' SEATS' : tank ? 'ARMOURED · TOP ' + Math.round(stats.maxSpeed * 3.6 / 20) + ' km/h · INDEPENDENT TURRET' : 'ACC ' + (stats.acceleration / 20).toFixed(1) + ' m/s² · TOP ' + Math.round(stats.maxSpeed * 3.6 / 20) + ' km/h · TURN ' + stats.handling.toFixed(1);
       $('ride-health').textContent = 'ENGINE ' + Math.round(flying ? car.engineHealth ?? 100 : stats.engineHealth) + '% · HANDLING ' + Math.round(flying ? car.handlingHealth ?? 100 : stats.handlingHealth) + '%';
     }
     $('ride-bar').style.width = condition + '%';
@@ -813,6 +853,8 @@
     $('armor-price').textContent = game.upgrades.armor >= 3 ? 'MAXED' : money(150 + game.upgrades.armor * 125);
     let hint = nearest ? (nearest.id === 'wash' ? 'E · wash & cool off ($75)' : 'G · garage collection   I · supplies & toys') : car ? (Math.abs(car.speed) < 45 ? 'E · hop out   H · honk   SPACE · drift' : 'SPACE · drift   SHIFT · boost   H · honk') : game.cars.some(c => dist(c, game.player) < 65) ? 'E · borrow this ride' : 'RIGHT MOUSE · aim   LEFT MOUSE · ' + GADGETS[game.inventory.equipped].name + '   TAB · toys';
     if (flying) hint = helicopter ? 'W/S forward / back · A/D turn · SPACE / CTRL altitude · SHIFT hover · F parachute' : 'W/S throttle · A/D bank · SPACE / CTRL pitch · SHIFT boost · F parachute';
+    else if (tank) hint = 'WASD drive · MOUSE turret · HOLD LEFT MOUSE cannon · R recover · E exit';
+    else if (!car && game.cars.some(ride => isTank(ride) && ride.health > 0 && !ride.exploded && dist(ride, game.player) < 65)) hint = 'E · borrow tank · MOUSE turret · HOLD LEFT MOUSE cannon';
     else if ((game.aircraft || []).some(aircraft => aircraft.active !== false && aircraft.visible !== false && aircraft.health > 0 && aircraft.grounded && MayhemAircraft.boardingDistance(aircraft,game.player)<65)) hint = 'E · borrow aircraft · SPACE climb · CTRL descend';
     if (game.hangarAvailable) hint += '   G · hangar';
     if (armedAircraft) hint += '   LEFT MOUSE · side gun (aim right of cabin)';

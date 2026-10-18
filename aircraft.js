@@ -6,6 +6,7 @@
   // road chassis solver, so changing pilots does not change their flight model.
   const SCALE = 20;
   const VehicleStats = root.MayhemVehicleStats || (typeof require === 'function' ? require('./vehicle-stats.js') : null);
+  const Physics = root.MayhemPhysics || (typeof require === 'function' ? require('./physics.js') : null);
   const finite = (value, fallback = 0) => Number.isFinite(value) ? value : fallback;
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
   const wrap = angle => Math.atan2(Math.sin(angle), Math.cos(angle));
@@ -496,7 +497,7 @@
       };
       for (const building of this.game.buildings || []) {
         if (Math.min(before.x, entity.x) > building.x + building.w + model.length || Math.max(before.x, entity.x) < building.x - model.length || Math.min(before.y, entity.y) > building.y + building.h + model.width || Math.max(before.y, entity.y) < building.y - model.width) continue;
-        consider(building, finite(building.elevation, this._ground({ x: building.x + building.w / 2, y: building.y + building.h / 2 })), finite(building.height, 8));
+        consider(building, finite(building.elevation, this._ground({ x: building.x + building.w / 2, y: building.y + building.h / 2 })), finite(building.height, 8),null,building);
       }
       for (const object of this.game.staticObjects || []) {
         if (object.destroyed || distance(entity, object) > model.width + model.length + 130) continue;
@@ -510,7 +511,7 @@
       for (const other of this.aircraft.concat(this.game.cars || [], this.game.police || [])) {
         if (other === entity || other.visible === false || other.exploded) continue;
         if (distance(entity, other) > model.width + model.length + Math.hypot(delta.x, delta.y) + 180) continue;
-        const otherModel = isAircraft(other) ? getModel(other) : { length: other.kind === 'van' ? 55 : 48, width: 32, height: 1.7 };
+        const otherModel = isAircraft(other) ? getModel(other) : VehicleStats ? {...VehicleStats.getModel(other),height:other.kind==='tank'?2.6:other.kind==='van'?1.7:1.3} : {length:48,width:32,height:1.7};
         consider({ x: other.x - otherModel.length / 2, y: other.y - otherModel.width / 2, w: otherModel.length, h: otherModel.width, angle: other.angle }, finite(other.elevation), otherModel.height, other);
       }
       if (!hit) return;
@@ -525,6 +526,7 @@
         this.damage(entity, amount);
         if (amount > 0 && entity === this.current && this.game.missionStats) this.game.missionStats.collisions++;
         if (hit.other && amount > 0) {
+          if(entity===this.current)this.game._reportBaseHit?.(hit.other,hit.other,{playerCaused:true,ownerId:entity.id});
           if (isAircraft(hit.other)) this.damage(hit.other, amount * .6);
           else this.game._damageVehicle?.(hit.other, amount * .65);
         }
@@ -1102,12 +1104,29 @@
         let fraction = this._obstructionFraction(before, round), targetHit = null;
         if (fraction === null && this.game._blockedLine?.(before, round, before.elevation, round.elevation)) fraction = 0;
         const candidates = round.npc ? [this.current || this.game.current || this.game.player].filter(Boolean).concat(this.aircraft, this.game.cars || [], this.game.police || []) : this.aircraft.concat(this.game.cars || [], this.game.police || [], this.game.peds || []);
+        const tankRay = candidates.some(target=>target.kind==='tank') && this.game.vehiclePhysics?.firstHit?.(
+          {...before,height:before.elevation},{...round,height:round.elevation},round.ownerId);
         for (const target of new Set(candidates)) {
           if (target.id === round.ownerId || target.visible === false || target.exploded) continue;
           const road = VehicleStats && Object.hasOwn(VehicleStats.CAR_TYPES, target.kind);
           const model = isAircraft(target) ? getModel(target) : road ? { ...VehicleStats.getModel(target), height: target.kind === 'van' ? 1.7 : 1.3 } : { length: 24, width: 24, height: 1.9 };
           const box = { x: target.x - model.length / 2, y: target.y - model.width / 2, w: model.length, h: model.width, angle: target.angle };
-          const hit = segmentBox(before, round, box, finite(target.elevation), model.height);
+          let hit;
+          if(target.kind==='tank') {
+            if(this.game.vehiclePhysics?.get?.(target.id)) {
+              // Cannon resolves the same posed hull, turret and barrel used
+              // for vehicles and people, including the empty gun overhang.
+              const dx=round.x-before.x,dy=round.y-before.y,dz=(round.elevation-before.elevation)*SCALE,length2=dx*dx+dy*dy+dz*dz;
+              hit=tankRay?.body.entity===target ? clamp(((tankRay.x-before.x)*dx+(tankRay.y-before.y)*dy+(tankRay.height-before.elevation)*SCALE*dz)/(length2||1),0,1) : null;
+            } else {
+              // Standalone flight simulations may omit the Cannon world.
+              const hits=Physics.tankBoxes(target).map(solid=>{
+                const m=solid.basis,local=p=>{const x=p.x/SCALE-solid.x,y=p.elevation-solid.y,z=p.y/SCALE-solid.z;return {x:(x*m[0]+y*m[3]+z*m[6])*SCALE,y:(x*m[2]+y*m[5]+z*m[8])*SCALE,elevation:x*m[1]+y*m[4]+z*m[7]};};
+                return segmentBox(local(before),local(round),{x:-solid.hx*SCALE,y:-solid.hz*SCALE,w:solid.hx*40,h:solid.hz*40},-solid.hy,solid.hy*2);
+              }).filter(value=>value!==null);
+              hit=hits.length?Math.min(...hits):null;
+            }
+          } else hit = segmentBox(before, round, box, finite(target.elevation), model.height);
           if (hit === null || fraction !== null && hit >= fraction) continue;
           fraction = hit; targetHit = target;
         }
@@ -1128,6 +1147,10 @@
           }
         }
         round.life = 0; this.game._confetti?.(round.x, round.y, 6, round.elevation);
+        if(!round.npc) {
+          this.game._reportBaseAttackSegment?.(before,round,round.ownerId);
+          if(targetHit)this.game._reportBaseHit?.(targetHit,round,{playerCaused:true,ownerId:round.ownerId});
+        }
         if (!round.npc) this.game._raiseHeat?.(.5, 'Airborne cannon impact', { position: round, noise: 260, victims, officers });
       }
       // Keep the array identity stable for renderers and integrations.

@@ -30,7 +30,7 @@
   ].map(([from, to, radius, kind]) => Object.freeze({ from, to, radius: radius * CHARACTER_SCALE, kind }));
   const BRACES = [['leftShoulder', 'rightShoulder'], ['leftHip', 'rightHip'], ['leftShoulder', 'leftHip'], ['rightShoulder', 'rightHip'], ['leftShoulder', 'rightHip'], ['rightShoulder', 'leftHip'], ['head', 'leftShoulder'], ['head', 'rightShoulder']];
   const BENDS = [['leftShoulder', 'leftHand', 0.18], ['rightShoulder', 'rightHand', 0.18], ['leftHip', 'leftFoot', 0.22], ['rightHip', 'rightFoot', 0.22], ['pelvis', 'head', 0.63]].map(([a, b, min]) => [a, b, min * CHARACTER_SCALE]);
-  const CAR_DIMENSIONS = { compact: [46, 27, 1.40], sports: [49, 28, 1.35], van: [55, 32, 1.64] };
+  const CAR_DIMENSIONS = { compact: [46, 27, 1.40], sports: [49, 28, 1.35], van: [55, 32, 1.64], tank: [104, 48, 2.6] };
   const vectorDistance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
   const restDistance = (a, b) => Math.hypot(ANATOMY[a][0] - ANATOMY[b][0], ANATOMY[a][1] - ANATOMY[b][1], ANATOMY[a][2] - ANATOMY[b][2]);
 
@@ -119,6 +119,38 @@
     const angular = box.angularVelocity || {};
     box.wx = clamp(finite(angular.x), -14, 14); box.wy = clamp(finite(angular.y), -14, 14); box.wz = clamp(finite(angular.z), -14, 14);
     return box;
+  }
+
+  function multiplyQuaternion(a, b) {
+    return { x: a.w*b.x+a.x*b.w+a.y*b.z-a.z*b.y, y: a.w*b.y-a.x*b.z+a.y*b.w+a.z*b.x,
+      z: a.w*b.z+a.x*b.y-a.y*b.x+a.z*b.w, w: a.w*b.w-a.x*b.x-a.y*b.y-a.z*b.z };
+  }
+
+  function tankParts(entity) {
+    const Stats = root.MayhemVehicleStats || (typeof require === 'function' ? require('./vehicle-stats.js') : null);
+    const g = Stats.TANK_GEOMETRY, angle = finite(entity.tankGun?.turretAngle, finite(entity.angle)) - finite(entity.angle);
+    const pitch = finite(entity.tankGun?.pitch), c = Math.cos(angle), s = Math.sin(angle);
+    const yaw = { x: 0, y: -Math.sin(angle/2), z: 0, w: Math.cos(angle/2) };
+    const barrel = multiplyQuaternion(yaw, { x: 0, y: 0, z: Math.sin(pitch/2), w: Math.cos(pitch/2) });
+    const forward = g.gunPivot[0] + g.barrelHalf[0] * Math.cos(pitch);
+    return [
+      { name: 'hull', offset: g.hullCenter, half: g.hullHalf },
+      { name: 'turret', offset: g.turretCenter, half: g.turretHalf, orientation: yaw },
+      { name: 'barrel', offset: [c*forward, g.gunPivot[1]+g.barrelHalf[0]*Math.sin(pitch), s*forward], half: g.barrelHalf, orientation: barrel }
+    ];
+  }
+
+  function tankBoxes(car) {
+    const angle = finite(car.angle), orientation = car.orientation || { x: 0, y: -Math.sin(angle/2), z: 0, w: Math.cos(angle/2) };
+    const parts = tankParts(car), basis = boxBasis(orientation, angle), centerHeight = parts[0].half[1];
+    return parts.map(part => {
+      const [ox, groundY, oz] = part.offset, oy = groundY-centerHeight;
+      return prepareBox({ part: part.name, x: car.x/UNIT+ox*basis[0]+oy*basis[1]+oz*basis[2],
+        y: finite(car.elevation)+centerHeight+ox*basis[3]+oy*basis[4]+oz*basis[5], z: car.y/UNIT+ox*basis[6]+oy*basis[7]+oz*basis[8],
+        hx: part.half[0], hy: part.half[1], hz: part.half[2], orientation: part.orientation ? multiplyQuaternion(orientation, part.orientation) : orientation,
+        vx: clamp(finite(car.vx, finite(car.speed)*Math.cos(angle))/UNIT, -20, 20), vy: clamp(finite(car.verticalVelocity), -20, 20),
+        vz: clamp(finite(car.vy, finite(car.speed)*Math.sin(angle))/UNIT, -20, 20), angularVelocity: car.angularVelocity, dynamic: true });
+    });
   }
 
   // Sphere against a full 3D oriented box, including flying/tipped roofs.
@@ -330,6 +362,7 @@
       for (const car of (environment.cars || []).concat(environment.police || [])) {
         if (!car || !Number.isFinite(car.x) || !Number.isFinite(car.y) || seen.has(car.id || car)) continue;
         seen.add(car.id || car);
+        if (car.kind === 'tank') { boxes.push(...tankBoxes(car)); continue; }
         const dimension = CAR_DIMENSIONS[car.kind] || CAR_DIMENSIONS.compact;
         const angle = finite(car.angle), length = clamp(finite(car.colliderLength, finite(car.length, dimension[0])), 10, 120) / UNIT;
         const width = clamp(finite(car.colliderWidth, finite(car.width, dimension[1])), 8, 80) / UNIT;
@@ -471,7 +504,7 @@
     }
   }
 
-  const api = { RagdollWorld, BODYPARTS, JOINT_NAMES, STEP, FLOOR, CHARACTER_SCALE, PERSON_HEIGHT, MUZZLE_HEIGHT, PLAYER_RADIUS, NPC_RADIUS, aircraftOrientation };
+  const api = { RagdollWorld, BODYPARTS, JOINT_NAMES, STEP, FLOOR, CHARACTER_SCALE, PERSON_HEIGHT, MUZZLE_HEIGHT, PLAYER_RADIUS, NPC_RADIUS, aircraftOrientation, tankParts, tankBoxes };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.MayhemPhysics = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

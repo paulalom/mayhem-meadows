@@ -42,6 +42,7 @@ button:active:not(:disabled){transform:translateY(1px)}
 .heat-stars{font-size:23px;color:var(--coral);letter-spacing:3px;line-height:1.2;white-space:nowrap}
 .heat-stars[data-level="4"]{color:var(--yellow)}
 .military-status{max-width:160px;color:var(--yellow);font:700 8px/1.35 "Courier New",monospace;letter-spacing:.25px}
+.tank-status{color:#d6df9a}
 .condition-label{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:9px}
 #composure-value{font-family:"Courier New",monospace;font-size:10px;color:var(--aqua);font-weight:700}
 .meter{height:5px;background:#3b4650;overflow:hidden;border-radius:2px;width:100%}
@@ -232,6 +233,9 @@ kbd{font:700 10px "Courier New",monospace;padding:4px 5px;background:var(--panel
 .aim-reticle:before,.aim-reticle:after{content:"";position:absolute;left:50%;top:50%;background:var(--cream);transform:translate(-50%,-50%)}
 .aim-reticle:before{width:23px;height:1px}
 .aim-reticle:after{width:1px;height:23px}
+.aim-reticle[data-weapon="tank"]{width:22px;height:22px;border-color:var(--yellow)}
+.aim-reticle[data-weapon="tank"]:before,.aim-reticle[data-weapon="tank"]:after{background:var(--yellow)}
+.aim-reticle[data-weapon="tank"][data-reloading="true"]{opacity:.5;border-style:dashed}
 .aim-reticle.aiming,.game-shell.aiming .aim-reticle,.game-shell[data-aiming="true"] .aim-reticle{width:19px;height:19px;border-color:var(--lime);filter:drop-shadow(0 1px 3px #141d27)}
 .aim-reticle.aiming:before,.aim-reticle.aiming:after,.game-shell.aiming .aim-reticle:before,.game-shell.aiming .aim-reticle:after,.game-shell[data-aiming="true"] .aim-reticle:before,.game-shell[data-aiming="true"] .aim-reticle:after{background:var(--lime)}
 .mouse-hint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);max-width:calc(100% - 36px);width:max-content;padding:11px 15px;background:rgba(20,29,39,.94);border:1px solid var(--lime);border-radius:4px;color:var(--cream);font-size:12px;font-weight:700;line-height:1.6;text-align:center;box-shadow:3px 3px 0 #141d2750;pointer-events:none;z-index:3}

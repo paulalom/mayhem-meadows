@@ -15,13 +15,14 @@
     const Aircraft=root.MayhemAircraft||(typeof require==='function'?require('./aircraft.js'):null);
     return Aircraft?.AIRCRAFT_TYPES[entity.aircraftType]||null;
   }
-  const height = entity => aircraftModel(entity)?.height ?? (entity.kind === 'van' ? 1.7 : 1.3);
+  const height = entity => aircraftModel(entity)?.height ?? (entity.kind === 'tank' ? VehicleStats.TANK_GEOMETRY.height : entity.kind === 'van' ? 1.7 : 1.3);
   function quaternion(entity) {
     const pose=aircraftModel(entity)?Physics.aircraftOrientation(entity):entity.orientation;
     return pose?new C.Quaternion(pose.x,pose.y,pose.z,pose.w):new C.Quaternion().setFromEuler(0,-finite(entity.angle),0);
   }
 
   function personContact(person, vehicle, radius, type) {
+    if (vehicle.kind === 'tank') return tankPersonContact(person, vehicle, radius);
     const q = quaternion(vehicle);
     const inverse = q.conjugate(), h = height(vehicle), r = radius / SCALE;
     const offset=aircraftModel(vehicle)?q.vmult(new C.Vec3(0,h/2,0)):new C.Vec3(0,h/2,0);
@@ -43,6 +44,26 @@
       // flat footprint. Tipped roofs still present their actual side normals.
       const hit = horizontal < 0.15 ? { vertical: true, up: normal.y, nx: 0, ny: 0, depth: depth * SCALE } :
         { nx: normal.x / horizontal, ny: normal.z / horizontal, depth: depth / horizontal * SCALE };
+      if (!best || hit.depth > best.depth) best = hit;
+    }
+    return best;
+  }
+
+  function tankPersonContact(person, vehicle, radius) {
+    const r = radius/SCALE; let best = null;
+    for (const box of Physics.tankBoxes(vehicle)) for (const vertical of [r, Physics.PERSON_HEIGHT/2, Physics.PERSON_HEIGHT-r]) {
+      const m = box.basis, dx = person.x/SCALE-box.x, dy = finite(person.elevation)+vertical-box.y, dz = person.y/SCALE-box.z;
+      const local = [dx*m[0]+dy*m[3]+dz*m[6], dx*m[1]+dy*m[4]+dz*m[7], dx*m[2]+dy*m[5]+dz*m[8]], half = [box.hx,box.hy,box.hz];
+      let delta = local.map((v,i)=>v-clamp(v,-half[i],half[i])), distance = Math.hypot(...delta), depth = r-distance;
+      if (depth <= 0) continue;
+      if (distance < .000001) {
+        const gaps = local.map((v,i)=>half[i]-Math.abs(v)), axis = gaps.indexOf(Math.min(...gaps));
+        delta = [0,0,0]; delta[axis] = local[axis] < 0 ? -1 : 1; distance = 1; depth = r+gaps[axis];
+      }
+      const normal = [0,1,2].map(row=>(delta[0]*m[row*3]+delta[1]*m[row*3+1]+delta[2]*m[row*3+2])/distance);
+      const horizontal = Math.hypot(normal[0],normal[2]);
+      const hit = horizontal < .15 ? { vertical:true, up:normal[1], nx:0, ny:0, depth:depth*SCALE } :
+        { nx:normal[0]/horizontal, ny:normal[2]/horizontal, depth:depth/horizontal*SCALE };
       if (!best || hit.depth > best.depth) best = hit;
     }
     return best;
@@ -265,26 +286,31 @@
       const body = entry.body, old = entry.snapshot;
       const positionChanged = entity.x !== old.x || entity.y !== old.y || entity.elevation !== old.elevation;
       const angleChanged = entity.angle !== old.angle, orientationChanged = JSON.stringify(entity.orientation) !== old.orientation;
-      if (positionChanged) { body.position.set(entity.x / SCALE, finite(entity.elevation) + entry.height / 2 + 0.004, entity.y / SCALE); body.wakeUp(); body.aabbNeedsUpdate = true; }
+      if (positionChanged) { body.position.set(entity.x / SCALE, finite(entity.elevation) + entry.centerHeight + 0.004, entity.y / SCALE); body.wakeUp(); body.aabbNeedsUpdate = true; }
       if (orientationChanged && entity.orientation) { body.quaternion.set(entity.orientation.x, entity.orientation.y, entity.orientation.z, entity.orientation.w); body.wakeUp(); body.aabbNeedsUpdate = true; }
       else if (angleChanged) { body.quaternion.setFromEuler(0, -entity.angle, 0); body.wakeUp(); body.aabbNeedsUpdate = true; }
       if (entity.vx !== old.vx || entity.vy !== old.vy) { body.velocity.x = finite(entity.vx) / SCALE; body.velocity.z = finite(entity.vy) / SCALE; body.wakeUp(); }
       else if (entity.speed !== old.speed) { body.velocity.x = Math.cos(entity.angle) * entity.speed / SCALE; body.velocity.z = Math.sin(entity.angle) * entity.speed / SCALE; body.wakeUp(); }
       if (entity.verticalVelocity !== old.verticalVelocity) { body.velocity.y = finite(entity.verticalVelocity); body.wakeUp(); }
+      this._tankShapes(entry);
       if (clearControl) entry.control = null;
     }
 
     _body(entity) {
       let entry = this.bodies.get(entity.id);
       if (entry) return entry;
-      const type = VehicleStats.getModel(entity), h = height(entity);
+      const type = VehicleStats.getModel(entity), h = height(entity), centerHeight = entity.kind === 'tank' ? VehicleStats.TANK_GEOMETRY.centerHeight : h/2;
       const body = new C.Body({ mass: 700 * type.mass, material: this.carMaterial, linearDamping: 0.015, angularDamping: 0.28,
         sleepSpeedLimit: 0.08, sleepTimeLimit: 1.5, collisionFilterGroup: ROAD_VEHICLE_GROUP });
-      body.addShape(new C.Box(new C.Vec3(type.length / 40, h / 2, type.width / 40)));
+      body.addShape(new C.Box(new C.Vec3(type.length / 40, centerHeight, type.width / 40)));
+      if (entity.kind === 'tank') for (const part of Physics.tankParts(entity).slice(1)) {
+        const offset = new C.Vec3(part.offset[0], part.offset[1]-centerHeight, part.offset[2]);
+        body.addShape(new C.Box(new C.Vec3(...part.half)), offset, new C.Quaternion(part.orientation.x,part.orientation.y,part.orientation.z,part.orientation.w));
+      }
       const ground = this.groundHeight(entity.x, entity.y), elevation = finite(entity.elevation, ground);
       const groundedSpawn = !entity.orientation && Math.abs(elevation - ground) < 0.15;
       const pose = groundedSpawn && this._groundPose(entity.x, entity.y, entity.angle, body.shapes[0].halfExtents);
-      body.position.set(entity.x / SCALE, pose ? pose.centreHeight : elevation + h / 2 + 0.004, entity.y / SCALE);
+      body.position.set(entity.x / SCALE, pose ? pose.centreHeight : elevation + centerHeight + 0.004, entity.y / SCALE);
       if (entity.orientation) body.quaternion.set(entity.orientation.x, entity.orientation.y, entity.orientation.z, entity.orientation.w);
       else if (pose) body.quaternion.copy(pose.quaternion);
       else body.quaternion.setFromEuler(0, -finite(entity.angle), 0);
@@ -297,8 +323,22 @@
       // Resting cars start with their parking brake set. Cannon sleep retains
       // the dynamic collider and wakes it for driving, blasts and collisions.
       if (pose && body.velocity.lengthSquared() < 0.0001) body.sleep();
-      entry = { body, height: h, snapshot: this._snapshot(entity), control: null };
+      entry = { body, height: h, centerHeight, snapshot: this._snapshot(entity), control: null };
       this.bodies.set(entity.id, entry); return entry;
+    }
+
+    _tankShapes(entry) {
+      if (entry.body.entity?.kind !== 'tank') return;
+      const body = entry.body, entity = body.entity;
+      const key = [finite(entity.tankGun?.turretAngle,finite(entity.angle))-finite(entity.angle),finite(entity.tankGun?.pitch)].join(':');
+      if (entry.tankGunKey === key) return;
+      for (const [i,part] of Physics.tankParts(entity).entries()) {
+        body.shapeOffsets[i].set(part.offset[0],part.offset[1]-entry.centerHeight,part.offset[2]);
+        const q = part.orientation;
+        body.shapeOrientations[i].set(q?.x||0,q?.y||0,q?.z||0,q?.w??1);
+      }
+      entry.tankGunKey = key; body.updateBoundingRadius(); body.aabbNeedsUpdate = true;
+      this.world.broadphase.dirty = true;
     }
 
     _syncAircraft(dt=0) {
@@ -421,7 +461,7 @@
     _drive(entry, dt) {
       const body = entry.body, entity = body.entity, command = entry.control, base = VehicleStats.getModel(entity), type = VehicleStats.performance(entity);
       const up = body.quaternion.vmult(new C.Vec3(0, 1, 0)), forward = body.quaternion.vmult(new C.Vec3(1, 0, 0));
-      const grounded = (this._nearGround(body, entry.height / 2) || this._supported(body)) && up.y > 0.55;
+      const grounded = (this._nearGround(body, entry.centerHeight) || this._supported(body)) && up.y > 0.55;
       if (!grounded) return;
       const normal = this._contactNormal(body), alongNormal = this.world.gravity.dot(normal);
       const roadContact = this.world.contacts.some(contact =>
@@ -475,7 +515,8 @@
       body.force.x += body.mass * (forward.x * acceleration - side.x * lateral * grip);
       body.force.y += body.mass * (forward.y * acceleration - side.y * lateral * grip);
       body.force.z += body.mass * (forward.z * acceleration - side.z * lateral * grip);
-      const yawRate = steer * type.handling * clamp(Math.abs(speed) / 7.5, 0.2, 1) * (command.brake ? 1.35 : 1) * Math.sign(speed);
+      const turning = entity.kind === 'tank' ? (type.driveable ? 1 : 0) : clamp(Math.abs(speed) / 7.5, 0.2, 1) * Math.sign(speed);
+      const yawRate = steer * type.handling * turning * (command.brake && entity.kind !== 'tank' ? 1.35 : 1);
       // Steering controls only yaw. Collision roll/pitch are never overwritten.
       body.angularVelocity.y += (-yawRate - body.angularVelocity.y) * Math.min(1, 8 * dt);
       body.wakeUp();
@@ -500,6 +541,7 @@
     step(dt) {
       this.impacts = [];
       this._syncAircraft(dt);
+      for (const entry of this.bodies.values()) this._tankShapes(entry);
       // Two solver steps improve thin-post contacts and fast bumper impacts.
       for (let substep = 0; substep < 2; substep++) {
         for (const entry of this.bodies.values()) this._drive(entry, dt / 2);
@@ -507,8 +549,10 @@
         // Apply the extra lift after contact solving so the road constraint
         // cannot erase it during the same instant the bumper hits the wall.
         for (const { body, other, lift } of this._pendingLaunches.splice(0)) {
-          body.applyImpulse(new C.Vec3(0, lift * body.mass, 0), new C.Vec3(0, 0, body.entity.id.length % 2 ? 0.24 : -0.24));
-          if (other.entity && other.type===C.Body.DYNAMIC) other.applyImpulse(new C.Vec3(0, lift * other.mass * 0.8, 0), new C.Vec3(0.15, 0, 0));
+          const ownScale = body.entity.kind === 'tank' ? Math.min(1, other.mass/body.mass) : 1;
+          const otherScale = other.entity?.kind === 'tank' ? Math.min(1, body.mass/other.mass) : 1;
+          body.applyImpulse(new C.Vec3(0, lift * body.mass * ownScale, 0), new C.Vec3(0, 0, body.entity.id.length % 2 ? 0.24 : -0.24));
+          if (other.entity && other.type===C.Body.DYNAMIC) other.applyImpulse(new C.Vec3(0, lift * other.mass * 0.8 * otherScale, 0), new C.Vec3(0.15, 0, 0));
           body.wakeUp(); if (other.entity) other.wakeUp();
         }
       }
@@ -517,7 +561,7 @@
         const body = entry.body, entity = body.entity;
         body.velocity.x = clamp(body.velocity.x, -32, 32); body.velocity.z = clamp(body.velocity.z, -32, 32); body.velocity.y = clamp(body.velocity.y, -22, 12);
         entity.x = body.position.x * SCALE; entity.y = body.position.z * SCALE;
-        entity.elevation = body.position.y - entry.height / 2;
+        entity.elevation = body.position.y - entry.centerHeight;
         entity.orientation = { x: body.quaternion.x, y: body.quaternion.y, z: body.quaternion.z, w: body.quaternion.w };
         entity.angularVelocity = { x: body.angularVelocity.x, y: body.angularVelocity.y, z: body.angularVelocity.z };
         const forward = body.quaternion.vmult(new C.Vec3(1, 0, 0)), up = body.quaternion.vmult(new C.Vec3(0, 1, 0));
@@ -525,7 +569,10 @@
         entity.vx = body.velocity.x * SCALE; entity.vy = body.velocity.z * SCALE;
         entity.speed = entity.vx * Math.cos(entity.angle) + entity.vy * Math.sin(entity.angle);
         entity.verticalVelocity = body.velocity.y; entity.upright = up.y > 0.6;
-        entity.grounded = (this._nearGround(body, entry.height / 2, 0.12) || this._supported(body)) && entity.upright;
+        entity.grounded = (this._nearGround(body, entry.centerHeight, 0.12) || this._supported(body)) && entity.upright;
+        // Aim is world-relative, so hull yaw from the contact solve must not
+        // leave the cannon collider one frame behind the visible turret.
+        this._tankShapes(entry);
         entity.collisionHeight = entry.height; entry.snapshot = this._snapshot(entity);
       }
       return this.impacts;

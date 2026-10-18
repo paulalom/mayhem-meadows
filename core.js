@@ -5,6 +5,7 @@
   const SIZE = World.SIZE;
   const MAX_HEAT = 4;
   const MAX_POLICE_HEAT = 3;
+  const Tanks = root.MayhemTanks || (typeof require === 'function' ? require('./tanks.js') : null);
   // Kept as a compatibility export for old tools; routing uses RoadNetwork.
   const ROAD_CENTERS = [180, 540, 900, 1260, 1620, 1980];
   const ROAD_WIDTH = 104;
@@ -151,6 +152,8 @@
       this.aviation = new Aircraft.AircraftSystem(this);
       this.aircraft = this.aviation.aircraft;
       this.aliens = new Aliens.AlienSystem(this);
+      this.tankTraffic = new Tanks.TankSystem(this);
+      this.tanks = this.tankTraffic.tanks;
     }
 
     get current() { return this.cars.find(car => car.id === this.player.vehicleId) || this.aircraft?.find(craft => craft.id === this.player.vehicleId) || this.player; }
@@ -263,8 +266,9 @@
     }
 
     _vehicleState(kind) {
-      return { kind, modelId: VehicleStats.getModel({ kind }).id, maxHealth: this.maxHealth,
-        health: this.maxHealth, engineHealth: 100, handlingHealth: 100, burning: false, fireTime: 0, exploded: false };
+      const model=VehicleStats.getModel({kind}),maxHealth=kind==='tank'?model.maxHealth:this.maxHealth;
+      return { kind, modelId: model.id, maxHealth,
+        health: maxHealth, engineHealth: 100, handlingHealth: 100, burning: false, fireTime: 0, exploded: false };
     }
 
     vehicleStats(vehicle = this.current) { return Aircraft.isAircraft(vehicle) ? Aircraft.getModel(vehicle) : VehicleStats.performance(vehicle); }
@@ -352,9 +356,11 @@
 
     _personVehicleContact(person, vehicle, radius = person === this.player ? PLAYER_RADIUS : NPC_RADIUS) {
       const type = vehicle.railModel || (Aircraft.isAircraft(vehicle) ? Aircraft.getModel(vehicle) : CAR_TYPES[vehicle.kind] || CAR_TYPES.compact);
-      const reach = Math.hypot(type.length, type.width) / 2 + radius;
-      if ((person.x - vehicle.x) ** 2 + (person.y - vehicle.y) ** 2 > reach * reach) return null;
       const entry = this.vehiclePhysics && this.vehiclePhysics.bodies.get(vehicle.id);
+      // The articulated gun overhangs the chassis and may point sideways.
+      // Include its full 3D radius before the exact standing-person sweep.
+      const reach = vehicle.kind==='tank' ? finite(entry?.body.boundingRadius,5)*VehiclePhysics.SCALE+radius : Math.hypot(type.length, type.width) / 2 + radius;
+      if ((person.x - vehicle.x) ** 2 + (person.y - vehicle.y) ** 2 > reach * reach) return null;
       return VehiclePhysics.personContact(person, entry && entry.snapshot.angle !== vehicle.angle ? { ...vehicle, orientation: null } : vehicle, radius, type);
     }
 
@@ -504,7 +510,8 @@
     _roadPosition(point) { return this.network.nearestRoad(point); }
 
     _safeRoadPosition(point, radius = 18, ignore = null) {
-      const road = this._roadPosition(point);
+      const network=ignore?.kind==='tank'?(this.tankTraffic?.network||this.network):this.network;
+      const road = network.nearestRoad(point);
       const free = candidate => {
         if(!this._dry(candidate)) return false;
         candidate.elevation=this._ground(candidate);
@@ -514,14 +521,14 @@
         }
         return this._personFree(candidate.x,candidate.y,radius);
       };
-      for (const arc of [0,60,-60,120,-120,200,-200,320,-320]) for (const lane of [0,18,-18]) {
-        const candidate = this.network.pointOnRoad(road.roadId,road.s + arc,lane);
+      for (const arc of [0,60,-60,120,-120,200,-200,320,-320]) for (const lane of (ignore?.kind==='tank'?[0]:[0,18,-18])) {
+        const candidate = network.pointOnRoad(road.roadId,road.s + arc,lane);
         if (free(candidate)) return candidate;
       }
       for (const node of this.nodes.slice().sort((a,b) => distance(a,point)-distance(b,point))) {
-        const projection = this._roadPosition(node);
+        const projection = network.nearestRoad(node);
         for (const offset of [0,70,-70,140,-140]) {
-          const candidate = this.network.pointOnRoad(projection.roadId,projection.s+offset,0);
+          const candidate = network.pointOnRoad(projection.roadId,projection.s+offset,0);
           if (free(candidate)) return candidate;
         }
       }
@@ -612,7 +619,22 @@
       return !hit || hit.source === object;
     }
 
+    _reportBaseHit(target,point,metadata={playerCaused:true}) {
+      if(!target||metadata.playerCaused!==true||target.id===metadata.ownerId)return false;
+      const bounds=this.world?.militaryBase?.bounds;
+      if(!bounds||!point||point.x<bounds.x||point.x>bounds.x+bounds.w||point.y<bounds.y||point.y>bounds.y+bounds.h)return false;
+      if(!(target.district==='military'||target.baseId==='military'||target.airportId==='military'||target.militaryModel))return false;
+      return Boolean(this.tankTraffic?.reportBaseAttack({position:{x:point.x,y:point.y,height:finite(point.height,this._base(target)+.8)},targetId:target.id,kind:target.kind||target.militaryModel||'building',playerCaused:true}));
+    }
+
+    _reportBaseAttackSegment(from,to,ownerId=this.player.vehicleId) {
+      const a={...from,height:finite(from.height,finite(from.elevation))},b={...to,height:finite(to.height,finite(to.elevation))};
+      const hit=this.vehiclePhysics.firstHit(a,b,ownerId);
+      return hit?this._reportBaseHit(hit.source||hit.body?.entity,hit,{playerCaused:true,ownerId}):false;
+    }
+
     _damageProp(object, amount, origin, playerCaused = true) {
+      if(object&&Number.isFinite(amount)&&amount>0&&playerCaused)this._reportBaseHit(object,{x:object.x,y:object.y,height:this._base(object)+1},{playerCaused:true});
       if (!object || object.destroyed || object.destructible === false || object.kind === 'garage' ||
         !this.staticObjects.includes(object) || !Number.isFinite(amount) || amount <= 0) return false;
       const maxHealth = finite(object.maxHealth, World.PROP_HEALTH?.[object.kind] || 45);
@@ -751,6 +773,7 @@
 
     _clearHeat() {
       this.heat = 0; this.escapeTimer = 0; this.policeSeen = false; this.airPoliceSeen = false; this._policeSearching = false;
+      this.militaryTankSeen=false;this.tankTraffic?.clearHeat();
       this._reportedLocation = null;
       for (const { reporter } of this._witnessReports) if (reporter.bubble === 'HELP! CALLING POLICE...') {
         reporter.bubble = ''; reporter.bubbleTimer = 0;
@@ -793,7 +816,7 @@
         car.speed = car.vx = car.vy = 0;
         this.player.x = car.x; this.player.y = car.y; this.player.elevation=car.elevation; this.player.grounded=true;
         if (!car.borrowed) { car.borrowed = true; this._raiseHeat(1, 'Borrowed a ride', { position: car }); }
-        this._toast('Nice wheels. Hold Shift for boost; Space for handbrake.'); this._sound('enter', { x: car.x, y: car.y, kind: car.kind });
+        this._toast(car.kind==='tank'?'Warden controls: WASD drives; aim with the mouse and hold left mouse to fire.':'Nice wheels. Hold Shift for boost; Space for handbrake.'); this._sound('enter', { x: car.x, y: car.y, kind: car.kind });
         return true;
       }
       const service = this.services.find(s => distance(s, this.player) < 100);
@@ -828,7 +851,7 @@
       if (this.heat === 0 && !this._witnessReports.length && (!this.player.vehicleId || !VehicleStats.isDamaged(this.current))) { this._toast('Already sparkling clean!'); return false; }
       if (this.money < 75) { this._toast('The wash costs $75. Finish a gig for cash.', 'warning'); return false; }
       this.money -= 75; this._clearHeat(); this.player.composure = 100;
-      if (this.player.vehicleId) VehicleStats.repair(this.current, this.maxHealth);
+      if (this.player.vehicleId) VehicleStats.repair(this.current, finite(this.current.maxHealth,this.maxHealth));
       this._confetti(this.current.x, this.current.y, 36); this._toast('Squeaky clean: heat cleared and car repaired!', 'success'); this._sound('wash', { x: service.x, y: service.y });
       return true;
     }
@@ -857,6 +880,10 @@
         this._sound('empty', { x: this.player.x, y: this.player.y }); return false;
       }
       this._actionCooldown = GADGETS[equipped].cooldown;
+      if(equipped!=='cannon') {
+        const reach=equipped==='hammer'?62:100,origin={x:this.player.x,y:this.player.y,height:this.player.elevation+MUZZLE_HEIGHT};
+        this._reportBaseAttackSegment(origin,{x:origin.x+Math.cos(angle)*reach,y:origin.y+Math.sin(angle)*reach,height:origin.height+Math.tan(pitch)*reach/20},this.player.id);
+      }
       if (equipped === 'cannon') {
         this.inventory.ammo.cannon--;
         const life = 360 / 560;
@@ -881,6 +908,7 @@
           if (this._knockDown(ped, { x: forwardX * 5.8, y: 3.2, z: forwardY * 5.8 })) { victims.push(ped); hit = true; }
         }
         for (const cop of this.police) if (this._activePolice(cop) && inReach(cop)) { officers.push(cop); cop.distracted = 2.3; this._confetti(cop.x, cop.y, 25); hit = true; }
+        for(const victim of victims)this._reportBaseHit(victim,victim,{playerCaused:true});
         if (hit) this._raiseHeat(1, 'Inflatable nuisance', { noise: 100, victims, officers });
         return true;
       }
@@ -890,6 +918,7 @@
       const victims = [], officers = [];
       for (const ped of this.peds) if (ped.stunned <= 0 && !this.ragdolls.get(ped.id) && inAimHeight(ped) && distance(ped, pop) < 60 && this._startle(ped, angle)) { victims.push(ped); hit = true; }
       for (const cop of this.police) if (this._activePolice(cop) && inAimHeight(cop) && distance(cop, pop) < 65) { officers.push(cop); cop.distracted = 1.8; hit = true; this._confetti(cop.x, cop.y, 20); }
+      for(const victim of victims)this._reportBaseHit(victim,victim,{playerCaused:true});
       if (hit) this._raiseHeat(1, 'Confetti disturbance', { noise: 140, victims, officers });
       return true;
     }
@@ -907,6 +936,7 @@
       }
       for (const cop of this.police) if (this._activePolice(cop) && distance(cop, projectile) < 90 && Math.abs(projectile.height-this._base(cop))<2.6 &&
         !this._blockedLine(projectile, cop, projectile.height, this._base(cop) + MUZZLE_HEIGHT)) { officers.push(cop); cop.distracted = 3; this._confetti(cop.x, cop.y, 25); hit = true; }
+      for(const victim of victims)this._reportBaseHit(victim,victim,{playerCaused:true});
       if (hit) this._raiseHeat(1, 'Party Cannon commotion', { position: projectile, noise: 300, victims, officers });
     }
 
@@ -928,6 +958,7 @@
           const walls = this.buildings.some(b => segmentHitsVolume(before,projectile,{x:b.x-3,y:b.y-3,w:b.w+6,h:b.h+6,angle:b.angle || 0,...this._buildingVolume(b)},before.height,projectile.height));
           const vehicleHit = this.vehiclePhysics.firstHit(before,projectile);
           const vehicles = Boolean(vehicleHit);
+          if(vehicleHit)this._reportBaseHit(vehicleHit.source||vehicleHit.body?.entity,vehicleHit,{playerCaused:true});
           if(!walls && Aircraft.isAircraft(vehicleHit?.body?.entity)) this.aviation.damage(vehicleHit.body.entity,35);
           const people = this.peds.some(ped => atHeight(this._base(ped)+.1,this._base(ped)+PERSON_HEIGHT+.35*CHARACTER_SCALE) && ped.stunned <= 0 && distance(ped, projectile) < 16 * CHARACTER_SCALE);
           const surface=this._ground(projectile),ground=projectile.height<=surface+.12;
@@ -1152,7 +1183,7 @@
         if (!this.player.vehicleId) { this._toast('Hop in a damaged car before using Repair Tape.'); return false; }
         if (Math.abs(this.current.speed) > 45 || (Aircraft.isAircraft(this.current) ? !this.current.grounded : !this._onGround(this.current)) || this.current.upright===false) { this._toast('Stop and land your ride before applying Repair Tape.'); return false; }
         if (!VehicleStats.isDamaged(this.current)) { this._toast('This ride needs no tape.'); return false; }
-        VehicleStats.repair(this.current, Aircraft.isAircraft(this.current) ? finite(this.current.maxHealth,100) : this.maxHealth, 55);
+        VehicleStats.repair(this.current, finite(this.current.maxHealth,this.maxHealth), 55);
         this._syncGarage();
         this._syncHangar();
       } else if (id === 'refill') {
@@ -1260,6 +1291,7 @@
     }
 
     garageStore() {
+      if(this.current.kind==='tank'){this._toast('The Warden is too large for a civilian garage bay.');return false;}
       if (!this._requireGarage()) return false;
       if (!this.player.vehicleId || !this.cars.includes(this.current)) { this._toast('Drive a civilian car here to save it in your collection.'); return false; }
       const car = this.current;
@@ -1351,7 +1383,7 @@
         if (!this.player.vehicleId) { this._toast('Hop in a car before buying a repair.'); return false; }
         if (!VehicleStats.isDamaged(this.current)) { this._toast('This ride is already in perfect condition.'); return false; }
         if (this.money < 45) { this._toast('A repair costs $45.', 'warning'); return false; }
-        this.money -= 45; VehicleStats.repair(this.current, this.maxHealth);
+        this.money -= 45; VehicleStats.repair(this.current, finite(this.current.maxHealth,this.maxHealth));
       } else if (item === 'boost' || item === 'armor') {
         const level = this.upgrades[item], price = item === 'boost' ? 200 + level * 150 : 150 + level * 125;
         if (level >= 3) { this._toast('That upgrade is already maxed out.'); return false; }
@@ -1359,7 +1391,7 @@
         this._syncGarage();
         this.money -= price; this.upgrades[item]++;
         if (item === 'armor') {
-          this.cars.forEach(car => { if (car.health > 0) car.health = Math.min(this.maxHealth, car.health + 25); car.maxHealth = this.maxHealth; });
+          this.cars.filter(car=>car.kind!=='tank').forEach(car => { if (car.health > 0) car.health = Math.min(this.maxHealth, car.health + 25); car.maxHealth = this.maxHealth; });
           this.garage.cars.forEach(record => { if (record.health > 0 && !this.cars.some(car => car.garageId === record.id)) record.health = Math.min(this.maxHealth, record.health + 25); });
         }
       } else return false;
@@ -1397,8 +1429,12 @@
       this._pedestrians(dt);
       this._updateWitnessReports(dt);
       this.aviation.step(dt,input);
+      this.tankTraffic.step(dt,input);
       this._updatePolice(dt);
       const contacts = this.vehiclePhysics.step(dt);
+      for(const contact of contacts)if(contact.entity.id===this.player.vehicleId&&contact.speed>75&&(input.up||input.down)) {
+        const target=contact.prop||contact.other;if(target)this._reportBaseHit(target,{x:target.x,y:target.y,height:this._base(target)+.8},{playerCaused:true,ownerId:contact.entity.id});
+      }
       for (const contact of contacts) if (contact.prop && contact.speed > 75 && this.time - (contact.prop._lastImpactAt ?? -10) > .35) {
         contact.prop._lastImpactAt = this.time;
         this._damageProp(contact.prop, (contact.speed - 55) * .9, contact.entity, contact.entity.id === this.player.vehicleId);
@@ -1596,7 +1632,8 @@
       }
     }
 
-    _damageVehicle(car, amount) {
+    _damageVehicle(car, amount, metadata) {
+      if(metadata?.playerCaused)this._reportBaseHit(car,metadata.origin||car,metadata);
       if(car.railModel)return;
       if(Aircraft.isAircraft(car)) return this.aviation.damage(car,amount);
       if (car.exploded || !Number.isFinite(amount) || amount <= 0) return;
@@ -1758,7 +1795,7 @@
         this.police.push({ id: 'police-' + this._nextId++, ...this._vehicleState('compact'), x:point.x,y:point.y,angle:point.angle || 0,elevation:this._ground(point),verticalVelocity:0,grounded:true,speed: 0, route: [], routeTimer: 0, lastSeen: { x: (this._reportedLocation || this.current).x, y: (this._reportedLocation || this.current).y } });
         activeCount++;
       }
-      let seen = Boolean(this.airPoliceSeen && this.heat>0 && this.graceTimer<=0), contact = false;
+      let seen = Boolean((this.airPoliceSeen||this.militaryTankSeen) && this.heat>0 && this.graceTimer<=0), contact = false;
       if(seen) {
         this._reportedLocation={x:this.current.x,y:this.current.y,elevation:this._base(this.current)};
         for(const cop of this.police) cop.lastSeen={...this._reportedLocation};
@@ -1822,7 +1859,7 @@
       const oldArmor = this.upgrades.armor;
       this.upgrades.boost = numeric(upgrades.boost, 0, 0, 3);
       this.upgrades.armor = numeric(upgrades.armor, 0, 0, 3);
-      this.cars.forEach(car => { if (car.health > 0) car.health = clamp(car.health + (this.upgrades.armor - oldArmor) * 25, 0, this.maxHealth); car.maxHealth = this.maxHealth; });
+      this.cars.filter(car=>car.kind!=='tank').forEach(car => { if (car.health > 0) car.health = clamp(car.health + (this.upgrades.armor - oldArmor) * 25, 0, this.maxHealth); car.maxHealth = this.maxHealth; });
       const defaults = starterInventory();
       const inventory = data.version === 2 && data.inventory && typeof data.inventory === 'object' && !Array.isArray(data.inventory) ? data.inventory : {};
       const unlocked = ['popper'];
@@ -1840,7 +1877,7 @@
         if (cars.length >= 3) break;
         const military = isMilitaryUtility(record);
         if (!record || typeof record !== 'object' || typeof record.id !== 'string' || !/^ride-[1-9][0-9]{0,3}$/.test(record.id) ||
-          cars.some(car => car.id === record.id) || !owns(CAR_TYPES, record.kind) || !(COLORS.includes(record.color) || (military && MILITARY_COLORS.includes(record.color)))) continue;
+          cars.some(car => car.id === record.id) || !owns(CAR_TYPES, record.kind) || record.kind==='tank' || !(COLORS.includes(record.color) || (military && MILITARY_COLORS.includes(record.color)))) continue;
         const health = clamp(finite(record.health, 0), 0, this.maxHealth);
         const legacyCondition = health / this.maxHealth * 100;
         cars.push({ id: record.id, kind: record.kind, modelId: VehicleStats.getModel(record).id,

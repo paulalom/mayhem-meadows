@@ -3,8 +3,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const Stats = require('../vehicle-stats.js');
 
-test('every vehicle kind has two fictional models and defaults preserve familiar driving stats', () => {
-  for (const kind of Object.keys(Stats.CAR_TYPES)) {
+test('civilian vehicle kinds retain two fictional models and their familiar driving stats', () => {
+  for (const kind of ['compact', 'sports', 'van']) {
     const models = Object.values(Stats.CAR_MODELS).filter(model => model.kind === kind);
     assert.equal(models.length, 2);
     const base = Stats.getModel({ kind });
@@ -17,6 +17,8 @@ test('every vehicle kind has two fictional models and defaults preserve familiar
   assert.equal(Stats.getModel({ kind: 'van', modelId: 'fable-comet-rs' }).id, Stats.DEFAULT_MODELS.van);
   assert.equal(Stats.getModel({ kind: 'compact', modelId: '__proto__' }).id, Stats.DEFAULT_MODELS.compact);
   assert.equal(Stats.getModel({ kind: 'sports', modelId: 'fable-comet-rs' }).maxSpeed, 400);
+  assert.equal(Object.values(Stats.CAR_MODELS).filter(model => model.kind === 'tank').length, 1);
+  assert.equal(Stats.getModel({ kind: 'tank' }).id, 'northwatch-warden');
 });
 
 test('hull and component damage separately degrade performance, with bounded invalid save values', () => {

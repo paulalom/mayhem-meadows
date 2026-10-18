@@ -1006,6 +1006,9 @@
     }
 
     _vehicle(entity, police) {
+      if(entity.kind==='tank'&&root.MayhemTankRender){
+        const model=root.MayhemTankRender.createVehicle(this,entity);if(model)return model;
+      }
       const T = this.T, group = new T.Group();
       const geometryStart = this._geometries.length;
       const kind = police ? 'compact' : entity.kind;
@@ -1878,7 +1881,7 @@
         this._orbitTimer = 0.45;
       }
       this._orbitTimer = Math.max(0, this._orbitTimer - dt);
-      if (driving && this._orbitTimer === 0) {
+      if (driving && current.kind !== 'tank' && this._orbitTimer === 0) {
         this._driveOffset = angle(this._driveOffset * Math.exp(-dt * 1.9));
         this._pitch = DEFAULT_PITCH + (this._pitch - DEFAULT_PITCH) * Math.exp(-dt * 1.1);
       }
@@ -2227,6 +2230,7 @@
       this._aircraftStep(options.paused ? 0 : step);
       root.MayhemTrainRender?.step(this);
       root.MayhemMilitaryRender?.step?.(this);
+      root.MayhemTankRender?.step?.(this);
       this._effects();
       this._landscapeStep(this.game.time);
       this._cameraStep(step);

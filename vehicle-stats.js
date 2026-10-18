@@ -6,7 +6,8 @@
   const CAR_TYPES = Object.freeze({
     compact: Object.freeze({ name: 'Pocket Rocket', maxSpeed: 300, acceleration: 430, handling: 2.7, grip: 9, mass: 1, width: 27, length: 46 }),
     sports: Object.freeze({ name: 'Sprinkle GT', maxSpeed: 370, acceleration: 490, handling: 2.5, grip: 6, mass: 0.9, width: 28, length: 49 }),
-    van: Object.freeze({ name: 'Party Wagon', maxSpeed: 260, acceleration: 340, handling: 2.1, grip: 10, mass: 1.4, width: 32, length: 55 })
+    van: Object.freeze({ name: 'Party Wagon', maxSpeed: 260, acceleration: 340, handling: 2.1, grip: 10, mass: 1.4, width: 32, length: 55 }),
+    tank: Object.freeze({ name: 'Northwatch Warden', maxSpeed: 125, acceleration: 110, handling: 0.8, grip: 12, mass: 7.5, width: 48, length: 104, height: 2.6, maxHealth: 600 })
   });
   const model = (id, kind, make, name, stats) => Object.freeze({ ...CAR_TYPES[kind], id, kind, make, model: name, name, ...stats });
   const CAR_MODELS = Object.freeze({
@@ -15,9 +16,18 @@
     'glitterline-sprinkle-gt': model('glitterline-sprinkle-gt', 'sports', 'Glitterline', 'Sprinkle GT', { durability: 0.88, engineDurability: 0.9 }),
     'fable-comet-rs': model('fable-comet-rs', 'sports', 'Fable', 'Comet RS', { maxSpeed: 400, acceleration: 525, handling: 2.3, grip: 5.4, durability: 0.8, engineDurability: 0.82 }),
     'mirth-party-wagon': model('mirth-party-wagon', 'van', 'Mirth Motors', 'Party Wagon', { durability: 1.2, engineDurability: 1.15 }),
-    'tumble-hauler': model('tumble-hauler', 'van', 'Tumble', 'Hauler', { maxSpeed: 240, acceleration: 315, handling: 1.9, grip: 11, mass: 1.55, durability: 1.4, engineDurability: 1.3 })
+    'tumble-hauler': model('tumble-hauler', 'van', 'Tumble', 'Hauler', { maxSpeed: 240, acceleration: 315, handling: 1.9, grip: 11, mass: 1.55, durability: 1.4, engineDurability: 1.3 }),
+    'northwatch-warden': model('northwatch-warden', 'tank', 'Northwatch', 'Warden', { durability: 4, engineDurability: 4 })
   });
-  const DEFAULT_MODELS = Object.freeze({ compact: 'bramble-pocket-rocket', sports: 'glitterline-sprinkle-gt', van: 'mirth-party-wagon' });
+  const DEFAULT_MODELS = Object.freeze({ compact: 'bramble-pocket-rocket', sports: 'glitterline-sprinkle-gt', van: 'mirth-party-wagon', tank: 'northwatch-warden' });
+  // Metres, relative to the vehicle's ground anchor. The Blender mesh and
+  // every contact system share these articulated solid volumes.
+  const TANK_GEOMETRY = Object.freeze({
+    hullHalf: Object.freeze([2.6, 0.7, 1.2]), hullCenter: Object.freeze([0, 0.7, 0]),
+    turretHalf: Object.freeze([1.1, 0.475, 0.8]), turretCenter: Object.freeze([0, 1.925, 0]),
+    turretPivot: Object.freeze([0, 1.55, 0]), gunPivot: Object.freeze([0.9, 2.05, 0]),
+    barrelHalf: Object.freeze([1.55, 0.1, 0.1]), barrelLength: 3.1, height: 2.6, centerHeight: 0.7
+  });
 
   function getModel(vehicle = {}) {
     const kind = Object.hasOwn(CAR_TYPES, vehicle.kind) ? vehicle.kind : 'compact';
@@ -75,7 +85,7 @@
     return vehicle;
   }
 
-  const api = { CAR_TYPES, CAR_MODELS, DEFAULT_MODELS, getModel, performance, condition, status, isDamaged, repair };
+  const api = { CAR_TYPES, CAR_MODELS, DEFAULT_MODELS, TANK_GEOMETRY, getModel, performance, condition, status, isDamaged, repair };
   root.MayhemVehicleStats = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(globalThis);
