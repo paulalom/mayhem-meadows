@@ -88,7 +88,35 @@ test('Space-only helicopter takeoff, hover braking and controlled landing work a
   advance(aviation, 1, { boost: true });
   assert.ok(entity.speed < fast * .3);
   advance(aviation, 8, { descend: true });
-  assert.equal(entity.grounded, true); assert.equal(entity.elevation, 0); assert.ok(entity.health > 100);
+  assert.equal(entity.grounded, true); assert.equal(entity.elevation, 0); assert.equal(entity.health, entity.maxHealth);
+});
+
+test('full-control helicopter descents land without damage on ground and rooftops at different frame rates', () => {
+  for (const type of ['helicopter', 'news', 'policeheli', 'transportheli']) for (const roof of [0, 14]) for (const hz of [30, 60, 120]) {
+    const { game, aviation } = fixture({ missionStats: { collisions: 0 }, buildings: roof ? [{ x: 5750, y: 3750, w: 500, h: 500, height: roof, elevation: 0 }] : [] });
+    const entity = aviation.spawn(type, { x: 6000, y: 4000, elevation: roof + 30 });
+    game.player.vehicleId = entity.id;
+    for (let tick = 0; tick < hz * 6; tick++) aviation.step(1 / hz, { descend: true });
+    const context = type + ' on ' + (roof ? 'roof' : 'ground') + ' at ' + hz + ' Hz';
+    assert.equal(entity.grounded, true, context); assert.equal(entity.elevation, roof, context);
+    assert.equal(entity.health, entity.maxHealth, context); assert.equal(entity.engineHealth, 100, context); assert.equal(entity.handlingHealth, 100, context);
+    assert.equal(entity.burning, false, context); assert.equal(game.missionStats.collisions, 0, context);
+  }
+});
+
+test('helicopter touchdown damage starts beyond the safe sink rate and scales with excess speed', () => {
+  const touchdown = speed => {
+    const { game, aviation } = fixture({ missionStats: { collisions: 0 } });
+    const entity = aviation.spawn('helicopter', { x: 6000, y: 4000, elevation: .1 });
+    game.player.vehicleId = entity.id; entity.vz = -speed;
+    aviation.step(1 / 60, { descend: true });
+    assert.equal(entity.grounded, true);
+    return { damage: entity.maxHealth - entity.health, collisions: game.missionStats.collisions };
+  };
+  assert.deepEqual(touchdown(12), { damage: 0, collisions: 0 });
+  const fast = touchdown(14), crash = touchdown(20);
+  assert.ok(fast.damage > 0 && fast.damage < 20); assert.equal(fast.collisions, 1);
+  assert.ok(crash.damage > fast.damage); assert.equal(crash.collisions, 1);
 });
 
 test('a trainer lifts from ground, banks and sinks when stalled rather than hovering', () => {
@@ -271,7 +299,7 @@ test('hard landings record a mission collision, engine fires and explosion times
   const { game, aviation } = fixture({ time: 47, missionStats: { collisions: 0 } });
   const entity = aviation.spawn('helicopter', { x: 6000, y: 4000, elevation: 1 });
   game.player.vehicleId = entity.id;
-  entity.vz = -12; entity.engineHealth = 0;
+  entity.vz = -20; entity.engineHealth = 0;
   advance(aviation, .2);
   assert.equal(game.missionStats.collisions, 1);
   assert.ok(entity.health < entity.maxHealth); assert.equal(entity.burning, true);

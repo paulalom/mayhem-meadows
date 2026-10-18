@@ -406,8 +406,11 @@
       const floor = this._support(entity, Math.max(before.elevation, entity.elevation) + .1);
       if (entity.elevation < floor || entity.vz <= 0 && entity.elevation <= floor + .015) {
         const impact = Math.abs(Math.min(0, entity.vz));
-        const hardLanding = !entity.grounded && impact > (heli ? 4 : 4.5), wingStrike = !heli && !entity.grounded && Math.abs(entity.roll) > .42;
-        if (hardLanding) this.damage(entity, (impact - 3) * 9);
+        // Holding descend is a normal helicopter landing. Leave extra margin
+        // beyond that controlled sink rate and damage only the excess speed.
+        const safeLandingSpeed = heli ? model.descentRate * 1.5 : 4.5;
+        const hardLanding = !entity.grounded && impact > safeLandingSpeed, wingStrike = !heli && !entity.grounded && Math.abs(entity.roll) > .42;
+        if (hardLanding) this.damage(entity, (impact - (heli ? safeLandingSpeed : 3)) * 9);
         if (wingStrike) this.damage(entity, Math.abs(entity.roll) * 25);
         if ((hardLanding || wingStrike) && entity === this.current && this.game.missionStats && this.time - finite(entity._landingAt, -10) > .55) {
           this.game.missionStats.collisions++; entity._landingAt = this.time;
