@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const { Game, SIZE, VehicleStats, GADGETS, POCKET_ITEMS, PAINT_COLORS, DISTRICTS } = MayhemCore;
+  const { Game, SIZE, MAX_HEAT, VehicleStats, GADGETS, POCKET_ITEMS, PAINT_COLORS, DISTRICTS } = MayhemCore;
   const $ = id => document.getElementById(id);
   const canvas = $('game-canvas');
   const game = new Game();
@@ -622,8 +622,12 @@
     const x = clamp(aircraft.x * scale, bounds.minX*scale+5,bounds.maxX*scale-5), y = clamp(aircraft.y * scale,bounds.minY*scale+5,bounds.maxY*scale-5);
     const altitude = Math.max(0, aircraft.altitudeAGL ?? aircraft.agl ?? 0);
     mini.save(); mini.translate(x, y);
-    mini.strokeStyle = controlled ? '#fff8d9' : aircraft.aircraftType === 'policeheli' ? '#ff8294' : aircraft.aircraftType === 'news' ? '#f5d96c' : '#70e6db';
+    const military = aircraft.militaryResponse === true;
+    mini.strokeStyle = controlled ? '#fff8d9' : military ? '#ffc56f' : aircraft.aircraftType === 'policeheli' ? '#ff8294' : aircraft.aircraftType === 'news' ? '#f5d96c' : '#70e6db';
     mini.fillStyle = mini.strokeStyle; mini.lineWidth = controlled ? 1.6 : 1;
+    if (military && !controlled) {
+      mini.beginPath(); mini.moveTo(0, -7); mini.lineTo(7, 0); mini.lineTo(0, 7); mini.lineTo(-7, 0); mini.closePath(); mini.stroke();
+    }
     if (altitude > 2) { mini.globalAlpha = 0.35; mini.beginPath(); mini.arc(0, 0, controlled ? 7 : 5, 0, Math.PI * 2); mini.stroke(); mini.globalAlpha = 1; }
     mini.save(); mini.rotate(aircraft.angle || 0);
     if (helicopter) {
@@ -758,9 +762,22 @@
       $('target-altitude').textContent = Number.isFinite(t.elevation) ? 'TARGET ' + Math.round(Math.max(0, t.elevation - targetGround)) + 'm AGL' : Number.isFinite(t.altitude) ? 'ALT ' + Math.round(t.altitude) + 'm' : t.name || '';
     }
     $('cash').textContent = money(game.money); $('score').textContent = Math.round(game.score).toLocaleString(); $('best').textContent = Math.round(Math.max(game.bestScore || 0, game.score)).toLocaleString();
-    $('heat').textContent = '★'.repeat(game.heat) + '☆'.repeat(3 - game.heat);
-    $('heat').setAttribute('aria-label', `Heat ${game.heat} of 3`);
-    $('heat').dataset.level = game.heat;
+    const heatLevel = game.heatLevel;
+    $('heat').textContent = '★'.repeat(heatLevel) + '☆'.repeat(MAX_HEAT - heatLevel);
+    $('heat').setAttribute('aria-label', `Heat ${heatLevel} of ${MAX_HEAT}`);
+    $('heat').dataset.level = heatLevel;
+    const military = game.aviation.militaryStatus;
+    const militaryActive = heatLevel === MAX_HEAT || military?.active || military?.phase === 'returning';
+    const militaryType = military?.type === 'jet' ? 'JET INTERCEPTOR' : military?.type === 'helicopter' ? 'MILITARY HELICOPTER' : 'MILITARY RESPONSE';
+    const militaryPhase = {
+      warning: `SCRAMBLE IN ${Math.max(0, Math.ceil(game.aviation.militaryWarning || 0))}s`,
+      launching: 'LAUNCHING', pursuit: 'ENGAGING', search: 'SEARCHING', returning: 'RETURNING TO BASE', unavailable: 'AWAITING REINFORCEMENT'
+    }[military?.phase] || 'REQUESTED';
+    $('military-status').hidden = !militaryActive;
+    $('military-status').textContent = `${militaryType} · ${militaryPhase}`;
+    $('military-status').dataset.phase = military?.phase || 'standby';
+    $('military-status').dataset.response = military?.type || '';
+    canvas.dataset.militaryResponse = military?.phase || 'standby';
     $('composure-value').textContent = Math.round(game.player.composure) + '%';
     $('composure-bar').style.width = game.player.composure + '%';
     $('composure-meter')?.setAttribute('aria-valuenow', Math.round(game.player.composure));
@@ -803,13 +820,13 @@
     else if (!flying && car?.burning) hint = 'ENGINE FIRE · ' + Math.max(0, Math.ceil(8 - car.fireTime)) + 's · E BAIL OUT · stop + I for repair tape';
     else if (car && car.engineHealth <= 0) hint = flying ? 'ENGINE LOST · glide to land · F parachute · R airport recovery' : 'ENGINE STALLED · stop + I for repair tape · E hop out';
     else if (!flying && car?.upright === false) hint = 'R · right your ride and return to the road';
-    else if (!flying && car && car.elevation > 0.16) hint = 'AIRBORNE!   R · recover to the road';
+    else if (!flying && car?.grounded === false) hint = 'AIRBORNE!   R · recover to the road';
     if (game.player.parachuting) hint = 'PARACHUTE · WASD steers toward a clear landing · R recover';
     $('interaction-hint').textContent = hint;
     if (fallen) $('interaction-hint').textContent = fallen.phase === 'recover' ? 'Just finding my feet…  R · recover now' : 'Oh, crumbs! Getting up shortly…  R · recover now';
     $('interaction-hint').hidden = !started;
     if (game.heat > 0 && !fallen) {
-      const chase = game.policeSeen ? 'FUN POLICE · CHASED' : `LAY LOW · ${Math.max(0, Math.ceil((game.escapeGoal || 8 + game.heat * 6) - game.escapeTimer))}s TO COOL`;
+      const chase = game.policeSeen ? (heatLevel === MAX_HEAT ? 'MILITARY & POLICE · CHASED' : 'FUN POLICE · CHASED') : `LAY LOW · ${Math.max(0, Math.ceil((game.escapeGoal || 8 + game.heat * 6) - game.escapeTimer))}s TO COOL`;
       $('interaction-hint').textContent = chase + '  /  ' + hint;
     }
   }

@@ -5,6 +5,7 @@
   // just like the road vehicles. Their controller never inserts them into the
   // road chassis solver, so changing pilots does not change their flight model.
   const SCALE = 20;
+  const VehicleStats = root.MayhemVehicleStats || (typeof require === 'function' ? require('./vehicle-stats.js') : null);
   const finite = (value, fallback = 0) => Number.isFinite(value) ? value : fallback;
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
   const wrap = angle => Math.atan2(Math.sin(angle), Math.cos(angle));
@@ -87,6 +88,8 @@
       });
       this.policeWarning = 0; this._highHeatTime = 0; this._newsHeatTime = 0;
       this._policeCooldown = 0; this._newsCooldown = 0; this._dispatchLocation = null;
+      this.militaryWarning = 0; this._militaryHeatTime = 0; this._militaryCooldown = 0; this._militaryIncident = null;
+      this.militaryStatus = { active: false, type: null, phase: 'standby', label: 'Northwatch standing by', seen: false };
       this._airport = game.world?.landscape?.airport || {};
       this._configureAirport();
       game.aircraftProjectiles = this.aircraftProjectiles;
@@ -95,6 +98,7 @@
     }
 
     get current() { return this.aircraft.find(entity => entity.id === this.game.player?.vehicleId) || null; }
+    get militaryResponse() { return this.aircraft.find(entity => entity.militaryResponse && entity.npc && entity.health > 0 && !entity.exploded && !['parked', 'wrecked'].includes(entity.flightPhase)) || null; }
     model(entity) { return getModel(entity); }
     _ground(point) { return finite(this.game._ground?.(point), finite(this.game.world?.terrain?.surfaceHeight?.(point.x, point.y))); }
     _toast(text, kind) { this.game._toast?.(text, kind); }
@@ -377,7 +381,8 @@
         const powered = entity.engineHealth > 0 && entity.health > 0 && !entity.exploded;
         const rotorSpeed = powered && running ? 22 + entity.throttle * 25 : entity.grounded ? 0 : 4;
         entity.rotorAngle = wrap(entity.rotorAngle + dt * rotorSpeed);
-        if (getModel(entity).sideGun && command.fire) this._fire(entity, command.aimAngle, command.target, command.aimPitch);
+        if (entity.militaryRole === 'interceptor' && entity.militaryResponse && command.fire) this._fireForward(entity, command.target);
+        else if ((getModel(entity).sideGun || entity.militaryResponse) && command.fire) this._fire(entity, command.aimAngle, command.target, command.aimPitch);
         if (entity === current && this.current === entity) this._syncPlayer(entity);
       }
       this._projectiles(dt);
@@ -593,6 +598,14 @@
 
     _npc(entity, dt) {
       const model = getModel(entity), phase = entity.flightPhase, field = this._field(entity);
+      if (entity.militaryResponse && ['boarding', 'taxi', 'hold', 'takeoff'].includes(phase) && entity.grounded && (finite(this.game.heat) < 4 || this._militaryTarget().mode !== entity.militaryTargetMode)) {
+        this._releaseRunway(entity);
+        if (phase === 'boarding') { this._phase(entity, 'parked'); this._finishMilitary(entity); return { throttle: 0 }; }
+        entity.taxiRoute = this._routeFor(entity).slice(0, phase === 'taxi' ? finite(entity.taxiIndex) + 1 : undefined).reverse().concat([{ ...entity.home }]);
+        entity.taxiIndex = 0; this._phase(entity, 'taxi-in'); return { throttle: 0 };
+      }
+      if (entity.militaryResponse && ['go-around', 'hold-parking'].includes(phase)) { this._releaseRunway(entity); entity.militaryReturnRoute = null; this._phase(entity, 'military-return'); return { throttle: .7, climb: true }; }
+      if (entity.militaryResponse && phase.startsWith('military-')) return this._militaryDuty(entity, dt);
       if (['patrol', 'chase', 'search', 'return'].includes(phase)) return this._helicopterDuty(entity, dt);
       if (model.class === 'helicopter') return this._airTaxi(entity, dt);
       if (phase === 'parked') {
@@ -633,7 +646,7 @@
           }
           entity.lineUp = false; entity.angle = field.heading;
         }
-        if (entity.elevation > this._ground(field.threshold) + 38) { this._releaseRunway(entity); this._phase(entity, 'departure'); }
+        if (entity.elevation > this._ground(field.threshold) + 38) { this._releaseRunway(entity); this._phase(entity, entity.militaryResponse ? 'military-intercept' : 'departure'); }
         return { throttle: .85, climb: true };
       }
       if (phase === 'departure') {
@@ -678,7 +691,7 @@
       }
       if (phase === 'taxi-in') {
         const target = entity.taxiRoute[entity.taxiIndex];
-        if (!target) { entity.speed = 0; entity.passengers = 0; entity.angle = finite(entity.home.angle); this._phase(entity, 'parked'); return { throttle: 0 }; }
+        if (!target) { entity.speed = 0; entity.passengers = 0; entity.angle = finite(entity.home.angle); this._phase(entity, 'parked'); if (entity.militaryResponse) this._finishMilitary(entity); return { throttle: 0 }; }
         if (distance(entity, target) < 25) entity.taxiIndex++;
         entity.angle = wrap(entity.angle + clamp(wrap(Math.atan2(target.y - entity.y, target.x - entity.x) - entity.angle), -1.3 * dt, 1.3 * dt));
         return { throttle: .07 };
@@ -754,9 +767,184 @@
       return target ? { x: target.x, y: target.y, elevation: finite(target.elevation) } : null;
     }
 
+    _militaryTarget() {
+      const target = this.current || this.game.current || this.game.player;
+      const mode = isAircraft(target) ? 'air' : this.game.player?.vehicleId && target !== this.game.player ? 'ground' : null;
+      return { target, mode };
+    }
+
+    _setMilitaryStatus(entity, phase, seen = false) {
+      const type = entity ? getModel(entity).class === 'plane' ? 'jet' : 'helicopter' : this._militaryIncident?.mode === 'air' ? 'jet' : this._militaryIncident?.mode === 'ground' ? 'helicopter' : null;
+      const name = type === 'jet' ? 'Jet interceptor' : type === 'helicopter' ? 'Military helicopter' : 'Northwatch';
+      this.militaryStatus = { active: Boolean(entity || this.militaryWarning), type, phase, seen,
+        label: name + ': ' + ({ standby: 'standing by', warning: 'scrambling', launching: 'launching', pursuit: 'pursuing', search: 'searching last sighting', returning: 'returning to base', unavailable: 'awaiting a clear reserve' }[phase] || phase) };
+    }
+
+    _dispatchMilitary(dt) {
+      const heat = finite(this.game.heat), { mode } = this._militaryTarget();
+      this._militaryCooldown = Math.max(0, this._militaryCooldown - dt);
+      for (const entity of this.aircraft) if (entity.militaryResponse && (entity.borrowed || entity === this.current || entity.health <= 0 || entity.exploded || !entity.npc)) this._finishMilitary(entity);
+      const active = this.militaryResponse;
+      if (active) {
+        this.militaryWarning = 0; this._militaryHeatTime = 0;
+        this._setMilitaryStatus(active, active.flightPhase === 'military-search' ? 'search' : ['military-return', 'military-land', 'arrival', 'landing', 'go-around', 'taxi-in', 'hold-parking'].includes(active.flightPhase) ? 'returning' : active.flightPhase.startsWith('military-') && active.flightPhase !== 'military-lift' ? 'pursuit' : 'launching');
+        return;
+      }
+      if (heat < 4 || !mode || !this.airports.military) {
+        this.militaryWarning = 0; this._militaryHeatTime = 0; this._militaryIncident = null;
+        this._setMilitaryStatus(null, 'standby'); return;
+      }
+      if (this._militaryIncident && this._militaryIncident.mode !== mode) { this.militaryWarning = 0; this._militaryHeatTime = 0; this._militaryIncident = null; }
+      this._militaryHeatTime += dt;
+      if (this._militaryHeatTime > 5 && !this._militaryCooldown && !this.militaryWarning) {
+        const incident = this._knownIncident();
+        if (incident) {
+          this._militaryIncident = { ...incident, mode }; this.militaryWarning = 8;
+          this._toast(mode === 'air' ? 'Northwatch is scrambling a jet interceptor. Land and lose the fourth star!' : 'Northwatch is launching an armed helicopter. Find solid cover!', 'warning');
+        }
+      }
+      if (this.militaryWarning > 0) {
+        this._setMilitaryStatus(null, 'warning');
+        this.militaryWarning = Math.max(0, this.militaryWarning - dt);
+        if (!this.militaryWarning) {
+          const entity = this._launchMilitary(this._militaryIncident);
+          this._militaryCooldown = entity ? 90 : 12; this._militaryHeatTime = 0;
+          this._setMilitaryStatus(entity, entity ? 'launching' : 'unavailable');
+        }
+      } else this._setMilitaryStatus(null, this._militaryCooldown ? 'unavailable' : 'standby');
+    }
+
+    _launchMilitary(incident) {
+      const field = this.airports.military;
+      if (!field || !incident || this.militaryResponse) return null;
+      const type = incident.mode === 'air' ? 'fighter' : 'transportheli';
+      let entity = this.aircraft.find(item => item.airportId === 'military' && item.aircraftType === type && !item.npc && !item.borrowed && item !== this.current && !item.exploded && !item.burning && item.health > item.maxHealth * .5 && item.engineHealth > 60 && item.flightPhase === 'parked');
+      // Reserves appear only at a physically clear base stand, never beside the
+      // target. A nearby player can see the existing fleet launch instead.
+      if (!entity) {
+        const position = this.parkingPosition(type, null, 'military'), target = this._militaryTarget().target;
+        const reserve = this.aircraft.find(item => item.militaryReserve && item.aircraftType === type && !item.borrowed);
+        if (reserve) {
+          if (reserve.health > 0 && !reserve.exploded || this.time - finite(reserve.militaryRetiredAt, this.time) < 60 || target && distance(target, reserve) < 1800) return null;
+          this.aircraft.splice(this.aircraft.indexOf(reserve), 1);
+        }
+        if (!position || target && distance(target, position) < 1800) return null;
+        entity = this.spawn(type, position, { airportId: 'military', militaryReserve: true, standId: position.id });
+      }
+      if (!entity) return null;
+      Object.assign(entity, { npc: true, militaryResponse: true, militaryUnit: true, responseRole: 'military',
+        militaryRole: type === 'fighter' ? 'interceptor' : 'gunship', gunMount: type === 'fighter' ? 'forward' : 'side',
+        militaryTargetMode: incident.mode, lastSeen: { x: incident.x, y: incident.y, elevation: incident.elevation },
+        incident: { ...incident }, searchTime: 0, seenTime: 0, dutyTime: 0, gunWarning: 4, searchlight: type !== 'fighter', returningToStand: false, militaryReturnRoute: null });
+      this._phase(entity, type === 'fighter' ? 'boarding' : 'military-lift');
+      return entity;
+    }
+
+    _finishMilitary(entity) {
+      entity.militaryResponse = false; entity.searchlight = false; entity.gunFiring = false;
+      entity.militaryRetiredAt = this.time;
+      if (!entity.borrowed && entity !== this.current && entity.health > 0) entity.npc = false;
+      this._releaseRunway(entity); this._militaryCooldown = Math.max(this._militaryCooldown, 45);
+    }
+
+    _militaryClearance(entity, target, requested) {
+      const model = getModel(entity), look = model.class === 'plane' ? 2400 : 1000;
+      const heading = Math.atan2(target.y - entity.y, target.x - entity.x), length = Math.min(look, distance(entity, target));
+      let altitude = requested;
+      for (let i = 0; i <= 12; i++) {
+        const point = { x: entity.x + Math.cos(heading) * length * i / 12, y: entity.y + Math.sin(heading) * length * i / 12 };
+        altitude = Math.max(altitude, this._ground(point) + 30);
+        for (const building of this.game.buildings || []) if (inBox(point, building, model.width * .6 + 80)) altitude = Math.max(altitude, finite(building.elevation, this._ground(point)) + finite(building.height, 8) + 22);
+      }
+      return altitude;
+    }
+
+    _militarySteer(entity, point, throttle, altitude) {
+      return this._steer(entity, point, throttle, this._militaryClearance(entity, point, altitude));
+    }
+
+    _militaryDuty(entity, dt) {
+      const model = getModel(entity), plane = model.class === 'plane', field = this._field(entity), phase = entity.flightPhase;
+      entity.dutyTime = finite(entity.dutyTime) + dt;
+      const { target, mode } = this._militaryTarget();
+      if (finite(this.game.heat) < 4 || mode && mode !== entity.militaryTargetMode || entity.dutyTime > 180 || entity.health < entity.maxHealth * .3) {
+        if (phase !== 'military-return' && phase !== 'military-land') { this._releaseRunway(entity); this._phase(entity, 'military-return'); }
+      }
+      if (entity.flightPhase === 'military-lift') {
+        if (entity.altitudeAGL > 36) this._phase(entity, 'military-intercept');
+        return { throttle: .7, climb: true, hover: true };
+      }
+      if (entity.flightPhase === 'military-return' || entity.flightPhase === 'military-land') {
+        this._setMilitaryStatus(entity, 'returning');
+        if (plane) {
+          if (!entity.militaryReturnRoute) {
+            const c = Math.cos(field.heading), s = Math.sin(field.heading), entry = { x: field.approach.x - c * 2200, y: field.approach.y - s * 2200 };
+            entity.militaryReturnRoute = [{ x: entry.x - s * 2200, y: entry.y + c * 2200 }, entry, { ...field.approach }]; entity.militaryReturnIndex = 0;
+          }
+          const route = entity.militaryReturnRoute, index = entity.militaryReturnIndex, point = route[index];
+          if (index < route.length - 1 && distance(entity, point) < 650) entity.militaryReturnIndex++;
+          const range = distance(entity, field.approach), bearing = Math.atan2(field.threshold.y - entity.y, field.threshold.x - entity.x);
+          if (entity.militaryReturnIndex === route.length - 1 && range < 950 && Math.abs(wrap(bearing - entity.angle)) < .4) { this._phase(entity, 'arrival'); return this._steer(entity, field.threshold, .32, field.approach.elevation); }
+          // Fly a downwind/base/final circuit. Its turns leave enough room for
+          // the real fighter's turn radius before joining the runway heading.
+          return this._militarySteer(entity, route[entity.militaryReturnIndex], .38, field.approach.elevation);
+        }
+        const home = entity.home, range = distance(entity, home), ground = finite(home.elevation, this._ground(home));
+        if (range < 500 && !this.clearPosition(entity, { ...home, elevation: ground }, entity)) {
+          const parking = this.parkingPosition(entity.aircraftType, entity, 'military');
+          if (parking) entity.home = { ...parking };
+          const radial = Math.atan2(entity.y - home.y, entity.x - home.x);
+          return this._militarySteer(entity, { x: home.x + Math.cos(radial + .65) * 420, y: home.y + Math.sin(radial + .65) * 420 }, .65, ground + 45);
+        }
+        const command = range > 260 ? this._militarySteer(entity, home, .7, ground + 45) : this._steer(entity, home, .6, range > 65 ? ground + 12 : ground - .05);
+        command.up = range > 30; command.hover = range < 300;
+        if (range < 65 && entity.grounded) { entity.speed = 0; entity.throttle = 0; entity.angle = finite(home.angle); this._phase(entity, 'parked'); this._finishMilitary(entity); }
+        return command;
+      }
+      const visible = Boolean(mode && mode === entity.militaryTargetMode && target?.health !== 0 && !target?.exploded && this._canSee(entity, target, plane ? 4000 : 2500));
+      if (visible) {
+        entity.lastSeen = { x: target.x, y: target.y, elevation: finite(target.elevation) };
+        entity.searchTime = 0; entity.seenTime = finite(entity.seenTime) + dt; this.game.airPoliceSeen = true;
+        entity.gunWarning = Math.max(0, finite(entity.gunWarning, 4) - dt);
+        if (entity.flightPhase === 'military-search') this._phase(entity, 'military-intercept');
+      } else {
+        entity.searchTime = finite(entity.searchTime) + dt; entity.seenTime = 0;
+        if (entity.flightPhase !== 'military-search') this._phase(entity, 'military-search');
+        if (entity.searchTime > 30) { this._phase(entity, 'military-return'); return { throttle: .65, climb: true }; }
+      }
+      this._setMilitaryStatus(entity, visible ? 'pursuit' : 'search', visible);
+      const center = entity.lastSeen || entity.incident;
+      if (!plane) {
+        const radial = Math.atan2(entity.y - center.y, entity.x - center.x), radius = 650;
+        const point = { x: center.x + Math.cos(radial + .5) * radius, y: center.y + Math.sin(radial + .5) * radius };
+        const command = this._militarySteer(entity, point, .8, Math.max(this._ground(center) + 45, finite(center.elevation) + 38));
+        if (visible && entity.seenTime > 4 && !entity.gunWarning && distance(entity, target) < 1250) { command.fire = true; command.aimAngle = Math.atan2(target.y - entity.y, target.x - entity.x); command.target = target; }
+        return command;
+      }
+      if (!visible) {
+        const radial = Math.atan2(entity.y - center.y, entity.x - center.x);
+        return this._militarySteer(entity, { x: center.x + Math.cos(radial + .7) * 1800, y: center.y + Math.sin(radial + .7) * 1800 }, .45, Math.max(finite(center.elevation) + 35, this._ground(center) + 80));
+      }
+      if (entity.flightPhase === 'military-egress') {
+        if (entity.phaseTime > 3 && distance(entity, target) > 1550 || entity.phaseTime > 7) this._phase(entity, 'military-intercept');
+        return this._militarySteer(entity, entity.egressPoint, .72, Math.max(entity.elevation, finite(center.elevation) + 45));
+      }
+      const range = distance(entity, target), lead = Math.min(2.2, range / 1600);
+      const point = { x: target.x + finite(target.vx) * lead, y: target.y + finite(target.vy) * lead };
+      if (range < 1000 || range < 1500 && Math.abs(wrap(Math.atan2(point.y - entity.y, point.x - entity.x) - entity.angle)) > 1.2) {
+        entity.egressPoint = { x: entity.x + Math.cos(entity.angle + 1) * 5000, y: entity.y + Math.sin(entity.angle + 1) * 5000 };
+        this._phase(entity, 'military-egress');
+        return this._militarySteer(entity, entity.egressPoint, .72, Math.max(entity.elevation + 20, finite(target.elevation) + 45));
+      }
+      const command = this._militarySteer(entity, point, .62, finite(target.elevation) + 22);
+      if (entity.seenTime > 4 && !entity.gunWarning && range < 2400) { command.fire = true; command.target = target; }
+      return command;
+    }
+
     _dispatch(dt) {
       const heat = finite(this.game.heat);
       this._policeCooldown = Math.max(0, this._policeCooldown - dt); this._newsCooldown = Math.max(0, this._newsCooldown - dt);
+      this._dispatchMilitary(dt);
       this._highHeatTime = heat >= 3 ? this._highHeatTime + dt : 0;
       this._newsHeatTime = heat >= 1 ? this._newsHeatTime + dt : 0;
       const activePolice = this.aircraft.find(entity => entity.aircraftType === 'policeheli' && entity.npc && !['parked', 'wrecked'].includes(entity.flightPhase) && !entity.exploded);
@@ -792,18 +980,11 @@
       return entity;
     }
 
-    _canSee(observer, target) {
-      if (!target || distance(observer, target) > 2500) return false;
+    _canSee(observer, target, range = 2500) {
+      if (!target || distance(observer, target) > range) return false;
       const from = observer.elevation + 1.8, to = finite(target.elevation) + 1;
       if (this.game._blockedLine?.(observer, target, from, to)) return false;
-      const terrain = this.game.world?.terrain;
-      if (terrain) {
-        const count = Math.max(2, Math.ceil(distance(observer, target) / 100));
-        for (let i = 1; i < count; i++) {
-          const t = i / count, point = { x: observer.x + (target.x - observer.x) * t, y: observer.y + (target.y - observer.y) * t };
-          if (this._ground(point) > from + (to - from) * t) return false;
-        }
-      }
+      if (this._obstructionFraction({ ...observer, elevation: from }, { ...target, elevation: to }, 80) !== null) return false;
       return true;
     }
 
@@ -850,55 +1031,109 @@
       const burstTime = this.time % 2.2;
       if (burstTime > .65) return false;
       entity.gunCooldown = .14; entity.gunFiring = true;
-      const x = entity.x + Math.cos(side) * 23, y = entity.y + Math.sin(side) * 23, elevation = entity.elevation + 1.6;
-      const travel = target ? Math.max(.1, distance(entity, target) / 1400) : .8;
+      const offset = entity.militaryResponse ? 45 : 23, forward = entity.militaryResponse ? 6 : 0;
+      const x = entity.x + Math.cos(side) * offset + Math.cos(entity.angle) * forward, y = entity.y + Math.sin(side) * offset + Math.sin(entity.angle) * forward, elevation = entity.elevation + (entity.militaryResponse ? 1.8 : 1.6);
+      const travel = target ? Math.max(.04, Math.hypot(target.x - x, target.y - y) / 1400) : .8;
+      const aim = target && entity.militaryResponse ? { x: target.x + finite(target.vx) * travel, y: target.y + finite(target.vy) * travel } : target;
+      const shotAngle = aim ? Math.atan2(aim.y - y, aim.x - x) : aimAngle;
+      const shotTravel = aim ? Math.max(.04, Math.hypot(aim.x - x, aim.y - y) / 1400) : travel;
+      const targetHeight = isAircraft(target) ? getModel(target).height * .5 : target?.kind === 'van' ? .85 : .65;
       const projectile = { id: 'air-round-' + this._nextId++, x, y, elevation, height: elevation,
-        vx: Math.cos(aimAngle) * 1400, vy: Math.sin(aimAngle) * 1400,
-        vz: target ? (finite(target.elevation) + .9 - elevation) / travel : Math.tan(clamp(finite(aimPitch), -.8, .8)) * 70,
-        life: .95, ownerId: entity.id, npc: Boolean(entity.npc), radius: 2, color: '#ffc94d' };
+        vx: Math.cos(shotAngle) * 1400, vy: Math.sin(shotAngle) * 1400,
+        vz: target ? (finite(target.elevation) + targetHeight - elevation) / shotTravel : Math.tan(clamp(finite(aimPitch), -.8, .8)) * 70,
+        life: .95, ownerId: entity.id, npc: Boolean(entity.npc), military: Boolean(entity.militaryResponse), damage: entity.militaryResponse ? 5 : 3, radius: 2, color: '#ffc94d' };
       this.aircraftProjectiles.push(projectile);
       if (entity === this.current) this.game._raiseHeat?.(.2, 'Airborne confetti cannon', { position: entity, noise: 400 });
       this.game._sound?.('pop', { x, y, intensity: .4 });
       return true;
     }
 
+    _fireForward(entity, target) {
+      if (!target || entity.gunCooldown > 0 || entity.health <= 0 || entity.exploded || !isAircraft(target) || !this._canSee(entity, target, 2600)) return false;
+      const range = distance(entity, target), travel = Math.max(.05, range / 3000);
+      const aim = { x: target.x + finite(target.vx) * travel, y: target.y + finite(target.vy) * travel, elevation: finite(target.elevation) + getModel(target).height * .5 + finite(target.vz) * travel };
+      const angle = Math.atan2(aim.y - entity.y, aim.x - entity.x);
+      if (range < 550 || range > 2400 || Math.abs(wrap(angle - entity.angle)) > .12 || this.time % 2.5 > .7) return false;
+      const x = entity.x + Math.cos(entity.angle) * 131, y = entity.y + Math.sin(entity.angle) * 131, elevation = entity.elevation + 1.7;
+      const shotTravel = Math.max(.04, Math.hypot(aim.x - x, aim.y - y) / 3000);
+      const shotAngle = Math.atan2(aim.y - y, aim.x - x);
+      entity.gunCooldown = .12; entity.gunFiring = true;
+      this.aircraftProjectiles.push({ id: 'air-round-' + this._nextId++, x, y, elevation, height: elevation,
+        vx: Math.cos(shotAngle) * 3000, vy: Math.sin(shotAngle) * 3000, vz: (aim.elevation - elevation) / shotTravel,
+        life: .9, ownerId: entity.id, npc: true, military: true, damage: 8, radius: 2, color: '#ffca62' });
+      this.game._sound?.('pop', { x, y, intensity: .5 }); return true;
+    }
+
+    _obstructionFraction(from, to, step = 30) {
+      let closest = null;
+      const minX = Math.min(from.x, to.x), maxX = Math.max(from.x, to.x), minY = Math.min(from.y, to.y), maxY = Math.max(from.y, to.y);
+      const consider = fraction => { if (fraction !== null && (closest === null || fraction < closest)) closest = fraction; };
+      for (const building of this.game.buildings || []) {
+        const radius = Math.hypot(building.w, building.h) / 2, x = building.x + building.w / 2, y = building.y + building.h / 2;
+        if (x + radius < minX || x - radius > maxX || y + radius < minY || y - radius > maxY) continue;
+        consider(segmentBox(from, to, building, finite(building.elevation, this._ground({ x, y })), finite(building.height, 8)));
+      }
+      for (const object of this.game.staticObjects || []) {
+        if (object.destroyed) continue;
+        const angle = finite(object.angle), c = Math.cos(angle), s = Math.sin(angle);
+        for (const part of object.parts || []) {
+          const offset = part.offset || [0, 0, 0], half = part.half || [.3, .5, .3];
+          const x = object.x + (offset[0] * c - offset[2] * s) * SCALE, y = object.y + (offset[0] * s + offset[2] * c) * SCALE;
+          const radius = Math.hypot(half[0], half[2]) * SCALE;
+          if (x + radius < minX || x - radius > maxX || y + radius < minY || y - radius > maxY) continue;
+          consider(segmentBox(from, to, { x: x - half[0] * SCALE, y: y - half[2] * SCALE, w: half[0] * 40, h: half[2] * 40, angle }, finite(object.elevation, this._ground(object)) + offset[1] - half[1], half[1] * 2));
+        }
+      }
+      const count = Math.max(1, Math.ceil(distance(from, to) / step));
+      for (let i = 0; i <= count; i++) {
+        const fraction = i / count;
+        if (closest !== null && fraction >= closest) break;
+        const point = { x: from.x + (to.x - from.x) * fraction, y: from.y + (to.y - from.y) * fraction };
+        if (from.elevation + (to.elevation - from.elevation) * fraction <= this._ground(point)) { consider(fraction); break; }
+      }
+      return closest;
+    }
+
     _projectiles(dt) {
       for (const round of this.aircraftProjectiles) {
-        round.life -= dt;
+        const travelTime = Math.min(dt, Math.max(0, round.life)); round.life -= dt;
         const before = { x: round.x, y: round.y, elevation: round.elevation };
-        round.x += round.vx * dt; round.y += round.vy * dt; round.elevation += round.vz * dt; round.height = round.elevation;
-        let hit = this.game._blockedLine?.(before, round, before.elevation, round.elevation) || round.elevation <= this._ground(round);
-        if (!hit && !round.npc) hit = this.hitSegment(before, round, 5, round.ownerId);
-        const victims = [], officers = [];
-        const targets = round.npc ? [this.current || this.game.current || this.game.player].filter(Boolean).concat(this.game.cars || [], this.game.police || []) : (this.game.cars || []).concat(this.game.police || [], this.game.peds || []);
-        for (const target of targets) {
-          if (hit || target.id === round.ownerId) continue;
-          const model = isAircraft(target) ? getModel(target) : { length: 32, width: 32, height: 1.9 };
+        round.x += round.vx * travelTime; round.y += round.vy * travelTime; round.elevation += round.vz * travelTime; round.height = round.elevation;
+        let fraction = this._obstructionFraction(before, round), targetHit = null;
+        if (fraction === null && this.game._blockedLine?.(before, round, before.elevation, round.elevation)) fraction = 0;
+        const candidates = round.npc ? [this.current || this.game.current || this.game.player].filter(Boolean).concat(this.aircraft, this.game.cars || [], this.game.police || []) : this.aircraft.concat(this.game.cars || [], this.game.police || [], this.game.peds || []);
+        for (const target of new Set(candidates)) {
+          if (target.id === round.ownerId || target.visible === false || target.exploded) continue;
+          const road = VehicleStats && Object.hasOwn(VehicleStats.CAR_TYPES, target.kind);
+          const model = isAircraft(target) ? getModel(target) : road ? { ...VehicleStats.getModel(target), height: target.kind === 'van' ? 1.7 : 1.3 } : { length: 24, width: 24, height: 1.9 };
           const box = { x: target.x - model.length / 2, y: target.y - model.width / 2, w: model.length, h: model.width, angle: target.angle };
-          const fraction = segmentBox(before, round, box, finite(target.elevation), model.height);
-          if (fraction === null) continue;
-          round.x = before.x + (round.x - before.x) * fraction; round.y = before.y + (round.y - before.y) * fraction;
-          round.elevation = round.height = before.elevation + (round.elevation - before.elevation) * fraction;
-          hit = true;
-          if (isAircraft(target)) this.damage(target, 3);
-          else if (target === this.game.player) {
-            target.composure = Math.max(10, finite(target.composure, 100) - 3);
-            target.bubble = 'OH, CRUMBS!'; target.bubbleTimer = 1;
-          } else if ((this.game.peds || []).includes(target)) {
-            if (this.game._knockDown?.(target, { x: round.vx / 500, y: 2, z: round.vy / 500 })) victims.push(target);
+          const hit = segmentBox(before, round, box, finite(target.elevation), model.height);
+          if (hit === null || fraction !== null && hit >= fraction) continue;
+          fraction = hit; targetHit = target;
+        }
+        if (fraction === null) continue;
+        round.x = before.x + (round.x - before.x) * fraction; round.y = before.y + (round.y - before.y) * fraction;
+        round.elevation = round.height = before.elevation + (round.elevation - before.elevation) * fraction;
+        const victims = [], officers = [], amount = finite(round.damage, 3);
+        if (targetHit) {
+          if (isAircraft(targetHit)) this.damage(targetHit, amount);
+          else if (targetHit === this.game.player) {
+            targetHit.composure = Math.max(10, finite(targetHit.composure, 100) - amount);
+            targetHit.bubble = 'OH, CRUMBS!'; targetHit.bubbleTimer = 1;
+          } else if ((this.game.peds || []).includes(targetHit)) {
+            if (this.game._knockDown?.(targetHit, { x: round.vx / 500, y: 2, z: round.vy / 500 })) victims.push(targetHit);
           } else {
-            this.game._damageVehicle?.(target, 3);
-            if ((this.game.police || []).includes(target)) { target.distracted = 1.5; officers.push(target); }
+            this.game._damageVehicle?.(targetHit, amount);
+            if ((this.game.police || []).includes(targetHit)) { targetHit.distracted = 1.5; officers.push(targetHit); }
           }
         }
-        if (hit) {
-          round.life = 0; this.game._confetti?.(round.x, round.y, 6, round.elevation);
-          if (!round.npc) this.game._raiseHeat?.(.5, 'Airborne cannon impact', { position: round, noise: 260, victims, officers });
-        }
+        round.life = 0; this.game._confetti?.(round.x, round.y, 6, round.elevation);
+        if (!round.npc) this.game._raiseHeat?.(.5, 'Airborne cannon impact', { position: round, noise: 260, victims, officers });
       }
       // Keep the array identity stable for renderers and integrations.
       for (let i = this.aircraftProjectiles.length - 1; i >= 0; i--) if (this.aircraftProjectiles[i].life <= 0) this.aircraftProjectiles.splice(i, 1);
     }
+
   }
 
   const api = { AircraftSystem, AIRCRAFT_TYPES, isAircraft, getModel, boardingDistance, SCALE };

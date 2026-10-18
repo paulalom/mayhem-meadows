@@ -2,7 +2,11 @@
 
 The Fun Police should turn a sustained spree into a funny chase. A few mistakes or scattered pranks leave room to play; repeated public chaos earns a warning, one pursuing patrol, and then a clearly announced swarm. The player always sees what caused the response, whether they are visible to police, and how to escape.
 
-These are proposed replacement rules for the next gameplay build. The current prototype has up to three patrols, immediate heat for police sightings or nearby incident sounds, and two-second resident help calls. Unnoticed incidents add no heat and do not reset escape. The new mischief thresholds, four-patrol limit, and expanded feedback below still need implementation and playtesting.
+The current game has four wanted stars. The first three use the existing civilian response, capped at three road patrols, with a police helicopter at three stars. At four stars, Northwatch sends one military responder after an announced warning: a fighter for a player in an airplane or helicopter, or an armed heavy helicopter for a player in a ground vehicle. These units use real flight controls, sight checks, short directional cannon bursts, last-known-position searches and a return to base. Vehicle changes require a response change through dispatch rather than an extra instant spawn. The HUD identifies the unit and its dispatch/search state.
+
+Tanks are a proposed later addition. A reasonable trigger is a sustained four-star ground pursuit lasting about a minute, or a reported attack on the base or theft of military equipment. Deploy one through a clear outskirts road or as a base checkpoint defense. Require room for its full tracks and turret, a warning before arrival or fire, solid cover that stops shells, and an open escape route. Dense city lanes, on-foot hiding and an airborne target should retain an air/search response. A tank should not appear beside the player or continuously know a hidden player's position. Tank models, driving and weapons are not implemented in this update.
+
+The remaining sections describe proposed replacement balance rules for a future build. The current prototype still uses immediate heat for police sightings or nearby incident sounds and two-second resident help calls. Unnoticed incidents add no heat and do not reset escape. The new mischief thresholds, revised civilian patrol limit, and expanded feedback below still need implementation and playtesting; the existing fourth military star should remain separate from those three proposed civilian tiers.
 
 ## Room for mischief
 

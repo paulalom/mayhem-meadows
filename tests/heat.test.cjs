@@ -125,9 +125,9 @@ test('remote cannon hits use witnesses at the burst instead of the shooter', () 
 
 test('confirmed incidents reset search at the heat cap and during cooldown; unseen incidents do not', () => {
   const game = empty(); cop(game, 1100); const prop = fence(game);
-  game.heat = 3; game.escapeTimer = 5; game._troubleCooldown = 2;
+  game.heat = 4; game.escapeTimer = 5; game._troubleCooldown = 2;
   game._damageProp(prop, 100, game.player);
-  assert.equal(game.heat, 3); assert.equal(game.escapeTimer, 0);
+  assert.equal(game.heat, 4); assert.equal(game.escapeTimer, 0);
   assert.deepEqual(game.police[0].lastSeen, { x: prop.x, y: prop.y });
   game.police[0].x = 2000; game.escapeTimer = 5;
   game._raiseHeat(1, 'Hidden mischief'); assert.equal(game.escapeTimer, 5);

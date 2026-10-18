@@ -3,6 +3,8 @@
 
   const World = root.MayhemWorld || (typeof require === 'function' ? require('./world.js') : null);
   const SIZE = World.SIZE;
+  const MAX_HEAT = 4;
+  const MAX_POLICE_HEAT = 3;
   // Kept as a compatibility export for old tools; routing uses RoadNetwork.
   const ROAD_CENTERS = [180, 540, 900, 1260, 1620, 1980];
   const ROAD_WIDTH = 104;
@@ -181,6 +183,7 @@
       const terrain=this.world?.terrain;
       return !terrain || !terrain.isWater(point.x,point.y) || this._ground(point)>=finite(terrain.waterLevel,0)+.25;
     }
+    get heatLevel() { return numeric(this.heat, 0, 0, MAX_HEAT); }
     get escapeGoal() { return this.heat > 0 ? 8 + this.heat * 6 : 0; }
     get maxHealth() { return 100 + this.upgrades.armor * 25; }
     get garageAvailable() {
@@ -747,7 +750,7 @@
     }
 
     _clearHeat() {
-      this.heat = 0; this.escapeTimer = 0; this.policeSeen = false; this._policeSearching = false;
+      this.heat = 0; this.escapeTimer = 0; this.policeSeen = false; this.airPoliceSeen = false; this._policeSearching = false;
       this._reportedLocation = null;
       for (const { reporter } of this._witnessReports) if (reporter.bubble === 'HELP! CALLING POLICE...') {
         reporter.bubble = ''; reporter.bubbleTimer = 0;
@@ -762,7 +765,7 @@
       if (this._troubleCooldown > 0) return;
       this._policeSearching = false;
       const before = this.heat;
-      this.heat = clamp(this.heat + amount, 0, 3);
+      this.heat = clamp(this.heat + amount, 0, MAX_HEAT);
       this._troubleCooldown = 3;
       if (this.heat !== before) { this._toast(reason, 'warning'); this._sound('heat', { level: this.heat, reason }); }
     }
@@ -1740,7 +1743,10 @@
     }
 
     _updatePolice(dt) {
-      const wanted = Math.max(1, this.heat);
+      // The fourth star calls in Northwatch; civilian patrols retain their
+      // existing three-star count, visibility and pursuit speed.
+      const policeHeat = Math.min(this.heat, MAX_POLICE_HEAT);
+      const wanted = Math.max(1, policeHeat);
       const disabled = this.police.filter(cop => cop.health <= 0 || cop.burning || cop.exploded).slice(-3);
       this.police = this.police.filter(cop => cop.health > 0 && !cop.burning && !cop.exploded).slice(0, wanted).concat(disabled);
       let activeCount = this.police.length - disabled.length;
@@ -1761,7 +1767,7 @@
         if (cop.health <= 0 || cop.burning || cop.exploded) continue;
         cop.distracted = Math.max(0, (cop.distracted || 0) - dt);
         const sightRange=Math.hypot(distance(cop,this.current),(this._base(cop)-this._base(this.current))*20);
-        const sight = this.heat > 0 && cop.distracted <= 0 && this.graceTimer <= 0 && sightRange < 340 + this.heat * 65 && !this._blockedLine(cop,this.current);
+        const sight = this.heat > 0 && cop.distracted <= 0 && this.graceTimer <= 0 && sightRange < 340 + policeHeat * 65 && !this._blockedLine(cop,this.current);
         if (sight) { seen = true; cop.lastSeen = { x: this.current.x, y: this.current.y }; this._reportedLocation = { ...cop.lastSeen }; }
         cop.routeTimer -= dt;
         if (cop.routeTimer <= 0 || !cop.route.length) {
@@ -1775,7 +1781,7 @@
         if (target && distance(cop, target) > 10 && cop.distracted <= 0) {
           const heading = Math.atan2(target.y - cop.y, target.x - cop.x);
           const error=Math.abs(wrapAngle(heading-cop.angle));
-          const desired = error>1.2 ? 14 : error>.7 ? 25 : (this.heat ? 160 + this.heat * 25 : 75) * (error>.4 ? .55 : 1);
+          const desired = error>1.2 ? 14 : error>.7 ? 25 : (this.heat ? 160 + policeHeat * 25 : 75) * (error>.4 ? .55 : 1);
           this.vehiclePhysics.control(cop, { targetSpeed: this.heat ? this.railTraffic.roadSpeedLimit(cop,heading,desired) : this._trafficSpeed(cop,heading,desired), heading });
         } else this.vehiclePhysics.control(cop, { targetSpeed: 0, heading: cop.angle });
         let close;
@@ -1877,7 +1883,8 @@
   }
 
   Game.SIZE = SIZE;
-  const api = { Game, SIZE, ROAD_CENTERS, ROAD_WIDTH, SIDEWALK_WIDTH, BUILDING_SETBACK, DISTRICTS, districtAt, CAR_TYPES, CAR_MODELS, VehicleStats, GADGETS, POCKET_ITEMS, PAINT_COLORS: Object.freeze(COLORS.slice()) };
+  Game.MAX_HEAT = MAX_HEAT;
+  const api = { Game, SIZE, MAX_HEAT, ROAD_CENTERS, ROAD_WIDTH, SIDEWALK_WIDTH, BUILDING_SETBACK, DISTRICTS, districtAt, CAR_TYPES, CAR_MODELS, VehicleStats, GADGETS, POCKET_ITEMS, PAINT_COLORS: Object.freeze(COLORS.slice()) };
   root.MayhemCore = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(globalThis);

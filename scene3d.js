@@ -1152,6 +1152,38 @@
       return model;
     }
 
+    _aircraftArmament(model,entity) {
+      const armed=Boolean(entity.militaryResponse&&['interceptor','gunship'].includes(entity.militaryRole));
+      if(armed&&!model.militaryArmament) {
+        const T=this.T,group=new T.Group(),source=root.MayhemAircraftModels?.policeheli;
+        group.name='Northwatch '+entity.militaryRole+' cannon';
+        // Reuse the authored Blender cannon; changing duty does not create a
+        // different airframe or change the aircraft's physical dimensions.
+        for(let i=0;i<(source?.parts.length||0);i++) {
+          const part=source.parts[i];if(!/gunner|cannon/i.test(part.name))continue;
+          const key='policeheli:'+i;let geometry=this._aircraftGeometries.get(key);
+          if(!geometry) {
+            geometry=this._geometry(new T.BufferGeometry());
+            geometry.setAttribute('position',new T.Float32BufferAttribute(part.positions,3));geometry.setIndex(part.indices);
+            geometry.computeVertexNormals();geometry.computeBoundingSphere();this._aircraftGeometries.set(key,geometry);
+          }
+          const material=this._material(part.color).clone(),mesh=new T.Mesh(geometry,material);
+          mesh.name=part.name;mesh.position.fromArray(part.pivot||[0,0,0]);mesh.castShadow=mesh.receiveShadow=true;
+          model.materials.push({material,color:material.color.clone()});group.add(mesh);
+        }
+        if(entity.militaryRole==='interceptor'){group.rotation.y=Math.PI/2;group.position.set(4.7,.3,.5);}
+        else group.position.set(0,.4,.4);
+        model.visual.add(group);
+        const muzzle=this._mesh(this._sphere,this._material('#ffe9a2',{unlit:true}),group,.3,1.42,1.88,.20,.20,.48,false);
+        muzzle.raycast=()=>{};muzzle.visible=false;model.militaryArmament={group,muzzle};
+      }
+      if(model.militaryArmament) {
+        model.militaryArmament.group.visible=armed;
+        model.militaryArmament.muzzle.visible=armed&&model.group.visible&&!entity.exploded&&Boolean(entity.gunFiring)&&
+          (this.reducedMotion||Math.sin((this.game.time||0)*38)>0);
+      }
+    }
+
     _retireAircraft(id, model) {
       model.group.visible = model.effects.group.visible = false;
       if (model.searchlight) model.searchlight.group.visible = false;
@@ -1174,6 +1206,7 @@
         if (model && model.type !== type) { this._retireAircraft(entity.id, model); model = null; }
         if (!model) { model = this._aircraftModel(entity); this._aircraft.set(entity.id, model); }
         model.group.visible = entity.visible !== false;
+        this._aircraftArmament(model,entity);
         model.group.position.set(entity.x / UNIT, Number.isFinite(entity.elevation) ? entity.elevation : 0, entity.y / UNIT);
         // Heading is world yaw, with pitch and bank applied around the airframe's
         // local axes. The camera never inherits either of these rotations.
