@@ -651,6 +651,7 @@
     if (t) { mini.strokeStyle = '#effa88'; mini.lineWidth = 2; mini.beginPath(); mini.arc(t.x * scale, t.y * scale, 5, 0, Math.PI * 2); mini.stroke(); }
     for (const police of game.police) { mini.fillStyle = game.heat ? '#ff8294' : '#a7cee4'; mini.beginPath(); mini.arc(police.x * scale, police.y * scale, 2, 0, Math.PI * 2); mini.fill(); }
     for (const aircraft of game.aircraft || []) if (aircraft.active !== false && aircraft.visible !== false && !aircraft.exploded) drawAircraftMarker(aircraft, scale, w, h);
+    for(const car of game.trainCars || [])if(car.visible){mini.save();mini.translate(car.x*scale,car.y*scale);mini.rotate(car.angle);mini.fillStyle=car.model==='passenger'?'#6ee4d5':'#f3c568';mini.fillRect(-2.5,-1.2,5,2.4);mini.restore();}
     if (!isAircraft(game.current)) {
       mini.save(); mini.translate(clamp(game.current.x * scale, 5, w - 5), clamp(game.current.y * scale, 5, h - 5)); mini.rotate(game.current.angle);
       mini.fillStyle = '#fff8d9'; mini.beginPath(); mini.moveTo(6, 0); mini.lineTo(-4, -4); mini.lineTo(-3, 0); mini.lineTo(-4, 4); mini.closePath(); mini.fill(); mini.restore();

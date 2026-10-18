@@ -1,0 +1,33 @@
+{
+  "author": "Mayhem Meadows",
+  "license": "MIT",
+  "source": "train-workshop.blend",
+  "generator": "../../tools/export-trains.py",
+  "units": "metres",
+  "models": {
+    "passenger": {
+      "bounds": {
+        "length": 8.5,
+        "width": 2.255,
+        "height": 2.71
+      },
+      "triangles": 776
+    },
+    "cab": {
+      "bounds": {
+        "length": 6,
+        "width": 2.255,
+        "height": 2.71
+      },
+      "triangles": 680
+    },
+    "container": {
+      "bounds": {
+        "length": 7,
+        "width": 2.2,
+        "height": 2.55
+      },
+      "triangles": 952
+    }
+  }
+}

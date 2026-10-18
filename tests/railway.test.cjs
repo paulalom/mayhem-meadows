@@ -38,11 +38,12 @@ test('rail corridors stay dry, clear occupied lots and have a gentle physical pr
 });
 test('both passenger tracks join the main line and the crossover connects the two platform tracks',()=>{
   const find=id=>railway.tracks.find(t=>t.id===id),first=find('platform-1'),second=find('platform-2'),cross=find('station-crossover');
-  assert.ok(distanceToTrack(first.points[0],find('main-west'))<.001);
-  assert.ok(distanceToTrack(second.points[0],find('main-east'))<.001);
+  assert.ok(distanceToTrack(first.points[0],find('main-east'))<.001);
+  assert.ok(distanceToTrack(second.points[0],find('main-west'))<.001);
   assert.ok(distanceToTrack(cross.points[0],first)<.001);
   assert.ok(distanceToTrack(cross.points.at(-1),second)<.001);
   assert.equal(railway.operation.turnaround,'reverse');assert.equal(railway.operation.doubleEnded,true);
+  for(const [branch,main]of [[first,find('main-east')],[second,find('main-west')]]){const a=main.points.at(-2),b=main.points.at(-1),c=branch.points[1],turn=Math.atan2(c.y-b.y,c.x-b.x)-Math.atan2(b.y-a.y,b.x-a.x);assert.ok(Math.abs(Math.sin(turn))<.04,'passenger turnouts retain the main-line tangent');}
   assert.ok(cross.points[0].x>Math.max(...railway.platforms.map(p=>p.x+p.w)),'switches lie beyond the passenger platforms');
 });
 test('river approaches bridge above the rail bed and quiet road crossings remain drivable',()=>{

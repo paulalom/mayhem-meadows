@@ -2139,6 +2139,7 @@
       this._people(step);
       this._cars(options.paused ? 0 : step);
       this._aircraftStep(options.paused ? 0 : step);
+      root.MayhemTrainRender?.step(this);
       this._effects();
       this._landscapeStep(this.game.time);
       this._cameraStep(step);

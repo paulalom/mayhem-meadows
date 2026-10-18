@@ -69,7 +69,7 @@ Compact, sports car, and van engines blend idle and loaded loops as you accelera
 
 - **Coastal city:** the supplied city map guides the layout: dense Downtown, winding Old Town, Northside homes, West Beach and Marina, Docklands, Ridge Heights, the airport, and Tidewell Marsh. Buildings face their streets and keep sidewalks clear; gardens and spacing open up outside the center. Characters remain 14% smaller with matching physical bodies. The HUD names your district; the minimap draws the coastline, terrain, actual roads, and rotated footprints.
 - **Playable terrain:** the supplied grayscale PNG shapes the ground, including the northern ridge, river, and coast. The reference covers roughly 600 × 400 metres inside a 600-metre square world. Road grades are softened for arcade handling, buildings have level foundations, and bridges carry cars and pedestrians over the river. Walking, jumping, car bodies, ragdolls, aiming, and the camera use the same ground triangles. A splash returns you to a safe road.
-- **Central Station:** a west-bank railway enters from the north, branches into a two-track Docklands terminus, and continues to freight sidings. The station has solid platforms and canopies, buffers, a crossover between the platform tracks, a forecourt, and pedestrian access behind the buffers. River bridge approaches cross above the railway; quieter roads have open level-crossing gates. The depot has a solid roof and a marked helicopter landing pad. This update adds the infrastructure; scheduled moving trains are not implemented. The cleaned height-map export preserves the original water mask and untouched pixels; rebuild it with `npm run railway-heightmap`.
+- **Central Station:** a west-bank railway enters from the north, branches into a two-track Docklands terminus, and continues to freight sidings. Scheduled passenger and container trains use solid platforms, buffers and the station crossover. Warning lights and hinged barriers stop road traffic and pedestrians at level crossings; two river road approaches pass above the trains. The ferry road bend shares one protected crossing, keeping its junction clear of internal barriers. The depot has a solid roof and a marked helicopter landing pad. The cleaned height-map export preserves the original water mask and untouched pixels; rebuild it with `npm run railway-heightmap`.
 - **Driving:** compact, sports car, and van handling; traffic; drifting and near-miss style points. Parked cars use clear roadside bays with access from the street. Cars are three-dimensional rigid bodies with gravity: impacts can bounce, lift, roll, or flip them before they land. Press R to right your ride and return to a safe road position.
 - **Aviation:** seven original Blender aircraft: the Bramble Skylark trainer, Mirth Islander commuter, civilian Pogo Whirlybird, Channel 6 news helicopter, Biscuit Air Patrol with a side-mounted cartoon cannon, Tumble Heavy Lift transport helicopter, and Fable Firefly fighter. Each uses the same flight handling for player and NPC pilots. The airport has level connected pavement, aircraft stands, helipads, queued runway movements and arrivals that go around an obstruction. Visiting military aircraft use a separate apron; a military base remains future content.
 - **Air jobs and hangars:** the airport button marks the route to your first aircraft. Fly passenger and cargo helicopter trips to the marina and downtown rooftop, follow a sightseeing route, or race through elevated gates. Land and stop for two seconds to load or unload. Three hangar slots preserve aircraft and component damage in local saves; retrieving an owned craft moves it instead of duplicating it. Airport repairs cost $75. G opens hangar management when near the apron; a Hangar tab is available for browsing anywhere.
@@ -103,6 +103,23 @@ The original reference images are preserved in **assets/**. The attached height 
 The [story campaign design](CAMPAIGN.md) specifies **Operation Unboring**, a proposed ten-job campaign beginning with Spanner's phone call and directions to Sprinkle Garage. Its first playable milestone is the call, the drive, and the garage meeting; campaign gameplay is planned for a later build.
 
 The [police balance design](POLICE.md) proposes a forgiving mischief buildup, explicit chase reasons, announced reinforcement waves, and a capped four-car swarm. These rules are planned for a gameplay update; the current prototype retains its existing three-patrol heat system.
+
+## Railway timetable
+
+The timetable runs on elapsed, unpaused gameplay time. The first local leaves the north map edge at 0:08; the next leaves at 3:08. Locals alternate between the two platforms every three minutes. Freight alternates between Docklands and the container siding every six minutes. Each service has one persistent consist; delays hold it safely rather than spawning another train into occupied track.
+
+| Service / destination | First departure | Repeat | Station dwell |
+| --- | --- | --- | --- |
+| Northport Local → Central Platform 1 | 0:08 | 6 minutes | 18 seconds |
+| Northport Local → Central Platform 2 | 3:08 | 6 minutes | 18 seconds |
+| Docklands Shuttle → freight terminal | 4:30 | 12 minutes | 28 seconds |
+| Container Shuttle → yard siding | 10:30 | 12 minutes | 28 seconds |
+
+Passenger consists have two cab cars; freight has a cab at each end of a container wagon. All reverse at the destination without a turning loop. Platform 1 departures use the crossover and return on the other main; other services retrace their arrival route. Off-map departures go to Northport. Maximum speeds are 8 m/s on the main, 4.25 m/s in the yard and 2 m/s over the crossover, with acceleration and braking.
+
+Dispatch reserves complete routes atomically, including junctions and shared approaches. Sections release only after the last car plus a safety margin has cleared. Separate platform berths permit trains to wait at the station without locking the whole approach. Crossing lights warn for three seconds, then arms lower for two seconds. Sensors keep arms up for road users already inside and stop the train until the road is clear and the arms are down. Gates remain closed through tail clearance and successive requests; a two-second clear interval precedes opening. NPC traffic, including pursuing police, obeys the crossing limits. Player vehicles can still be driven into physical barriers or trains. Standing people and ragdolls share their solid envelopes. Pausing freezes trains and gate animation.
+
+The original low-poly fleet is authored in Blender: [preview](assets/trains/fleet-preview.png), [editable workshop](assets/trains/train-workshop.blend), and [export script](tools/export-trains.py). Exported triangles are embedded in `train-models.js` for offline play. `node tools/train-browser-check.cjs` verifies the routes and renders the running trains and crossings in Chrome; evidence is written to the ignored `playtest-evidence/trains/` directory.
 
 ## Alien visitors
 
@@ -144,6 +161,9 @@ npm run vendor
 | vehicle-physics.js | Cannon vehicle bodies, gravity, orientation, elastic contacts, and fixed obstacle shapes |
 | aircraft.js | Shared arcade flight, airport traffic, news/police behavior and side-gun projectiles |
 | aircraft-models.js / assets/aircraft/ | Offline Blender mesh bundle, editable source, fleet preview and provenance |
+| railway.js / railway-render.js | Shared rail alignment, graded formation, station, crossover, crossings and depot rooftop pad |
+| trains.js / trains-render.js | Timetable, reversing consists, route reservations, crossing signals and dynamic presentation |
+| train-models.js / assets/trains/ | Blender rail fleet, editable workshop, preview and provenance |
 | aliens.js / aliens-render.js | Disguised sidewalk visitors, silver saucer and visible pilot, temporary beam abductions and aircraft separation |
 | physics.js | Ragdoll joints, gravity, contacts, and automatic get-up |
 | scene3d.js | Three.js world, models, perspective camera, lighting, and visual effects |

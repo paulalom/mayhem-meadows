@@ -340,11 +340,11 @@
         boxes.push(prepareBox({ x: car.x / UNIT, z: car.y / UNIT, y: finite(car.elevation) + (height + bottom) / 2, hx: length / 2, hy: (height - bottom) / 2, hz: width / 2, angle, orientation: car.orientation,
           vx: clamp(finite(car.vx, finite(car.speed) * c) / UNIT, -20, 20), vy: clamp(finite(car.verticalVelocity), -20, 20), vz: clamp(finite(car.vy, finite(car.speed) * s) / UNIT, -20, 20), angularVelocity: car.angularVelocity, dynamic: true }));
       }
-      const aircraft=environment.aircraft||[];
+      const aircraft=(environment.aircraft||[]).concat(environment.railVehicles||[]);
       const Aircraft=aircraft.length&&(root.MayhemAircraft||(typeof require==='function'?require('./aircraft.js'):null));
       for(const craft of aircraft) {
         if(!craft||craft.visible===false||craft.active===false||!Number.isFinite(craft.x)||!Number.isFinite(craft.y)||seen.has(craft.id||craft))continue;
-        const model=Aircraft?.AIRCRAFT_TYPES[craft.aircraftType];if(!model)continue;
+        const model=craft.railModel||Aircraft?.AIRCRAFT_TYPES[craft.aircraftType];if(!model)continue;
         seen.add(craft.id||craft);
         const length=Math.max(.1,finite(craft.colliderLength,model.length)/UNIT),width=Math.max(.1,finite(craft.colliderWidth,model.width)/UNIT);
         const height=Math.max(.1,finite(craft.colliderHeight,model.height)),orientation=aircraftOrientation(craft),basis=boxBasis(orientation,finite(craft.angle));

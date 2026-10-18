@@ -36,6 +36,7 @@
   const { CHARACTER_SCALE, PERSON_HEIGHT, MUZZLE_HEIGHT, PLAYER_RADIUS, NPC_RADIUS } = Physics;
   const VehiclePhysics = root.MayhemVehiclePhysics || (typeof require === 'function' ? require('./vehicle-physics.js') : null);
   const Aircraft = root.MayhemAircraft || (typeof require === 'function' ? require('./aircraft.js') : null);
+  const Trains = root.MayhemTrains || (typeof require === 'function' ? require('./trains.js') : null);
   const Aliens = root.MayhemAliens || (typeof require === 'function' ? require('./aliens.js') : null);
 
   // Cars keep arcade steering on the ground, with contacts matching their
@@ -139,6 +140,8 @@
       this._driftTime = 0;
       this._nearMisses = new Map();
       this._makeTown();
+      this.railTraffic = new Trains.TrainSystem(this);
+      this.trainCars = this.railTraffic.cars;
       this.vehiclePhysics = new VehiclePhysics.VehicleWorld(this, CAR_TYPES);
       this.aviation = new Aircraft.AircraftSystem(this);
       this.aircraft = this.aviation.aircraft;
@@ -262,10 +265,10 @@
     }
 
     _vehicles() { return this.cars.concat(this.police); }
-    _solidVehicles() { return this._vehicles().concat((this.aircraft || []).filter(craft=>craft.visible!==false)); }
+    _solidVehicles() { return this._vehicles().concat((this.aircraft || []).filter(craft=>craft.visible!==false),this.railTraffic?.colliders || []); }
 
     _vehicleBox(entity) {
-      const type = Aircraft.isAircraft(entity) ? Aircraft.getModel(entity) : CAR_TYPES[entity.kind] || CAR_TYPES.compact;
+      const type = entity.railModel || (Aircraft.isAircraft(entity) ? Aircraft.getModel(entity) : CAR_TYPES[entity.kind] || CAR_TYPES.compact);
       return orientedBox(entity, type.length, type.width);
     }
 
@@ -333,7 +336,7 @@
     }
 
     _personVehicleContact(person, vehicle, radius = person === this.player ? PLAYER_RADIUS : NPC_RADIUS) {
-      const type = Aircraft.isAircraft(vehicle) ? Aircraft.getModel(vehicle) : CAR_TYPES[vehicle.kind] || CAR_TYPES.compact;
+      const type = vehicle.railModel || (Aircraft.isAircraft(vehicle) ? Aircraft.getModel(vehicle) : CAR_TYPES[vehicle.kind] || CAR_TYPES.compact);
       const reach = Math.hypot(type.length, type.width) / 2 + radius;
       if ((person.x - vehicle.x) ** 2 + (person.y - vehicle.y) ** 2 > reach * reach) return null;
       const entry = this.vehiclePhysics && this.vehiclePhysics.bodies.get(vehicle.id);
@@ -1360,6 +1363,7 @@
       this.player.bubbleTimer = Math.max(0, this.player.bubbleTimer - dt);
       if (!this.player.bubbleTimer) this.player.bubble = '';
       this.vehiclePhysics.sync();
+      this.railTraffic.step(dt);
       if (this.player.vehicleId) { if (!Aircraft.isAircraft(this.current)) this._drive(this.current, dt, input); }
       else if (this.player.parachuting) this._parachuteStep(dt,input);
       else this._walk(dt, input);
@@ -1388,7 +1392,7 @@
       }
       this._projectiles(dt);
       this._propExplosions();
-      const finished = this.ragdolls.step(dt, { buildings: this.buildings, staticObjects: this.staticObjects, cars: this.cars, police: this.police, aircraft:(this.aircraft || []).filter(craft=>craft.visible!==false), size: SIZE, terrain:this.world?.terrain });
+      const finished = this.ragdolls.step(dt, { buildings: this.buildings, staticObjects: this.staticObjects, cars: this.cars, police: this.police, aircraft:(this.aircraft || []).filter(craft=>craft.visible!==false), railVehicles:this.railTraffic.colliders, size: SIZE, terrain:this.world?.terrain });
       for (const body of finished) {
         const owner = body.owner;
         owner.stunned = 0; owner.ragdollGrace = 1.4;
@@ -1567,6 +1571,7 @@
     }
 
     _damageVehicle(car, amount) {
+      if(car.railModel)return;
       if(Aircraft.isAircraft(car)) return this.aviation.damage(car,amount);
       if (car.exploded || !Number.isFinite(amount) || amount <= 0) return;
       const model = VehicleStats.getModel(car);
@@ -1678,7 +1683,7 @@
         const allowed=Math.max(0,(along-gap)*2);
         if(allowed<speed) { speed=allowed; car.blockedBy=other.id; }
       }
-      return speed;
+      return this.railTraffic?.roadSpeedLimit(car,heading,speed) ?? speed;
     }
 
     _pedestrians(dt) {
@@ -1701,6 +1706,7 @@
           ped.angle = Math.atan2(target.y-ped.y,target.x-ped.x);
         } else if (distance(ped, { x: ped.homeX, y: ped.homeY }) > 85) ped.angle = Math.atan2(ped.homeY - ped.y, ped.homeX - ped.x);
         const dx = Math.cos(ped.angle) * ped.pace * dt, dy = Math.sin(ped.angle) * ped.pace * dt;
+        if(this.railTraffic?.pedestrianBlocked(ped,dx,dy))continue;
         ped.elevation=this._ground(ped.x+dx,ped.y+dy);
         if (this._move(ped, dx, dy, NPC_RADIUS)) {
           if (path) { ped.pathDirection *= -1; ped.pathIndex = clamp(ped.pathIndex + ped.pathDirection,0,path.points.length-1); }
@@ -1747,7 +1753,7 @@
           const heading = Math.atan2(target.y - cop.y, target.x - cop.x);
           const error=Math.abs(wrapAngle(heading-cop.angle));
           const desired = error>1.2 ? 14 : error>.7 ? 25 : (this.heat ? 160 + this.heat * 25 : 75) * (error>.4 ? .55 : 1);
-          this.vehiclePhysics.control(cop, { targetSpeed: this.heat ? desired : this._trafficSpeed(cop,heading,desired), heading });
+          this.vehiclePhysics.control(cop, { targetSpeed: this.heat ? this.railTraffic.roadSpeedLimit(cop,heading,desired) : this._trafficSpeed(cop,heading,desired), heading });
         } else this.vehiclePhysics.control(cop, { targetSpeed: 0, heading: cop.angle });
         let close;
         if (this.player.vehicleId) { const box = this._vehicleBox(this.current); box.half = box.half.map(n => n + 5); close = this._heightOverlap(this.current, cop, VehiclePhysics.height(this.current), VehiclePhysics.height(cop)) && boxContact(this._vehicleBox(cop), box); }

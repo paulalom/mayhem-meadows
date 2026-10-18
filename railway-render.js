@@ -5,7 +5,7 @@
     const railway=scene.game.world?.railway;if(!railway)return;
     const T=scene.T,field=scene.game.world.terrain,unit=20;
     const height=(x,y)=>field.heightAt(x,y);
-    const gatedRoad=(x,y)=>railway.crossings.some(c=>c.kind==='gated'&&Math.abs((x-c.x)*-Math.sin(c.angle)+(y-c.y)*Math.cos(c.angle))<=c.width/2+6&&Math.abs((x-c.x)*Math.cos(c.angle)+(y-c.y)*Math.sin(c.angle))<=c.halfLength+50);
+    const gatedRoad=(x,y)=>railway.crossings.some(c=>c.kind==='gated'&&root.MayhemRailway.inCrossing(c,{x,y},6));
     const box=(color,x,y,z,w,h,d,rotation=null)=>scene._static(scene._cube,scene._material(color),x,y,z,w,h,d,rotation);
     const beam=(a,b,color,width,thickness,lift,offset=0)=>{
       const dx=b.x-a.x,dy=b.y-a.y,length=Math.hypot(dx,dy),angle=Math.atan2(dy,dx),nx=-Math.sin(angle)*offset,ny=Math.cos(angle)*offset;
@@ -47,18 +47,17 @@
       box('#50636d',p.x/20,height(p.x,p.y)+.45,(p.y-28)/20,.08,.5,.08);
     }
     for(const crossing of railway.crossings.filter(c=>c.kind==='gated')) {
-      const road=scene.game.roads.find(r=>r.id===crossing.roadId),angle=crossing.angle,across=road.width/2+scene.game.world.sidewalkWidth+12;
-      for(const end of [-1,1]) {
-        const along=(crossing.halfLength||110)*end;
+      const road=scene.game.roads.find(r=>r.id===crossing.roadId),across=road.width/2+scene.game.world.sidewalkWidth+12;
+      for(const stop of crossing.stopLines) {
+        const angle=stop.angle,end=stop.end;
         for(const side of [-1,1]) {
-          const x=crossing.x+Math.cos(angle)*along-Math.sin(angle)*across*side,y=crossing.y+Math.sin(angle)*along+Math.cos(angle)*across*side,base=height(x,y);
+          const x=stop.x-Math.sin(angle)*across*side,y=stop.y+Math.cos(angle)*across*side,base=height(x,y);
           box('#d8d5bf',x/20,base+.6,y/20,.16,1.2,.16);
-          // Upright arms leave the driving and walking route open; the trains are parked.
-          for(let stripe=0;stripe<6;stripe++)box(stripe%2?'#f3edd8':'#b85f55',x/20,base+1.2+stripe*.28,y/20,.11,.28,.14);
+          // Hinged arms and warning lamps are animated by trains-render.js.
           box('#293d49',x/20,base+1.03,y/20,.38,.2,.18);
           for(const sign of [-1,1])box('#f3ebd5',x/20,base+1.85,y/20,.75,.10,.06,[0,-angle,sign*.6]);
         }
-        const x=crossing.x+Math.cos(angle)*(along+end*24),y=crossing.y+Math.sin(angle)*(along+end*24);
+        const x=stop.x+Math.cos(angle)*end*24,y=stop.y+Math.sin(angle)*end*24;
         box('#f2e9d3',x/20,height(x,y)+.07,y/20,.13,.02,road.width/20,[0,-angle,0]);
       }
     }

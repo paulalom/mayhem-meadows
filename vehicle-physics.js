@@ -9,6 +9,8 @@
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const finite = (v, fallback = 0) => Number.isFinite(v) ? v : fallback;
   function aircraftModel(entity) {
+    // Aircraft and rail vehicles share controller-driven contact proxies.
+    if(entity?.kind==='train'||entity?.kind==='rail-gate')return entity.railModel;
     if(entity?.kind!=='aircraft')return null;
     const Aircraft=root.MayhemAircraft||(typeof require==='function'?require('./aircraft.js'):null);
     return Aircraft?.AIRCRAFT_TYPES[entity.aircraftType]||null;
@@ -292,7 +294,7 @@
 
     _syncAircraft(dt=0) {
       const alive=new Set();
-      for(const entity of this.game.aircraft||[]) {
+      for(const entity of (this.game.aircraft||[]).concat(this.game.railTraffic?.colliders||[])) {
         const model=aircraftModel(entity);
         if(!model||entity.visible===false||entity.active===false||!Number.isFinite(entity.x)||!Number.isFinite(entity.y))continue;
         alive.add(entity.id);
@@ -302,7 +304,7 @@
           // contacts with dynamic road cars; static/kinematic pairs cannot
           // resolve either pose and otherwise traverse entire terrain patches.
           const body=new C.Body({type:C.Body.KINEMATIC,mass:0,material:this.carMaterial,allowSleep:false,collisionFilterMask:ROAD_VEHICLE_GROUP});
-          body.kind='aircraft';body.entity=entity;
+          body.kind=entity.kind;body.entity=entity;
           body.addShape(new C.Box(new C.Vec3(model.length/40,model.height/2,model.width/40)));
           this.world.addBody(body);
           entry={body,model,position:new C.Vec3(),quaternion:new C.Quaternion(),initialized:false};
@@ -318,7 +320,7 @@
         const offset=entry.quaternion.vmult(new C.Vec3(0,model.height/2,0));
         entry.position.set(entity.x/SCALE+offset.x,finite(entity.elevation)+offset.y,entity.y/SCALE+offset.z);
         if(dt>0&&entry.initialized) {
-          // Aviation has already advanced this tick. Let Cannon interpolate
+          // The aircraft/rail controller has already advanced this tick. Let Cannon interpolate
           // from the previous pose to that exact target, so contact velocity
           // is real without advancing the aircraft's flight model a second time.
           entry.position.vsub(body.position,body.velocity);body.velocity.scale(1/dt,body.velocity);
