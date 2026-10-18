@@ -1,0 +1,107 @@
+{
+  "title": "Central Station and Docklands railway proposal",
+  "created": "2026-10-18",
+  "status": "preview-only-awaiting-user-review",
+  "appliedToGame": false,
+  "files": {
+    "cityMap": "city-map.png",
+    "heightmap": "heightmap-draft.png",
+    "prompts": "prompts.json"
+  },
+  "station": {
+    "location": "Northern Docklands, immediately south of Downtown's waterfront freeway",
+    "type": "Compact two-platform passenger terminus",
+    "approximateSourcePixelBounds": [
+      845,
+      650,
+      1010,
+      715
+    ],
+    "rationale": [
+      "Close to Downtown with a pedestrian link under the freeway",
+      "Redevelops an industrial warehouse strip rather than the central parks or Old Town",
+      "Shares the northern rail approach with a freight connection to the port",
+      "Keeps the railway west of the river and away from the airport runway"
+    ]
+  },
+  "railway": {
+    "northUp": true,
+    "sourcePixelSize": [
+      1536,
+      1024
+    ],
+    "route": "Northern map edge through the foothills, along the west bank of the Rivermere River, then branching to Central Station and dock freight sidings",
+    "crossings": {
+      "majorRoads": "Road-over-rail bridges at the northern freeway, central airport bridge approach and southern freeway",
+      "yardRoads": "Gated level crossings with stop bars on quieter industrial roads"
+    },
+    "stationAccess": "Road-connected forecourt, pedestrian link to Downtown and platform access independent of active freight tracks",
+    "passengerOperation": {
+      "train": "Short passenger train with a driving cab at each end",
+      "turnaround": "Stop at the terminal platform, change the active driving cab, then reverse direction to depart. The train does not physically rotate.",
+      "requiredTrackwork": "Provide a crossover in the station throat so a departing train can join the northbound track from either platform.",
+      "drawingLimitation": "The generated overview does not clearly resolve the crossover switches. Detail and validate this trackwork before implementation.",
+      "physicalTurningLoop": false
+    },
+    "implementationCaution": "These images are illustrative; trace the final rail geometry and individually resolve every street/rail intersection, approach grade and structural clearance before implementation."
+  },
+  "helipad": {
+    "recommendation": "Optional rooftop pad on a separate low depot/operations building beside the station",
+    "approximateSourcePixelCenter": [
+      1014,
+      719
+    ],
+    "rationale": "A distinctive game landmark, separate from the platform canopy and passenger forecourt; evaluate open approach paths and nearby port cranes before implementation.",
+    "terrainRule": "The heightmap represents ground and building foundations only. Model the elevated roof and pad separately.",
+    "reference": "https://www.faa.gov/documentLibrary/media/Advisory_Circular/AC_150_5390_2D_Heliports.pdf"
+  },
+  "heightmap": {
+    "status": "visual-draft-not-import-ready",
+    "grading": "Smooth rail formation, level station/depot foundations and dry freight yard pads",
+    "limitation": "Image generation changed unrelated values and some water-mask classifications. Do not replace reference-heightmap.png or regenerate height-data.js from this draft.",
+    "beforeImport": [
+      "Trace and register the approved route against original source pixels",
+      "Preserve the original water mask and untouched terrain exactly",
+      "Build and validate a continuous rail grade at the game's compressed world scale",
+      "Keep bridges and rooftop structures out of the ground elevation raster"
+    ]
+  },
+  "sourceAssets": {
+    "cityMap": {
+      "path": "../../reference-city-map.png",
+      "sha256": "ccc54c7f06069a2479491de53f9e5491f33b12e08dfd11fcfc4b2a4dda67b7ce"
+    },
+    "heightmap": {
+      "path": "../../reference-heightmap.png",
+      "sha256": "37e459207534dfb43b50e01142adccafc98fb20d2e6074e446a66ed21d39f03b"
+    }
+  },
+  "generatedAssets": {
+    "cityMap": {
+      "generator": "built-in image_gen",
+      "sourceFilename": "exec-18a9e718-f320-4f90-a7fc-fae0f9d289fe.png",
+      "sha256": "cebe5ed21af473774ae18725fa0b70f29a0ee83e89bd02c81e702a89bad7c05b",
+      "size": [
+        1536,
+        1024
+      ]
+    },
+    "heightmap": {
+      "generator": "built-in image_gen",
+      "sourceFilename": "exec-9ea9f35e-f2ca-438d-9e09-3e457df09413.png",
+      "sha256": "4dfc8a8d88cb9f561578de5dd0fa093f6f49067a342b211316322e3a068efb4d",
+      "size": [
+        1536,
+        1024
+      ]
+    }
+  },
+  "heightmapValidation": {
+    "meanAbsoluteGrayDifference": 5.7224,
+    "changedPixelsAbove4": 826771,
+    "sourceWaterPixelsNowAbove8": 1144,
+    "sourceLandPixelsNowAtMost8": 13832,
+    "thresholdExplanation": "The runtime source classifies grayscale <= 8 as water. Counts describe threshold changes in the image draft, not intended land reclamation.",
+    "runtimeReady": false
+  }
+}
