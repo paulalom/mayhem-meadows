@@ -104,6 +104,10 @@ The [story campaign design](CAMPAIGN.md) specifies **Operation Unboring**, a pro
 
 The [police balance design](POLICE.md) proposes a forgiving mischief buildup, explicit chase reasons, announced reinforcement waves, and a capped four-car swarm. These rules are planned for a gameplay update; the current prototype retains its existing three-patrol heat system.
 
+## Alien visitors
+
+Four grumpy alien visitors wander the normal town sidewalks wearing conspicuously fake moustaches, taped-on eyebrows, glasses and tiny hats. Their mustard-and-charcoal outfits and blue-gray heads follow the [approved concept](assets/concepts/aliens-ufo/alien-c-angry-disguise-v1.png). A classic silver saucer occasionally enters from the map edge, hovers over a randomly chosen civilian in an open city location, lifts them in a pale green beam, and flies away. Its undisguised pilot is modeled inside the transparent cockpit. Residents return safely to a clear sidewalk after the visit. The first visit starts after 35–60 seconds of play; later visits are separated by 110–180 seconds. Pausing freezes the event. Saucers cruise above normal traffic, avoid the airport approach and give way to nearby aircraft.
+
 ## Texture library
 
 The [generic texture library](assets/textures/README.md) contains eight softly painted building and environment materials, with a contact sheet, repeat previews, and generation prompts. These standalone assets are prepared for later application during the map rework.
@@ -136,6 +140,7 @@ npm run vendor
 | vehicle-physics.js | Cannon vehicle bodies, gravity, orientation, elastic contacts, and fixed obstacle shapes |
 | aircraft.js | Shared arcade flight, airport traffic, news/police behavior and side-gun projectiles |
 | aircraft-models.js / assets/aircraft/ | Offline Blender mesh bundle, editable source, fleet preview and provenance |
+| aliens.js / aliens-render.js | Disguised sidewalk visitors, silver saucer and visible pilot, temporary beam abductions and aircraft separation |
 | physics.js | Ragdoll joints, gravity, contacts, and automatic get-up |
 | scene3d.js | Three.js world, models, perspective camera, lighting, and visual effects |
 | audio.js | Local music sequencer, vehicle radio, spatial engines/sirens, effects, and audio lifecycle |

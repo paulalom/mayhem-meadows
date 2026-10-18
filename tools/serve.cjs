@@ -10,6 +10,8 @@ allowed.add('/railway.js');allowed.add('/railway-render.js');
 allowed.add('/assets/audio/samples.js');
 allowed.add('/aircraft.js');
 allowed.add('/aircraft-models.js');
+allowed.add('/aliens.js');
+allowed.add('/aliens-render.js');
 allowed.add('/assets/audio/manifest.json');
 for (const sample of require('../assets/audio/manifest.json').samples) {
   if (/^[a-z0-9-]+\.mp3$/.test(sample.file)) allowed.add('/assets/audio/' + sample.file);

@@ -36,6 +36,7 @@
   const { CHARACTER_SCALE, PERSON_HEIGHT, MUZZLE_HEIGHT, PLAYER_RADIUS, NPC_RADIUS } = Physics;
   const VehiclePhysics = root.MayhemVehiclePhysics || (typeof require === 'function' ? require('./vehicle-physics.js') : null);
   const Aircraft = root.MayhemAircraft || (typeof require === 'function' ? require('./aircraft.js') : null);
+  const Aliens = root.MayhemAliens || (typeof require === 'function' ? require('./aliens.js') : null);
 
   // Cars keep arcade steering on the ground, with contacts matching their
   // rendered rectangular footprint rather than an undersized bounding circle.
@@ -141,6 +142,7 @@
       this.vehiclePhysics = new VehiclePhysics.VehicleWorld(this, CAR_TYPES);
       this.aviation = new Aircraft.AircraftSystem(this);
       this.aircraft = this.aviation.aircraft;
+      this.aliens = new Aliens.AlienSystem(this);
     }
 
     get current() { return this.cars.find(car => car.id === this.player.vehicleId) || this.aircraft?.find(craft => craft.id === this.player.vehicleId) || this.player; }
@@ -1390,6 +1392,7 @@
         this._resolvePerson(owner, owner === this.player ? PLAYER_RADIUS : NPC_RADIUS);
       }
       this._waterRecovery(dt);
+      this.aliens.step(dt);
       if (this.mission) {
         this.missionStats.elapsed += dt;
         this.mission.timeLeft = Math.max(0, this.mission.timeLeft - dt);
