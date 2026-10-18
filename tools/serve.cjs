@@ -9,6 +9,7 @@ const allowed = new Set(['/index.html', '/styles.css', '/height-data.js', '/terr
 allowed.add('/railway.js');allowed.add('/railway-render.js');
 allowed.add('/trains.js');allowed.add('/train-models.js');allowed.add('/trains-render.js');
 allowed.add('/assets/audio/samples.js');
+allowed.add('/assets/city-map.png');
 allowed.add('/aircraft.js');
 allowed.add('/aircraft-models.js');
 allowed.add('/aliens.js');
@@ -17,7 +18,7 @@ allowed.add('/assets/audio/manifest.json');
 for (const sample of require('../assets/audio/manifest.json').samples) {
   if (/^[a-z0-9-]+\.mp3$/.test(sample.file)) allowed.add('/assets/audio/' + sample.file);
 }
-const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mp3': 'audio/mpeg', '.json': 'application/json; charset=utf-8' };
+const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mp3': 'audio/mpeg', '.png': 'image/png', '.json': 'application/json; charset=utf-8' };
 allowed.add('/tools/performance-profiler.js');
 const server = http.createServer((req, res) => {
   let pathname;

@@ -13,7 +13,7 @@
   let width = 960, height = 650, scene = null, renderedFrames = 0, graphicsFailed = false;
   let cameraSensitivity = 1, cameraInvertY = false, aiming = false, firing = false;
   let mouseLockPending = false, intentionalUnlock = false;
-  let wheelOpen = false, wheelIndex = 0, inventoryView = null, garageSignature = '', hangarSignature = '', navigationTarget = null;
+  let mapOpen = false, wheelOpen = false, wheelIndex = 0, inventoryView = null, garageSignature = '', hangarSignature = '', navigationTarget = null;
   const toyIds = ['popper', 'hammer', 'cannon'];
   const money = n => '$' + Math.round(n).toLocaleString();
   const isAircraft = vehicle => vehicle?.kind === 'aircraft';
@@ -24,10 +24,10 @@
   const aircraftStatus = vehicle => vehicle.exploded || vehicle.health <= 0 ? 'Needs hangar recovery' : vehicle.burning ? 'ENGINE FIRE · F to parachute' : vehicle.stalled ? 'STALL · lower nose / add throttle' : vehicle.stallWarning ? 'LOW AIRSPEED · add throttle' : (vehicle.flightPhase || vehicle.phase || (vehicle.grounded ? 'parked' : 'cruise')).replaceAll('-', ' ').toUpperCase();
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-  const inventoryBusy = () => wheelOpen || inventoryView !== null;
+  const menuBusy = () => mapOpen || wheelOpen || inventoryView !== null;
   const mouseLocked = () => document.pointerLockElement === canvas;
-  const playActive = () => started && !paused && !inventoryBusy() && !graphicsFailed && $('help-screen').hidden && !document.hidden;
-  const uiAudioActive = () => started && !paused && inventoryBusy() && !graphicsFailed && $('help-screen').hidden && !document.hidden;
+  const playActive = () => started && !paused && !menuBusy() && !graphicsFailed && $('help-screen').hidden && !document.hidden;
+  const uiAudioActive = () => started && !paused && menuBusy() && !graphicsFailed && $('help-screen').hidden && !document.hidden;
 
   function toast(text, kind = '') {
     $('toast').hidden = false;
@@ -187,6 +187,20 @@
     mouseLockPending = false;
     if (playActive()) toast('Click the town again to look around. Esc releases the mouse.');
   });
+  function openMap() {
+    if (!playActive()) return;
+    mapOpen = true; releaseMouse();
+    $('map-screen').hidden = false; $('close-map').focus({ preventScroll: true });
+    updateAudio(); sound('menu-open');
+  }
+  function closeMap(focus = true) {
+    if (!mapOpen) return;
+    mapOpen = false; $('map-screen').hidden = true; keys.clear();
+    if (focus && started && !paused) canvas.focus({ preventScroll: true });
+    updateAudio();
+    if (focus && playActive()) sound('menu-close');
+  }
+  $('close-map').addEventListener('click', () => closeMap());
   function toyDetail(id) {
     if (!game.inventory.unlocked.includes(id)) return 'LOCKED · ' + money(GADGETS[id].price);
     return id === 'cannon' ? game.inventory.ammo.cannon + ' / 12 charges' : 'Unlimited nonsense';
@@ -205,7 +219,7 @@
     if (wheelOpen) document.querySelector('.wheel-option[data-gadget="' + toyIds[wheelIndex] + '"]').focus({ preventScroll: true });
   }
   function openWheel() {
-    if (!started || paused || graphicsFailed || !$('help-screen').hidden || inventoryView) return;
+    if (!started || paused || mapOpen || graphicsFailed || !$('help-screen').hidden || inventoryView) return;
     if (game.physics?.get('player')) { toast('Find your feet before changing toys. R skips the drama.'); return; }
     wheelOpen = true; keys.clear(); releaseMouse();
     wheelIndex = toyIds.indexOf(game.inventory.equipped);
@@ -239,7 +253,7 @@
   }
   function openInventory(view) {
     if (!started) start();
-    if (paused || graphicsFailed || !$('help-screen').hidden || !started) return;
+    if (paused || mapOpen || graphicsFailed || !$('help-screen').hidden || !started) return;
     const previousView = inventoryView;
     closeWheel(false, false); keys.clear(); releaseMouse();
     if (inventoryView !== view) $('inventory-screen').querySelector('.inventory-scroll').scrollTop = 0;
@@ -391,7 +405,7 @@
   $('toy-wheel').addEventListener('wheel', event => { if (wheelOpen) { event.preventDefault(); cycleWheel(event.deltaY >= 0 ? 1 : -1); } }, { passive: false });
   function setPause(value) {
     if (!started) return;
-    closeWheel(false, false); closeInventory(false);
+    closeMap(false); closeWheel(false, false); closeInventory(false);
     paused = value;
     keys.clear(); releaseMouse();
     $('pause-screen').hidden = !paused;
@@ -413,7 +427,7 @@
     try {
       if (document.fullscreenElement) await document.exitFullscreen();
       else await document.querySelector('.app').requestFullscreen();
-      if (started && !paused && !inventoryBusy()) canvas.focus({ preventScroll: true });
+      if (started && !paused && !menuBusy()) canvas.focus({ preventScroll: true });
     } catch (_) { toast('Full screen is unavailable in this browser.'); }
   });
   document.addEventListener('fullscreenchange', () => {
@@ -422,11 +436,11 @@
   });
   $('resume-button').addEventListener('click', () => setPause(false));
   $('restart-button').addEventListener('click', () => { game.recover(); setPause(false); events(); save(); });
-  $('recover-button').addEventListener('click', () => { if (!started) start(); if (graphicsFailed) return; closeWheel(false, false); closeInventory(false); game.recover(); events(); canvas.focus(); });
-  $('sound-toggle').addEventListener('click', () => { muted = !muted; audioStart(); applyAudioSettings(); if (started && !paused && !inventoryBusy() && $('help-screen').hidden) canvas.focus(); });
-  $('motion-toggle').addEventListener('click', () => { reducedMotion = !reducedMotion; settingsUI(); save(); if (started && !paused && !inventoryBusy() && $('help-screen').hidden) canvas.focus(); });
+  $('recover-button').addEventListener('click', () => { if (!started) start(); if (graphicsFailed) return; closeMap(false); closeWheel(false, false); closeInventory(false); game.recover(); events(); canvas.focus(); });
+  $('sound-toggle').addEventListener('click', () => { muted = !muted; audioStart(); applyAudioSettings(); if (started && !paused && !menuBusy() && $('help-screen').hidden) canvas.focus(); });
+  $('motion-toggle').addEventListener('click', () => { reducedMotion = !reducedMotion; settingsUI(); save(); if (started && !paused && !menuBusy() && $('help-screen').hidden) canvas.focus(); });
   $('help-toggle').addEventListener('click', () => {
-    closeWheel(false, false); closeInventory(false);
+    closeMap(false); closeWheel(false, false); closeInventory(false);
     helpWasPaused = paused;
     if (started) { paused = true; keys.clear(); releaseMouse(); }
     $('help-screen').hidden = false; $('close-help').focus();
@@ -439,16 +453,16 @@
   $('close-help').addEventListener('click', closeHelp);
   document.querySelectorAll('.contract-button').forEach(button => button.addEventListener('click', () => {
     if (!started) start();
-    if (paused || inventoryBusy() || !$('help-screen').hidden) { toast('Resume the game to accept a gig.'); return; }
+    if (paused || menuBusy() || !$('help-screen').hidden) { toast('Resume the game to accept a gig.'); return; }
     if (['airtaxi', 'aircargo', 'sightseeing', 'airrace'].includes(button.dataset.mission)) game.startMission(button.dataset.mission);
     else game.acceptMission(button.dataset.mission);
     events(); canvas.focus();
   }));
   document.querySelectorAll('.purchase-button').forEach(button => button.addEventListener('click', () => {
-    if (!started || paused || inventoryBusy() || !$('help-screen').hidden) { toast('Visit a garage while playing to buy a tune-up.'); return; }
+    if (!started || paused || menuBusy() || !$('help-screen').hidden) { toast('Visit a garage while playing to buy a tune-up.'); return; }
     game.purchase(button.dataset.upgrade); events(); save(); canvas.focus();
   }));
-  $('abandon-button').addEventListener('click', () => { if (!paused && !inventoryBusy() && started) { game.abandonMission(); events(); canvas.focus(); } });
+  $('abandon-button').addEventListener('click', () => { if (!paused && !menuBusy() && started) { game.abandonMission(); events(); canvas.focus(); } });
   $('airport-route').addEventListener('click', () => {
     const airport = game.world.landscape?.airport || game.world.airport;
     const pad = airport?.helipads?.[0];
@@ -477,6 +491,12 @@
     if (event.metaKey || event.altKey || (event.ctrlKey && !isAircraft(game.current))) return;
     if (event.code === 'Escape' && !$('help-screen').hidden) { event.preventDefault(); closeHelp(); return; }
     if (!started || !$('help-screen').hidden) return;
+    if (mapOpen) {
+      if (!['Enter', 'Space'].includes(event.code)) event.preventDefault();
+      if (!event.repeat && (event.code === 'KeyM' || event.code === 'Escape')) closeMap();
+      else if (event.code === 'Tab') $('close-map').focus({ preventScroll: true });
+      return;
+    }
     if (wheelOpen) {
       event.preventDefault();
       if (event.code === 'Escape') closeWheel(false);
@@ -513,6 +533,11 @@
       event.preventDefault(); if (!event.repeat) setPause(!paused); return;
     }
     if (paused || graphicsFailed || document.activeElement !== canvas) return;
+    if (event.code === 'KeyM') {
+      event.preventDefault();
+      if (!event.repeat) openMap();
+      return;
+    }
     if (event.code === 'Tab') { event.preventDefault(); if (!event.repeat) openWheel(); return; }
     if (event.code === 'KeyI' || event.code === 'KeyG') { event.preventDefault(); if (!event.repeat) openInventory(event.code === 'KeyI' ? 'pockets' : game.hangarAvailable ? 'hangar' : 'garage'); return; }
     const controlled = ['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight','ControlLeft','ControlRight','Space','KeyE','KeyH','KeyR','KeyC','KeyF','KeyB','KeyN'];
@@ -539,7 +564,7 @@
   settingsUI();
 
   function graphicsError(message) {
-    closeWheel(false, false); closeInventory(false);
+    closeMap(false); closeWheel(false, false); closeInventory(false);
     graphicsFailed = true; paused = true; keys.clear(); releaseMouse();
     $('renderer-error').hidden = false;
     $('renderer-error-detail').textContent = message;
@@ -659,7 +684,7 @@
   }
   function render(dt) {
     if (aiming && (!playActive() || !mouseLocked() || game.player.vehicleId || game.physics?.get('player'))) setAim(false);
-    if (scene && !graphicsFailed) { scene.update(dt, { reducedMotion, paused: paused || inventoryBusy() || !started }); renderedFrames++; }
+    if (scene && !graphicsFailed) { scene.update(dt, { reducedMotion, paused: paused || menuBusy() || !started }); renderedFrames++; }
   }
   function hud() {
     radioUI();
@@ -783,7 +808,7 @@
   let last = performance.now(), accumulator = 0;
   function frame(now) {
     const dt = Math.min((now - last) / 1000, 0.12); last = now;
-    if (started && !paused && !inventoryBusy() && !graphicsFailed && $('help-screen').hidden && !document.hidden) {
+    if (started && !paused && !menuBusy() && !graphicsFailed && $('help-screen').hidden && !document.hidden) {
       accumulator += dt;
       const input = movementInput();
       if (!game.player.vehicleId) input.moveAngle = scene?.viewYaw ?? -Math.PI / 2;

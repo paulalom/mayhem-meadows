@@ -31,6 +31,7 @@ const runtimeFiles = [
   'vendor/three.min.js',
   'vendor/cannon.min.js',
   'assets/audio/samples.js',
+  'assets/city-map.png',
   'LICENSE',
   'vendor/THREE-LICENSE.txt',
   'vendor/cannon-LICENSE.txt',
