@@ -4,6 +4,7 @@
   const Physics = root.MayhemPhysics || (typeof require === 'function' ? require('./physics.js') : null);
   const VehicleStats = root.MayhemVehicleStats || (typeof require === 'function' ? require('./vehicle-stats.js') : null);
   const SCALE = 20;
+  const ROAD_VEHICLE_GROUP = 2;
   const NO_ROADS = Object.freeze([]);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const finite = (v, fallback = 0) => Number.isFinite(v) ? v : fallback;
@@ -52,6 +53,13 @@
       this.game = game; this.types = types; this.bodies = new Map(); this.aircraftBodies = new Map(); this.impacts = []; this._pendingLaunches = [];
       this.world = new C.World({ gravity: new C.Vec3(0, -18, 0), allowSleep: true });
       this.world.broadphase = new C.SAPBroadphase(this.world);
+      // Long bridge segments and map boundaries have very loose spheres.
+      // Their exact world AABBs reject distant pairs before narrowphase work.
+      this.world.broadphase.useBoundingBoxes = true;
+      // Almost all town bodies are fixed scenery. Store only actual contacts
+      // instead of clearing a dense body-pair matrix twice per simulation tick.
+      this.world.collisionMatrix = new C.ObjectCollisionMatrix();
+      this.world.collisionMatrixPrevious = new C.ObjectCollisionMatrix();
       this.world.solver.iterations = 12;
       this.carMaterial = new C.Material('car');
       this.wallMaterial = new C.Material('fixed');
@@ -260,7 +268,7 @@
       if (entry) return entry;
       const type = VehicleStats.getModel(entity), h = height(entity);
       const body = new C.Body({ mass: 700 * type.mass, material: this.carMaterial, linearDamping: 0.015, angularDamping: 0.28,
-        sleepSpeedLimit: 0.08, sleepTimeLimit: 1.5 });
+        sleepSpeedLimit: 0.08, sleepTimeLimit: 1.5, collisionFilterGroup: ROAD_VEHICLE_GROUP });
       body.addShape(new C.Box(new C.Vec3(type.length / 40, h / 2, type.width / 40)));
       const ground = this.groundHeight(entity.x, entity.y), elevation = finite(entity.elevation, ground);
       const groundedSpawn = !entity.orientation && Math.abs(elevation - ground) < 0.15;
@@ -290,7 +298,10 @@
         alive.add(entity.id);
         let entry=this.aircraftBodies.get(entity.id);
         if(!entry) {
-          const body=new C.Body({type:C.Body.KINEMATIC,mass:0,material:this.carMaterial,allowSleep:false});
+          // Flight/rail controllers own these poses. Cannon only needs their
+          // contacts with dynamic road cars; static/kinematic pairs cannot
+          // resolve either pose and otherwise traverse entire terrain patches.
+          const body=new C.Body({type:C.Body.KINEMATIC,mass:0,material:this.carMaterial,allowSleep:false,collisionFilterMask:ROAD_VEHICLE_GROUP});
           body.kind='aircraft';body.entity=entity;
           body.addShape(new C.Box(new C.Vec3(model.length/40,model.height/2,model.width/40)));
           this.world.addBody(body);

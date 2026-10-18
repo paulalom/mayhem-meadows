@@ -253,9 +253,24 @@
       building.elevation=Math.max(...samples);building.foundationBottom=Math.min(...samples)-.12;
     }
     for(const road of world.roads||[])if(!road.bridge)for(let i=0;i<road.points.length;i++)if(!Railway.isOverpassSegment(road,Math.max(1,i))&&!Railway.isOverpassSegment(road,Math.min(road.points.length-1,i+1)))road.points[i].elevation=heightAt(road.points[i].x,road.points[i].y);
+    // Ground queries are frequent even far from bridges. Index the expanded
+    // segment bounds once, preserving segment order and exact edge tests.
+    const bridgeCellSize=256,bridgeCells=new Map();
+    for(const segment of bridgeSegments) {
+      const margin=segment.road.width/2+(world.sidewalkWidth||32)+2;
+      const minX=Math.floor((Math.min(segment.a.x,segment.b.x)-margin)/bridgeCellSize),maxX=Math.floor((Math.max(segment.a.x,segment.b.x)+margin)/bridgeCellSize);
+      const minY=Math.floor((Math.min(segment.a.y,segment.b.y)-margin)/bridgeCellSize),maxY=Math.floor((Math.max(segment.a.y,segment.b.y)+margin)/bridgeCellSize);
+      for(let ix=minX;ix<=maxX;ix++)for(let iy=minY;iy<=maxY;iy++) {
+        const key=ix+','+iy;
+        if(!bridgeCells.has(key))bridgeCells.set(key,[]);
+        bridgeCells.get(key).push(segment);
+      }
+    }
     function bridgeAt(x,y) {
       let best=null;
-      for(const segment of bridgeSegments) {
+      const nearby=bridgeCells.get(Math.floor(x/bridgeCellSize)+','+Math.floor(y/bridgeCellSize));
+      if(!nearby)return best;
+      for(const segment of nearby) {
         const hit=closest(x,y,segment.a,segment.b);
         if(hit.distance>segment.road.width/2+(world.sidewalkWidth||32)+2)continue;
         const height=mix(segment.a.elevation,segment.b.elevation,hit.t);

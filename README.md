@@ -124,6 +124,10 @@ This runs JavaScript syntax checks, deterministic simulation tests, and camera, 
 
 Automated Chrome checks virtualize pointer capture and send relative look events inside isolated test pages, keeping the desktop mouse free. Keyboard/buttons, WebGL rendering, and gameplay still run in Chrome. Native pointer capture remains a manual play check; the normal game uses Chrome's native mouse look. Browser evidence records the input mode.
 
+For local performance captures, run `npm start` and open **http://127.0.0.1:4173/?profile=1** in Chrome. Press Play to record up to two minutes, or use **Stop and save trace** to finish early. Captures save under **playtest-evidence/performance/** and can also be downloaded as Chrome Trace Event JSON. Add `&seed=42` for a repeatable town. The report measures scoped CPU work and frame intervals; WebGL timings cover CPU submission, and frame intervals include pauses or background time. The profiler is injected only by the development server for that URL and is absent from static builds.
+
+Run `node tools/performance-check.cjs before` for a deterministic ten-second simulation benchmark covering driving, recovery, dismounting, and a ragdoll tumble. Repeat with another label after making changes; reports include timings, collision-pair counts, and simulation snapshots for comparison. `MAYHEM_BENCHMARK_ROOT` can point at another complete checkout for a baseline run. Keep other CPU-heavy work stopped while measuring; timing results are diagnostic rather than test thresholds.
+
 If you change or upgrade the engine, recreate the locally bundled rendering and physics engines with:
 
 ```sh

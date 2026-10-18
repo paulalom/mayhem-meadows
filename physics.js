@@ -452,6 +452,12 @@
     step(dt, environment = {}) {
       if (!Number.isFinite(dt) || dt <= 0) return [];
       this._accumulator += Math.min(dt, 0.25);
+      // Preserve the fixed-step phase without rebuilding the town's collider
+      // boxes when there are no articulated bodies to collide with them.
+      if (!this.bodies.size) {
+        while (this._accumulator + 1e-10 >= STEP) { this._accumulator -= STEP; this._tick++; }
+        return [];
+      }
       const boxes = this._colliders(environment), size = clamp(finite(environment.size, 2160) / UNIT, 4, 1000), finished = [];
       while (this._accumulator + 1e-10 >= STEP) {
         this._simulate(boxes, size, environment.terrain); this._accumulator -= STEP;

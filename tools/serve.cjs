@@ -17,15 +17,41 @@ for (const sample of require('../assets/audio/manifest.json').samples) {
   if (/^[a-z0-9-]+\.mp3$/.test(sample.file)) allowed.add('/assets/audio/' + sample.file);
 }
 const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mp3': 'audio/mpeg', '.json': 'application/json; charset=utf-8' };
+allowed.add('/tools/performance-profiler.js');
 const server = http.createServer((req, res) => {
   let pathname;
   try { pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname); }
   catch (_) { res.writeHead(400); res.end('Bad request'); return; }
+  // Development-only evidence sink. Normal/static builds never load the profiler.
+  if (pathname === '/__profile' && req.method === 'POST') {
+    if (req.headers.origin !== `http://127.0.0.1:${port}`) { res.writeHead(403); res.end('Forbidden'); return; }
+    let body = '', bytes = 0;
+    req.on('data', chunk => {
+      bytes += chunk.length;
+      if (bytes > 32 * 1024 * 1024) { req.destroy(); return; }
+      body += chunk;
+    });
+    req.on('end', () => {
+      try {
+        const capture = JSON.parse(body);
+        if (!capture.summary || !Array.isArray(capture.traceEvents)) throw new Error('Invalid capture');
+        const directory = path.join(root, 'playtest-evidence', 'performance');
+        fs.mkdirSync(directory, { recursive: true });
+        const name = `chrome-${Date.now()}.json`;
+        fs.writeFileSync(path.join(directory, name), JSON.stringify(capture));
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ file: name }));
+      } catch (_) { res.writeHead(400); res.end('Invalid capture'); }
+    });
+    return;
+  }
   if (pathname === '/') pathname = '/index.html';
   if (!allowed.has(pathname)) { res.writeHead(404); res.end('Not found'); return; }
   const file = path.join(root, pathname);
   fs.readFile(file, (error, data) => {
     if (error) { res.writeHead(404); res.end('Not found'); return; }
+    if (pathname === '/index.html' && new URL(req.url, 'http://localhost').searchParams.get('profile') === '1') {
+      data = data.toString().replace('<script src="game.js" defer>', '<script src="tools/performance-profiler.js" defer></script>\n    <script src="game.js" defer>');
+    }
     res.writeHead(200, { 'Content-Type': types[path.extname(file)], 'Cache-Control': 'no-store' });
     res.end(data);
   });

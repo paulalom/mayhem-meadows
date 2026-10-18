@@ -460,6 +460,10 @@
       for (let pass = 0; pass < 3; pass++) {
         let changed = false;
         for (const b of this.buildings) {
+          // Reject distant lots before allocating rotated boxes or volumes.
+          // Summed half-extents include every corner at every yaw.
+          const bx=b.x+b.w/2,by=b.y+b.h/2,reach=(b.w+b.h)/2+radius;
+          if(Math.abs(entity.x-bx)>reach||Math.abs(entity.y-by)>reach)continue;
           const volume=this._buildingVolume(b);
           if (!this._heightOverlap(entity,volume,PERSON_HEIGHT,volume.height)) continue;
           const bounds = this._buildingBounds(b);
