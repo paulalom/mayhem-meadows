@@ -17,6 +17,8 @@ const runtimeFiles = [
   'physics.js',
   'vehicle-stats.js',
   'vehicle-physics.js',
+  'aircraft.js',
+  'aircraft-models.js',
   'core.js',
   'scene3d.js',
   'audio.js',

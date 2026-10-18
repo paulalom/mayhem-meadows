@@ -16,7 +16,9 @@
     <script src="physics.js" defer></script>
     <script src="vehicle-stats.js" defer></script>
     <script src="vehicle-physics.js" defer></script>
+    <script src="aircraft.js" defer></script>
     <script src="core.js" defer></script>
+    <script src="aircraft-models.js" defer></script>
     <script src="scene3d.js" defer></script>
     <script src="railway-render.js" defer></script>
     <script src="assets/audio/samples.js" defer></script>
@@ -34,6 +36,7 @@
           <span class="local-badge"><i aria-hidden="true"></i>ALL LOCAL. ALL CHAOS.</span>
           <button id="inventory-toggle" class="utility-button inventory-trigger" type="button" aria-haspopup="dialog" aria-controls="inventory-screen">Pockets <kbd>I</kbd></button>
           <button id="garage-toggle" class="utility-button inventory-trigger" type="button" aria-haspopup="dialog" aria-controls="inventory-screen">Garage <kbd>G</kbd></button>
+          <button id="hangar-toggle" class="utility-button inventory-trigger" type="button" aria-haspopup="dialog" aria-controls="inventory-screen">Hangar</button>
           <button id="sound-toggle" class="utility-button" type="button" aria-pressed="true">Sound: on</button>
           <div class="header-volume"><div class="header-volume-copy"><label for="audio-output">Volume</label><output id="audio-output-value" for="audio-output">5%</output></div><input id="audio-output" type="range" min="1" max="10" step="1" value="5" aria-valuetext="5%"></div>
           <button id="motion-toggle" class="utility-button" type="button" aria-pressed="false">Motion: full</button>
@@ -53,9 +56,9 @@
           </div>
 
           <div id="game-shell" class="game-shell">
-            <canvas id="game-canvas" tabindex="0" aria-label="Mayhem Meadows third-person 3D game. Move with WASD or arrow keys. Click the town to capture the mouse, then move it to look around. Hold right mouse to aim and left-click to use your toy on foot; C recenters the camera. E enters or leaves a nearby car. Space jumps on foot or applies the handbrake while driving. Hold Tab to choose a toy. I opens pockets; G opens your garage collection. Shift sprints or boosts. H honks the horn. B and N change vehicle radio stations. R recovers and rights a flipped car. P pauses; Escape releases the mouse and pauses.">Your browser needs WebGL 2 support to play Mayhem Meadows in 3D.</canvas>
+            <canvas id="game-canvas" tabindex="0" aria-label="Mayhem Meadows third-person 3D game. Move with WASD or arrow keys. Click the town to capture the mouse, then move it to look around. Hold right mouse to aim and left-click to use your toy on foot; C recenters the camera. E enters or leaves a nearby ride, including planes and helicopters. Space jumps on foot or applies the handbrake while driving. In aircraft, W and S control throttle or helicopter forward motion, A and D bank or turn, Space climbs, Control descends, Shift boosts planes or steadies helicopter hover, and F bails out with a parachute. Hold left mouse for the police helicopter side gun. Hold Tab to choose a toy. I opens pockets; G opens garage or airport hangar collections. Shift sprints or boosts. H honks the horn. B and N change vehicle radio stations. R recovers your ride, returning aircraft to the airport. P pauses; Escape releases the mouse and pauses.">Your browser needs WebGL 2 support to play Mayhem Meadows in 3D.</canvas>
             <div class="viewport-topline" aria-hidden="true"><span class="district-label"><span class="district-dot"></span><span id="district-name">MARKET MILE</span></span><span class="viewport-tag">THIRD PERSON / 3D</span></div>
-            <div id="target-compass" class="target-compass" aria-label="Direction and distance to your next objective" hidden><span id="target-arrow" class="target-arrow" aria-hidden="true">↑</span><span class="target-copy"><span class="stat-label">Next stop</span><strong id="target-distance">0 m</strong></span></div>
+            <div id="target-compass" class="target-compass" aria-label="Direction and distance to your next objective" hidden><span id="target-arrow" class="target-arrow" aria-hidden="true">↑</span><span class="target-copy"><span class="stat-label">Next stop</span><strong id="target-distance">0 m</strong><small id="target-altitude"></small></span></div>
             <div class="objective-panel">
               <span class="eyebrow objective-kicker">Current business</span>
               <h2 id="objective-title">Your town. Your terrible decisions.</h2>
@@ -67,6 +70,11 @@
             <div id="mouse-hint" class="mouse-hint" hidden>Click the town to look around <span>· Esc releases mouse</span></div>
             <div id="aim-reticle" class="aim-reticle" aria-hidden="true" hidden></div>
             <div id="speed-panel" class="speed-panel" aria-label="Current movement speed"><strong id="speed-value">0</strong><span id="speed-caption">ON FOOT</span></div>
+            <div id="flight-panel" class="flight-panel" role="group" aria-label="Aircraft flight instruments" hidden>
+              <span class="stat-label">Flight instruments</span><div class="flight-readings"><strong id="flight-speed">0 km/h</strong><strong id="flight-altitude">0 m AGL</strong></div>
+              <div class="flight-power"><span>THROTTLE</span><strong id="flight-throttle">0%</strong></div><div class="flight-throttle-track"><span id="flight-throttle-bar"></span></div>
+              <span id="flight-phase">PARKED</span><span id="flight-warning">W throttle → SPACE lift off</span>
+            </div>
             <div id="equipped-panel" class="equipped-panel"><span class="stat-label">Equipped toy <kbd>TAB</kbd></span><strong id="equipped-toy">Confetti popper · unlimited</strong></div>
             <div id="radio-panel" class="radio-panel" role="group" aria-label="Vehicle radio" hidden>
               <div class="radio-copy"><span class="stat-label">Meadows radio <span>B / N</span></span><strong id="radio-status" role="status" aria-live="polite" aria-atomic="true">Biscuit FM</strong><span id="radio-genre">Disco &amp; funk</span></div>
@@ -105,7 +113,7 @@
             <div id="inventory-screen" class="screen-overlay inventory-screen" role="dialog" aria-modal="true" aria-labelledby="inventory-title" hidden>
               <div class="inventory-card">
                 <div class="inventory-heading"><div><span class="eyebrow">Goodies, gadgets &amp; questionable wheels</span><h2 id="inventory-title">Your little collection.</h2></div><button id="close-inventory" class="dialog-close" type="button" aria-label="Close pockets and garage">×</button></div>
-                <div class="inventory-tabs" role="tablist" aria-label="Pockets and garage"><button id="pockets-tab" class="inventory-tab" type="button" role="tab" data-inventory-tab="pockets" aria-selected="true" aria-controls="pockets-panel">Pockets <span aria-hidden="true">I</span></button><button id="collection-tab" class="inventory-tab" type="button" role="tab" data-inventory-tab="garage" aria-selected="false" aria-controls="collection-panel">Saved rides <span aria-hidden="true">G</span></button></div>
+                <div class="inventory-tabs" role="tablist" aria-label="Pockets, garage and hangar"><button id="pockets-tab" class="inventory-tab" type="button" role="tab" data-inventory-tab="pockets" aria-selected="true" aria-controls="pockets-panel">Pockets <span aria-hidden="true">I</span></button><button id="collection-tab" class="inventory-tab" type="button" role="tab" data-inventory-tab="garage" aria-selected="false" aria-controls="collection-panel">Saved rides <span aria-hidden="true">G</span></button><button id="hangar-tab" class="inventory-tab" type="button" role="tab" data-inventory-tab="hangar" aria-selected="false" aria-controls="hangar-panel">Hangar</button></div>
                 <p id="inventory-location" class="inventory-location" role="status">Browse anywhere. Stop at Sprinkle Garage to shop or manage your rides.</p>
                 <div class="inventory-scroll">
                   <div id="pockets-panel" role="tabpanel" aria-labelledby="pockets-tab">
@@ -128,6 +136,13 @@
                     <div id="garage-cars" class="garage-cars" aria-label="Saved vehicle collection"></div>
                     <div id="garage-paints" class="garage-paint-note"><span aria-hidden="true">◐</span><p>A fresh lick of nonsense.<small>Choose a paint swatch on a saved ride for $25. Boost and armor upgrades apply to every ride.</small></p></div>
                   </div>
+                  <div id="hangar-panel" role="tabpanel" aria-labelledby="hangar-tab" hidden>
+                    <div class="inventory-section-heading"><div><span class="eyebrow">Meadows Airport hangar</span><h3>Keep your head in the clouds.</h3></div><span id="hangar-count" class="garage-count">0 / 3 aircraft</span></div>
+                    <div class="garage-store-bar"><p>Land and stop at the airport apron to save your aircraft. Stored aircraft and repairs stay in this browser.</p><button id="store-aircraft" class="inventory-action use-action" type="button">Save current aircraft</button></div>
+                    <p id="hangar-empty" class="garage-empty"><span aria-hidden="true">✈</span>A little room for your lofty ambitions.<small>Borrow a parked aircraft at the airport, then stop on the apron to save it.</small></p>
+                    <div id="hangar-aircraft" class="garage-cars" aria-label="Saved aircraft collection"></div>
+                    <p class="hangar-advice">Aircraft servicing costs $75. Retrieve a saved aircraft to a clear airport stand. R recovers your current aircraft to the airfield.</p>
+                  </div>
                 </div>
                 <div class="inventory-footer"><span><kbd>ESC</kbd> back to the town</span><span>The town waits while you browse.</span></div>
               </div>
@@ -139,7 +154,9 @@
 <div class="audio-setting-range"><label for="audio-music">Music &amp; radio</label><output id="audio-music-value" for="audio-music">45%</output><input id="audio-music" type="range" min="0" max="1" step="0.05" value="0.45"></div>
 <div class="audio-setting-range"><label for="audio-effects">Engines &amp; effects</label><output id="audio-effects-value" for="audio-effects">80%</output><input id="audio-effects" type="range" min="0" max="1" step="0.05" value="0.8"></div>
 <label class="audio-station-label" for="radio-station">Vehicle radio</label><select id="radio-station"><option value="biscuit">Biscuit FM · disco &amp; funk</option><option value="neon">Neon Drive · synthwave</option><option value="meadow">Meadow Waves · mellow dub</option><option value="off">Radio off</option></select>
-<p class="audio-settings-note">Music follows you on foot. Borrow a ride for three local stations. Audio pauses with the town; your mix and station stay in this browser.</p></fieldset><fieldset class="camera-settings"><legend>Make the view feel right.</legend><div class="camera-setting-range"><label for="camera-sensitivity">Look sensitivity</label><output id="camera-sensitivity-value" for="camera-sensitivity">1.00×</output><input id="camera-sensitivity" type="range" min="0.25" max="2" step="0.05" value="1" aria-describedby="camera-settings-note"></div><label class="camera-setting-check" for="camera-invert-y"><input id="camera-invert-y" type="checkbox">Invert up / down</label><p id="camera-settings-note">Lower sensitivity makes small movements easier. Aiming is slower than looking around.</p></fieldset><p>Contracts earn pocket money and style points. Heat rises only if police see or hear trouble, or a resident calls for help. Help calls take two seconds; disappear from patrols to cool off. Follow the compass and minimap to Sprinkle Garage for toys, supplies, saved rides, paint, repairs, and upgrades.</p><p class="help-fine-print">Confetti everywhere. Cartoon consequences. Absolutely zero actual good advice.</p></div>
+<p class="audio-settings-note">Music follows you on foot. Borrow a ride for three local stations. Audio pauses with the town; your mix and station stay in this browser.</p></fieldset>
+<fieldset class="camera-settings flight-help"><legend>Your first flight.</legend><p>Find parked aircraft at Meadows Airport in the northeast. Press <kbd>E</kbd> near a plane or helicopter to borrow it. Use the airport compass button beside Dispatch for directions.</p><dl class="control-list"><div><dt><kbd>W</kbd> / <kbd>S</kbd></dt><dd>Plane throttle; helicopter forward / backward</dd></div><div><dt><kbd>A</kbd> / <kbd>D</kbd></dt><dd>Bank a plane / turn a helicopter</dd></div><div><dt><kbd>SPACE</kbd> / <kbd>CTRL</kbd></dt><dd>Climb / descend. Planes need speed before lifting off.</dd></div><div><dt><kbd>SHIFT</kbd></dt><dd>Plane boost / helicopter hover assist</dd></div><div><dt><kbd>F</kbd> / <kbd>R</kbd></dt><dd>Bail out with a steerable parachute / recover to the airport</dd></div><div><dt><kbd>E</kbd> / <kbd>G</kbd></dt><dd>Exit after landing and stopping / manage your airport hangar</dd></div><div><dt><kbd>LEFT MOUSE</kbd></dt><dd>Hold to fire a police helicopter’s side gun. Look toward its right side to line up a shot; the gun fires short bursts.</dd></div></dl><p>Flight instruments show speed, height above ground (AGL), and throttle. Avoid low airspeed in planes; add throttle and lower the nose if a stall warning appears. Approach the runway straight, ease the throttle, and descend gently. For helicopters, hold Shift to settle into a hover before landing.</p><p>Passenger and cargo jobs require a helicopter. Land on the marked pad and stop for two seconds. Tours and races use elevated rings; match the altitude shown on your compass. News helicopters investigate incidents; police aircraft search around the last place they saw you.</p></fieldset>
+<fieldset class="camera-settings"><legend>Make the view feel right.</legend><div class="camera-setting-range"><label for="camera-sensitivity">Look sensitivity</label><output id="camera-sensitivity-value" for="camera-sensitivity">1.00×</output><input id="camera-sensitivity" type="range" min="0.25" max="2" step="0.05" value="1" aria-describedby="camera-settings-note"></div><label class="camera-setting-check" for="camera-invert-y"><input id="camera-invert-y" type="checkbox">Invert up / down</label><p id="camera-settings-note">Lower sensitivity makes small movements easier. Aiming is slower than looking around.</p></fieldset><p>Contracts earn pocket money and style points. Heat rises only if police see or hear trouble, or a resident calls for help. Help calls take two seconds; disappear from patrols to cool off. Follow the compass and minimap to Sprinkle Garage for toys, supplies, saved rides, paint, repairs, and upgrades.</p><p class="help-fine-print">Confetti everywhere. Cartoon consequences. Absolutely zero actual good advice.</p></div>
             </div>
             <div id="renderer-error" class="screen-overlay renderer-error" role="alert" hidden><div class="dialog-card"><span class="eyebrow">A small technical pothole</span><h2>The town needs a view.</h2><p id="renderer-error-detail">3D needs WebGL 2. Enable hardware acceleration in your browser and reload to join the shenanigans.</p><button id="reload-button" class="primary-button" type="button">TRY AGAIN <span aria-hidden="true">↗</span></button></div></div>
           </div>
@@ -149,12 +166,16 @@
 
         <aside class="dispatch-column" aria-label="Contracts and garage">
           <section class="dispatch-panel">
-            <div class="panel-heading"><div><span class="eyebrow">Meadows dispatch</span><h2>Questionable gigs.</h2></div><span class="panel-index" aria-hidden="true">01—03</span></div>
+            <div class="panel-heading"><div><span class="eyebrow">Meadows dispatch</span><h2>Questionable gigs.</h2></div><span class="panel-index" aria-hidden="true">01—07</span></div>
             <p class="panel-intro">Honest work. Mostly. Pick your next bad idea.</p>
             <div class="contract-list">
               <button class="contract-button delivery-contract" type="button" data-mission="delivery"><span class="contract-icon" aria-hidden="true">▣</span><span class="contract-copy"><span class="contract-category">DELIVERY</span><strong>Special delivery.</strong><span>Collect it. Drop it. Don’t ask.</span></span><span class="contract-arrow" aria-hidden="true">↗</span></button>
               <button class="contract-button dash-contract" type="button" data-mission="dash"><span class="contract-icon" aria-hidden="true">ϟ</span><span class="contract-copy"><span class="contract-category">DASH</span><strong>Town tour, turbo.</strong><span>A scenic route. A silly deadline.</span></span><span class="contract-arrow" aria-hidden="true">↗</span></button>
               <button class="contract-button party-contract" type="button" data-mission="party"><span class="contract-icon" aria-hidden="true">✳</span><span class="contract-copy"><span class="contract-category">PARTY</span><strong>Party emergency.</strong><span>Bring the boom. And the confetti.</span></span><span class="contract-arrow" aria-hidden="true">↗</span></button>
+              <button class="contract-button air-contract" type="button" data-mission="airtaxi"><span class="contract-icon" aria-hidden="true">↟</span><span class="contract-copy"><span class="contract-category">HELICOPTER · PASSENGERS</span><strong>The scenic commute.</strong><span>Land, board, and fly to the next pad.</span></span><span class="contract-arrow" aria-hidden="true">↗</span></button>
+              <button class="contract-button air-contract" type="button" data-mission="aircargo"><span class="contract-icon" aria-hidden="true">▣</span><span class="contract-copy"><span class="contract-category">HELICOPTER · CARGO</span><strong>Express party supplies.</strong><span>Airport pickup. Rooftop delivery.</span></span><span class="contract-arrow" aria-hidden="true">↗</span></button>
+              <button class="contract-button air-contract" type="button" data-mission="sightseeing"><span class="contract-icon" aria-hidden="true">☀</span><span class="contract-copy"><span class="contract-category">ANY AIRCRAFT · TOUR</span><strong>The scenic route.</strong><span>Coast, ridge, and a gentle landing.</span></span><span class="contract-arrow" aria-hidden="true">↗</span></button>
+              <button class="contract-button air-contract" type="button" data-mission="airrace"><span class="contract-icon" aria-hidden="true">✈</span><span class="contract-copy"><span class="contract-category">ANY AIRCRAFT · RACE</span><strong>Cloud nine circuit.</strong><span>Five elevated rings. Match their altitude.</span></span><span class="contract-arrow" aria-hidden="true">↗</span></button>
             </div>
             <div class="dispatch-status"><span id="mission-status">No gig active. The town is your oyster.</span><button id="abandon-button" class="text-button" type="button" hidden>Abandon gig</button></div>
           </section>
@@ -163,6 +184,13 @@
             <div class="panel-heading"><div><span class="eyebrow">Spanner’s garage</span><h2>Make it worse. Faster.</h2></div><span class="garage-icon" aria-hidden="true">⚒</span></div>
             <p id="garage-status" class="garage-status">Find the garage to tune up your ride.</p>
             <div class="upgrade-list"><button class="purchase-button" type="button" data-upgrade="boost"><span><strong>Extra oomph</strong><small>Upgrade your boost</small></span><span id="boost-price" class="price">$200</span></button><button class="purchase-button" type="button" data-upgrade="armor"><span><strong>Less crumple</strong><small>Toughen up your ride</small></span><span id="armor-price" class="price">$150</span></button><button class="purchase-button" type="button" data-upgrade="repair"><span><strong>Un-dent, please</strong><small>Patch up your current ride</small></span><span class="price">$45</span></button></div>
+          </section>
+
+          <section class="airport-panel garage-panel" aria-label="Airport directions and flight controls">
+            <div class="panel-heading"><div><span class="eyebrow">Meadows Airport · northeast</span><h2>Take the high road.</h2></div><span class="garage-icon" aria-hidden="true">✈</span></div>
+            <p class="panel-intro">Parked planes and helicopters are yours to borrow with E. Follow Terminal Avenue to the airport.</p>
+            <button id="airport-route" class="inventory-action" type="button">Mark airport on compass ↗</button>
+            <dl class="flight-quick-controls"><div><dt>W / S</dt><dd>Throttle / helicopter forward &amp; back</dd></div><div><dt>A / D</dt><dd>Bank / turn</dd></div><div><dt>SPACE / CTRL</dt><dd>Climb / descend</dd></div><div><dt>SHIFT</dt><dd>Plane boost / helicopter hover assist</dd></div><div><dt>F / R</dt><dd>Parachute / airport recovery</dd></div><div><dt>G</dt><dd>Hangar when stopped at the apron</dd></div></dl>
           </section>
 
           <div class="town-note"><span class="town-note-star" aria-hidden="true">✳</span><p>“Oh, for fudge’s sake.”<small>— Every resident, eventually</small></p></div>

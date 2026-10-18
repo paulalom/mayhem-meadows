@@ -47,6 +47,7 @@ class Context {
 }
 const game = () => ({ player: { id: 'player', x: 0, y: 0, angle: 0, grounded: true, vehicleId: null }, cars: [], police: [], heat: 0 });
 const car = (id, kind = 'compact', x = 0, y = 0) => ({ id, kind, x, y, angle: 0, speed: 0, health: 100, grounded: true, upright: true, traffic: true });
+const aircraft = (id, aircraftType = 'helicopter', x = 0, y = 0) => ({ ...car(id, 'aircraft', x, y), aircraftType, throttle: 0.6, elevation: 25, grounded: false });
 async function director(settings) {
   const context = new Context('suspended'), audio = new AudioDirector({ contextFactory: () => context, settings });
   assert.equal(await audio.unlock(), true); return { audio, context };
@@ -136,6 +137,52 @@ test('audio model uses live model speed limits and silences failed or exploded e
   ride.engineHealth = 0; assert.equal(deriveAudioFrame(world).engines.length, 0);
   ride.engineHealth = 100; ride.exploded = true; assert.equal(deriveAudioFrame(world).engines.length, 0);
   ride.exploded = false; assert.equal(deriveAudioFrame(world).engines.length, 1);
+});
+
+test('occupied aircraft use their own prop, rotor or jet sound without road, skid or footsteps', () => {
+  const world = game(), ride = aircraft('flight'); world.aircraft = [ride]; world.player.vehicleId = ride.id; ride.speed = 300;
+  let frame = deriveAudioFrame(world, { input: { up: true, brake: true, boost: true } });
+  assert.equal(frame.mode, 'vehicle'); assert.equal(frame.engines[0].kind, 'rotor'); assert.equal(frame.engines[0].controlled, true);
+  assert.ok(frame.engines[0].pulse > 0); assert.ok(frame.wind > 0);
+  assert.equal(frame.skid, 0); assert.equal(frame.road, 0); assert.equal(frame.boost, 0); assert.equal(frame.walking, false);
+  const idle = frame.engines[0].frequency;
+  ride.throttle = 1; assert.ok(deriveAudioFrame(world).engines[0].frequency > idle);
+  ride.aircraftType = 'trainer'; assert.equal(deriveAudioFrame(world).engines[0].kind, 'prop');
+  ride.aircraftType = 'fighter'; frame = deriveAudioFrame(world); assert.equal(frame.engines[0].kind, 'jet'); assert.equal(frame.engines[0].pulse, 0);
+  ride.grounded = true; assert.equal(deriveAudioFrame(world).wind, 0);
+  ride.engineHealth = 0; assert.equal(deriveAudioFrame(world).engines.length, 0);
+});
+
+test('nearby aircraft audio is bounded, excludes parked engines and measures height from an occupied aircraft', () => {
+  const world = game(); world.aircraft = Array.from({ length: 8 }, (_, i) => aircraft(`air-${i}`, 'helicopter', 150 + i * 20));
+  const parked = { ...aircraft('parked'), throttle: 0, grounded: true }, farAbove = { ...aircraft('high'), elevation: 500 };
+  world.aircraft.push(parked, farAbove);
+  let frame = deriveAudioFrame(world);
+  assert.equal(frame.engines.length, 3); assert.equal(frame.engines.some(engine => ['parked', 'high'].includes(engine.id)), false);
+  assert.ok(frame.engines[0].gain > frame.engines[1].gain);
+  const ride = aircraft('ride', 'trainer', 150, 0); ride.elevation = 25;
+  world.aircraft.unshift(ride); world.player.vehicleId = ride.id;
+  frame = deriveAudioFrame(world);
+  assert.equal(frame.engines[0].controlled, true); assert.equal(frame.engines[1].distance, 0);
+  assert.equal(frame.engines.length, 4);
+  const lowGain = frame.engines[1].gain; world.aircraft = [ride, world.aircraft[1]]; world.aircraft[1].elevation = 110;
+  assert.ok(deriveAudioFrame(world).engines.find(engine => engine.id === 'air-0').gain < lowGain);
+});
+
+test('synthesized aircraft modulation and wind stop completely on pause, mute, engine loss and disposal', async () => {
+  const { audio, context } = await director({ musicVolume: 0, radioStation: 'off' }), world = game();
+  const ride = aircraft('rotor'); ride.speed = 220; world.aircraft = [ride]; world.player.vehicleId = ride.id;
+  tick(audio, context, world);
+  const rotor = audio._engines.get(ride.id); assert.equal(rotor.kind, 'rotor'); assert.ok(rotor.pulse); assert.equal(rotor.sources.length, 4);
+  assert.ok(audio._noiseLoops.has('flight-wind'));
+  audio.update(world, { active: false }); context.advance(0.05);
+  assert.equal(audio.getStatus().voiceCount, 0); assert.equal(audio._noiseLoops.size, 0);
+  assert.ok(rotor.sources.every(source => source.ended && source.disconnected));
+  tick(audio, context, world); audio.setSettings({ muted: true }); context.advance(0.05); assert.equal(audio.getStatus().voiceCount, 0);
+  audio.setSettings({ muted: false }); ride.engineHealth = 0; ride.grounded = true; tick(audio, context, world); context.advance(0.05);
+  assert.equal(audio.getStatus().engineCount, 0); assert.equal(audio._noiseLoops.has('flight-wind'), false);
+  ride.engineHealth = 100; ride.aircraftType = 'fighter'; ride.grounded = false; tick(audio, context, world); assert.equal(audio._engines.get(ride.id).kind, 'jet');
+  audio.dispose(); context.advance(0.05); assert.ok(context.sources.every(source => source.ended && source.disconnected));
 });
 
 test('unlock is gesture driven, unsupported contexts and denied resume cannot throw', async () => {

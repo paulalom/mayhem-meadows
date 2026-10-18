@@ -35,6 +35,7 @@
   const Physics = root.MayhemPhysics || (typeof require === 'function' ? require('./physics.js') : null);
   const { CHARACTER_SCALE, PERSON_HEIGHT, MUZZLE_HEIGHT, PLAYER_RADIUS, NPC_RADIUS } = Physics;
   const VehiclePhysics = root.MayhemVehiclePhysics || (typeof require === 'function' ? require('./vehicle-physics.js') : null);
+  const Aircraft = root.MayhemAircraft || (typeof require === 'function' ? require('./aircraft.js') : null);
 
   // Cars keep arcade steering on the ground, with contacts matching their
   // rendered rectangular footprint rather than an undersized bounding circle.
@@ -104,6 +105,7 @@
       this.upgrades = { boost: 0, armor: 0 };
       this.inventory = starterInventory();
       this.garage = { cars: [] };
+      this.hangar = { aircraft: [] };
       this.heat = 0;
       this.escapeTimer = 0;
       this.policeSeen = false;
@@ -112,7 +114,7 @@
       this._policeSearching = false;
       this.graceTimer = 2;
       this.mission = null;
-      this.missionStats = { elapsed: 0, collisions: 0, style: 0, overtime: false };
+      this.missionStats = { elapsed: 0, collisions: 0, style: 0, overtime: false, comfort: 100 };
       this.player = { id: 'player', x: 884, y: 1080, angle: -Math.PI / 2, vehicleId: null, composure: 100, ragdollGrace: 0, stunned: 0, bubble: '', bubbleTimer: 0, elevation: 0, verticalVelocity: 0, grounded: true };
       this.ragdolls = new Physics.RagdollWorld();
       this.physics = this.ragdolls;
@@ -137,9 +139,11 @@
       this._nearMisses = new Map();
       this._makeTown();
       this.vehiclePhysics = new VehiclePhysics.VehicleWorld(this, CAR_TYPES);
+      this.aviation = new Aircraft.AircraftSystem(this);
+      this.aircraft = this.aviation.aircraft;
     }
 
-    get current() { return this.cars.find(car => car.id === this.player.vehicleId) || this.player; }
+    get current() { return this.cars.find(car => car.id === this.player.vehicleId) || this.aircraft?.find(craft => craft.id === this.player.vehicleId) || this.player; }
     districtAt(point = this.current) { return districtAt(point); }
     _ground(point,y) {
       const x=typeof point==='object' ? point.x : point;
@@ -168,6 +172,7 @@
     get escapeGoal() { return this.heat > 0 ? 8 + this.heat * 6 : 0; }
     get maxHealth() { return 100 + this.upgrades.armor * 25; }
     get garageAvailable() {
+      if(Aircraft.isAircraft(this.current)) return false;
       const garage = this.services.find(service => service.id === 'garage');
       return Boolean(garage && distance(this.current, garage) < 115 &&
         (!this.player.vehicleId || Math.abs(this.current.speed) <= 45 && this.current.upright !== false && this._onGround(this.current)) &&
@@ -246,7 +251,7 @@
         health: this.maxHealth, engineHealth: 100, handlingHealth: 100, burning: false, fireTime: 0, exploded: false };
     }
 
-    vehicleStats(vehicle = this.current) { return VehicleStats.performance(vehicle); }
+    vehicleStats(vehicle = this.current) { return Aircraft.isAircraft(vehicle) ? Aircraft.getModel(vehicle) : VehicleStats.performance(vehicle); }
 
     _isFree(x, y, radius = PLAYER_RADIUS, elevation=this._ground(x,y)) {
       if (x < radius || y < radius || x > SIZE - radius || y > SIZE - radius) return false;
@@ -255,9 +260,10 @@
     }
 
     _vehicles() { return this.cars.concat(this.police); }
+    _solidVehicles() { return this._vehicles().concat((this.aircraft || []).filter(craft=>craft.visible!==false)); }
 
     _vehicleBox(entity) {
-      const type = CAR_TYPES[entity.kind] || CAR_TYPES.compact;
+      const type = Aircraft.isAircraft(entity) ? Aircraft.getModel(entity) : CAR_TYPES[entity.kind] || CAR_TYPES.compact;
       return orientedBox(entity, type.length, type.width);
     }
 
@@ -325,7 +331,7 @@
     }
 
     _personVehicleContact(person, vehicle, radius = person === this.player ? PLAYER_RADIUS : NPC_RADIUS) {
-      const type = CAR_TYPES[vehicle.kind] || CAR_TYPES.compact;
+      const type = Aircraft.isAircraft(vehicle) ? Aircraft.getModel(vehicle) : CAR_TYPES[vehicle.kind] || CAR_TYPES.compact;
       const reach = Math.hypot(type.length, type.width) / 2 + radius;
       if ((person.x - vehicle.x) ** 2 + (person.y - vehicle.y) ** 2 > reach * reach) return null;
       const entry = this.vehiclePhysics && this.vehiclePhysics.bodies.get(vehicle.id);
@@ -339,12 +345,12 @@
 
     _personFree(x, y, radius = PLAYER_RADIUS, ignore = null) {
       const point = { x, y, elevation:this._ground(x,y) };
-      return this._isFree(x, y, radius) && !this._vehicles().some(car => car !== ignore && this._personVehicleContact(point, car, radius));
+      return this._isFree(x, y, radius) && !this._solidVehicles().some(car => car !== ignore && this._personVehicleContact(point, car, radius));
     }
 
     _resolvePerson(entity, radius) {
       let collision = false;
-      const vehicles = this._vehicles(), people = this._standingPeople();
+      const vehicles = this._solidVehicles(), people = this._standingPeople();
       for (let pass = 0; pass < 4; pass++) {
         let changed = this._moveCircleBuildings(entity, 0, 0, radius);
         collision = changed || collision;
@@ -647,7 +653,7 @@
     }
 
     _propExplosions() {
-      for (const car of this._vehicles()) {
+      for (const car of this._solidVehicles()) {
         if (!car.exploded || !Number.isFinite(car.explosionTime) || car._sceneryBlastAt === car.explosionTime) continue;
         car._sceneryBlastAt = car.explosionTime;
         this._damagePropsNear({ x: car.x, y: car.y, height: finite(car.elevation, 0) + .7, ignoreVehicleId: car.id }, 160, 140,
@@ -740,6 +746,9 @@
 
     interact() {
       if (this.ragdolls.get(this.player.id)) return false;
+      if (this.player.parachuting) { this._toast('Land your parachute before boarding a ride.'); return false; }
+      if (Aircraft.isAircraft(this.current)) return this.aviation.interact();
+      if (!this.player.vehicleId && this.aviation.enterNearest()) return true;
       if (this.player.vehicleId && this.current.burning) return this._exitCar(this.current, true);
       if (!this.player.vehicleId && !this._onGround(this.player)) { this._toast('Land before hopping in or out.'); return false; }
       if (this.player.vehicleId) {
@@ -788,6 +797,7 @@
     }
 
     _useService(service) {
+      if(Aircraft.isAircraft(this.current)) { this._toast('Aircraft are serviced at the airport hangar.'); return false; }
       if (service.id === 'garage') { this._toast('Sprinkle Garage: press G for your car collection, or I for toys and pocket supplies.'); return true; }
       if (this.heat === 0 && !this._witnessReports.length && (!this.player.vehicleId || !VehicleStats.isDamaged(this.current))) { this._toast('Already sparkling clean!'); return false; }
       if (this.money < 75) { this._toast('The wash costs $75. Finish a gig for cash.', 'warning'); return false; }
@@ -890,7 +900,9 @@
           projectile.height = projectile.aimed ? projectile.startHeight + projectile.verticalSpeed * elapsed - 2 * elapsed * elapsed : finite(projectile.baseHeight, 0) + MUZZLE_HEIGHT + Math.sin(Math.PI * (1 - projectile.life / projectile.maxLife)) * 1.1;
           const atHeight = (bottom,top) => Math.min(before.height, projectile.height)<=top && Math.max(before.height, projectile.height)>=bottom;
           const walls = this.buildings.some(b => segmentHitsVolume(before,projectile,{x:b.x-3,y:b.y-3,w:b.w+6,h:b.h+6,angle:b.angle || 0,...this._buildingVolume(b)},before.height,projectile.height));
-          const vehicles = this.vehiclePhysics.hitsSegment(before, projectile);
+          const vehicleHit = this.vehiclePhysics.firstHit(before,projectile);
+          const vehicles = Boolean(vehicleHit);
+          if(!walls && Aircraft.isAircraft(vehicleHit?.body?.entity)) this.aviation.damage(vehicleHit.body.entity,35);
           const people = this.peds.some(ped => atHeight(this._base(ped)+.1,this._base(ped)+PERSON_HEIGHT+.35*CHARACTER_SCALE) && ped.stunned <= 0 && distance(ped, projectile) < 16 * CHARACTER_SCALE);
           const surface=this._ground(projectile),ground=projectile.height<=surface+.12;
           if (ground) projectile.height = surface+.12;
@@ -933,13 +945,22 @@
     }
 
     flop() {
-      if (this.player.vehicleId || this.ragdolls.get(this.player.id) || this.player.ragdollGrace > 0) return false;
+      if (this.player.vehicleId || this.player.parachuting || this.ragdolls.get(this.player.id) || this.player.ragdollGrace > 0) return false;
       return this._knockDown(this.player, { x: Math.cos(this.player.angle) * 2.2, y: 2.2, z: Math.sin(this.player.angle) * 2.2 });
     }
 
     recover() {
       this.ragdolls.clear(this.player.id);
+      this.player.parachuting = false;
       this.player.stunned = 0; this.player.ragdollGrace = 1.4;
+      if (Aircraft.isAircraft(this.current)) {
+        if (!this.aviation.recover(this.current)) return false;
+        const craft = this.current;
+        Object.assign(this.player, { x: craft.x, y: craft.y, elevation: craft.elevation, angle: craft.angle, verticalVelocity: 0, grounded: true });
+        this.graceTimer = 2; this.score = Math.max(0, this.score - 20);
+        this._toast('Aircraft recovered to a clear stand. −20 style; damage is preserved.');
+        return true;
+      }
       const entity = this.current, p = this._safeRoadPosition(entity, this.player.vehicleId ? 18 : PLAYER_RADIUS, this.player.vehicleId ? entity : null);
       entity.x = p.x; entity.y = p.y; entity.elevation=this._ground(p);
       entity.waterTimer = 0; entity._submerged = false;
@@ -956,7 +977,12 @@
       this.ragdolls.clear(this.player.id);
       this.player.stunned = 0; this.player.ragdollGrace = 1.4;
       const car = this.player.vehicleId ? this.current : null;
-      if (car) { car.speed = car.vx = car.vy = 0; this._exitCar(car, true); }
+      if (car) {
+        car.speed = car.vx = car.vy = 0;
+        if (Aircraft.isAircraft(car)) { car.throttle=0;car.npc=false;car.phase=car.flightPhase=car.grounded?'parked':'abandoned';this.player.vehicleId=null; }
+        else this._exitCar(car, true);
+      }
+      this.player.parachuting = false;
       const start=this.world.start.player;
       this.player.vehicleId = null; this.player.x = start.x; this.player.y = start.y; this.player.composure = 100;
       this.player.elevation = this._ground(start); this.player.verticalVelocity = 0; this.player.grounded = true;
@@ -974,11 +1000,58 @@
         dash: { title: 'Lawn Enforcement Slalom', description: 'Drive through six gates across town and the suburbs. Late finish? You still get base pay.', stage: 'checkpoints', targets: copyTargets(anchors.dash), totalTime: 170, reward: 180 },
         party: { title: 'Operation Un-Boring', description: 'Drive to each party ring, slow down, and press H to honk.', stage: 'parties', targets: copyTargets(variation ? anchors.partyAlt : anchors.party), totalTime: 150, reward: 200 }
       };
+      Object.assign(recipes, this._airMissionRecipes());
       const recipe = recipes[type];
-      if (!recipe) { this._toast('Choose a delivery, dash, or party gig.'); return false; }
+      if (!recipe) { this._toast('Choose a gig from dispatch.'); return false; }
       this.mission = { type, ...recipe, targetIndex: 0, timeLeft: recipe.totalTime };
-      this.missionStats = { elapsed: 0, collisions: 0, style: 0, overtime: false };
+      this.missionStats = { elapsed: 0, collisions: 0, style: 0, overtime: false, comfort: 100 };
       this._toast(recipe.title + ': ' + recipe.description); this._sound('accept'); return true;
+    }
+
+    startMission(type) { return this.acceptMission(type); }
+
+    _airMissionRecipes() {
+      const airport = this.world?.landscape?.airport;
+      if (!airport) return {};
+      const pads = (airport.helipads || []).concat(this.world.landscape.helipads || []);
+      const first = pads.find(pad => /airport/.test(pad.id)) || pads[0] || { x: 10550, y: 3600 };
+      const marina = pads.find(pad => /marina/.test(pad.id)) || { x: 3000, y: 4900 };
+      const downtown = pads.find(pad => /downtown/.test(pad.id)) || { x: 6300, y: 4400 };
+      const point = (pad, name) => ({ x: pad.x, y: pad.y, elevation: finite(pad.elevation, this._ground(pad)), name });
+      const air = (x,y,height,name) => ({ x,y,elevation:this._ground(x,y)+height,name,aerial:true });
+      const home = point(first, 'Airport helipad'), coast = point(marina, 'Marina helipad'), roof = point(downtown, 'Downtown helipad');
+      return {
+        airtaxi: { title: 'Meadows Air Taxi', description: 'Land a helicopter at the airport, then carry passengers to the marina. Hold still for boarding.', stage: 'boarding', aircraftJob: true, landingJob: true, targets: [home,coast], totalTime: 180, reward: 220 },
+        aircargo: { title: 'Express Party Supplies', description: 'Pick up cargo at the airport helipad, then land on the downtown pad.', stage: 'loading', aircraftJob: true, landingJob: true, targets: [home,roof], totalTime: 180, reward: 250 },
+        sightseeing: { title: 'The Scenic Route', description: 'Fly through the coastal and ridge markers, then return to the airport helipad.', stage: 'sightseeing', aircraftJob: true, targets: [air(3900,5200,25,'Coast'),air(1800,3000,35,'Old Town'),air(3200,1500,40,'Ridge'),home], totalTime: 240, reward: 240 },
+        airrace: { title: 'Cloud Nine Circuit', description: 'Take any aircraft through the elevated rings. Match their altitude.', stage: 'air race', aircraftJob: true, targets: [air(10100,2400,28,'Departure'),air(7800,2200,40,'Northside'),air(4800,3100,32,'Town'),air(6800,5500,30,'River'),air(10000,4000,25,'Airport')], totalTime: 180, reward: 280 }
+      };
+    }
+
+    bailOut() {
+      if (!Aircraft.isAircraft(this.current)) return false;
+      return this.aviation.bailOut();
+    }
+
+    _parachuteStep(dt,input) {
+      const p = this.player;
+      const forward = Number(Boolean(input.up))-Number(Boolean(input.down));
+      const side = Number(Boolean(input.right))-Number(Boolean(input.left));
+      const heading = finite(input.moveAngle,p.angle);
+      const dx = (Math.cos(heading)*forward+Math.cos(heading+Math.PI/2)*side)*100*dt;
+      const dy = (Math.sin(heading)*forward+Math.sin(heading+Math.PI/2)*side)*100*dt;
+      const bounds=this.aviation.bounds;
+      const next={x:clamp(p.x+dx,bounds.minX+PLAYER_RADIUS,bounds.maxX-PLAYER_RADIUS),y:clamp(p.y+dy,bounds.minY+PLAYER_RADIUS,bounds.maxY-PLAYER_RADIUS)};
+      if(!this._blockedLine(p,next,p.elevation+.5,p.elevation+.5)) {p.x=next.x;p.y=next.y;}
+      p.verticalVelocity = Math.max(-4,finite(p.verticalVelocity,0)-8*dt);
+      const previous = p.elevation;
+      p.elevation += p.verticalVelocity*dt;
+      const floor=this.vehiclePhysics.support(p.x,p.y,previous+.1);
+      if(p.elevation<=floor+.02) {
+        p.elevation=floor; p.parachuting=false; p.grounded=true; p.verticalVelocity=0;
+        if(p.x<PLAYER_RADIUS || p.y<PLAYER_RADIUS || p.x>SIZE-PLAYER_RADIUS || p.y>SIZE-PLAYER_RADIUS) { this.recover(); return; }
+        this._sound('land',{x:p.x,y:p.y,intensity:.3}); this._toast('Touchdown! E to find another ride.');
+      } else p.grounded=false;
     }
 
     abandonMission() {
@@ -995,12 +1068,15 @@
         const timeBonus = Math.floor(50 * Math.max(0, mission.timeLeft) / mission.totalTime);
         const cleanBonus = this.missionStats.collisions < 2 ? 20 : 0;
         const styleBonus = Math.min(30, Math.floor(this.missionStats.style / 10));
-        const pay = mission.reward + timeBonus + cleanBonus + styleBonus;
+        const comfortBonus = mission.type==='airtaxi' ? Math.round(clamp(finite(this.missionStats.comfort,100),0,100)*.3) : 0;
+        const pay = mission.reward + timeBonus + cleanBonus + styleBonus + comfortBonus;
         this.money = Math.min(999999, this.money + pay); this.completed++; this._addScore(100 + timeBonus);
         this._confetti(this.current.x, this.current.y, 90); this._toast('Gig complete! +$' + pay + ' (' + mission.reward + ' base + ' + (pay - mission.reward) + ' bonus).', 'success'); this._sound('complete');
         this.mission = null;
       } else {
         if (mission.type === 'delivery') mission.stage = 'dropoff';
+        if (mission.type === 'airtaxi') mission.stage = 'passengers aboard';
+        if (mission.type === 'aircargo') mission.stage = 'cargo aboard';
         this._toast(mission.type === 'delivery' ? 'Disco ball collected! Get it to the dance hall.' : 'Nice! Next stop: ' + (mission.targetIndex + 1) + ' of ' + mission.targets.length + '.', 'success');
       }
     }
@@ -1046,10 +1122,11 @@
         this.player.composure = Math.min(100, this.player.composure + 40);
       } else if (id === 'repairTape') {
         if (!this.player.vehicleId) { this._toast('Hop in a damaged car before using Repair Tape.'); return false; }
-        if (Math.abs(this.current.speed) > 45 || !this._onGround(this.current) || this.current.upright===false) { this._toast('Stop your car before applying Repair Tape.'); return false; }
+        if (Math.abs(this.current.speed) > 45 || (Aircraft.isAircraft(this.current) ? !this.current.grounded : !this._onGround(this.current)) || this.current.upright===false) { this._toast('Stop and land your ride before applying Repair Tape.'); return false; }
         if (!VehicleStats.isDamaged(this.current)) { this._toast('This ride needs no tape.'); return false; }
-        VehicleStats.repair(this.current, this.maxHealth, 55);
+        VehicleStats.repair(this.current, Aircraft.isAircraft(this.current) ? finite(this.current.maxHealth,100) : this.maxHealth, 55);
         this._syncGarage();
+        this._syncHangar();
       } else if (id === 'refill') {
         if (!this.inventory.unlocked.includes('cannon')) { this._toast('Unlock the Party Cannon before using a refill.'); return false; }
         if (this.inventory.ammo.cannon >= 12) { this._toast('Party Cannon is already fully stocked.'); return false; }
@@ -1073,6 +1150,79 @@
         }
         record.maxHealth = this.maxHealth;
       }
+    }
+
+    get hangarAvailable() {
+      const airport=this.world?.landscape?.airport;
+      if(!airport || this.ragdolls.get(this.player.id) || this.player.parachuting) return false;
+      const entity=this.current;
+      if(this.player.vehicleId && (!Aircraft.isAircraft(entity) || !entity.grounded || Math.abs(entity.speed)>20)) return false;
+      if(!this.player.vehicleId && !this.player.grounded) return false;
+      const apron=(airport.aprons || []).some(pad=>entity.x>=pad.x-180 && entity.x<=pad.x+pad.w+180 && entity.y>=pad.y-180 && entity.y<=pad.y+pad.h+180);
+      return apron || [...(airport.stands || []),...(airport.helipads || []).filter(pad=>/airport/.test(pad.id))].some(pad=>distance(entity,pad)<220 && Math.abs(this._base(entity)-finite(pad.elevation,this._ground(pad)))<3);
+    }
+
+    _requireHangar() {
+      if(this.hangarAvailable) return true;
+      this._toast('Stop at the airport apron or helipad to manage your hangar.'); return false;
+    }
+
+    _syncHangar() {
+      for(const record of this.hangar.aircraft) {
+        const craft=this.aircraft.find(value=>value.hangarId===record.id);
+        if(craft) for(const key of ['color','health','maxHealth','engineHealth','handlingHealth','burning','fireTime','exploded']) record[key]=craft[key];
+      }
+    }
+
+    hangarStore() {
+      if(!this._requireHangar()) return false;
+      const craft=this.current;
+      if(!Aircraft.isAircraft(craft)) { this._toast('Bring an aircraft to the apron to save it.'); return false; }
+      if(craft.burning || craft.exploded || craft.health<=0) { this._toast('Repair this aircraft before saving it.'); return false; }
+      if(craft.hangarId && this.hangar.aircraft.some(record=>record.id===craft.hangarId)) { this._syncHangar(); this._toast('This aircraft is already saved.'); return false; }
+      if(this.hangar.aircraft.length>=3) { this._toast('Your three hangar spaces are full. Release a saved aircraft first.'); return false; }
+      let number=1; while(this.hangar.aircraft.some(record=>record.id==='air-'+number)) number++;
+      const record={id:'air-'+number,kind:'aircraft',aircraftType:craft.aircraftType};
+      craft.hangarId=record.id; craft.borrowed=true; this.hangar.aircraft.push(record); this._syncHangar();
+      this._toast(Aircraft.getModel(craft).name+' saved to your hangar.','success'); this._sound('purchase'); return true;
+    }
+
+    hangarRetrieve(id) {
+      if(!this._requireHangar()) return false;
+      this._syncHangar();
+      const record=this.hangar.aircraft.find(value=>value.id===id);
+      if(!record) return false;
+      if(record.health<=0 || record.burning || record.exploded) { this._toast('Repair this saved aircraft before retrieving it.'); return false; }
+      const deployed=this.aircraft.find(value=>value.hangarId===id) || this.aircraft.find(value=>value.aircraftType===record.aircraftType && !value.hangarId && !value.borrowed && !value.npc && value.grounded && value.visible!==false && value.health>0 && !value.burning);
+      const position=this.aviation.parkingPosition(record.aircraftType,deployed);
+      if(!position) { this._toast('The aircraft stand is crowded. Clear it and try again.'); return false; }
+      if(this.player.vehicleId) { this.current.speed=this.current.vx=this.current.vy=0; this.current.throttle=0; }
+      const craft=deployed || this.aviation.spawn(record.aircraftType,position,{npc:false});
+      Object.assign(craft,record,{x:position.x,y:position.y,angle:finite(position.angle,0),id:craft.id,hangarId:record.id,visible:true,npc:false,phase:'parked',flightPhase:'parked',speed:0,vx:0,vy:0,vz:0,verticalVelocity:0,pitch:0,roll:0,throttle:0,grounded:true,burning:false,exploded:false,borrowed:true});
+      craft.elevation=finite(position.elevation,this._ground(position));
+      Object.assign(this.player,{vehicleId:craft.id,x:craft.x,y:craft.y,elevation:craft.elevation,angle:craft.angle,verticalVelocity:0,grounded:true,parachuting:false});
+      this._toast(Aircraft.getModel(craft).name+' ready on the stand.','success'); this._sound('enter',{x:craft.x,y:craft.y,kind:'aircraft'}); return true;
+    }
+
+    hangarRepair(id) {
+      if(!this._requireHangar()) return false;
+      this._syncHangar();
+      const record=this.hangar.aircraft.find(value=>value.id===id);
+      if(!record) return false;
+      if(!VehicleStats.isDamaged(record)) { this._toast('This aircraft is already in perfect condition.'); return false; }
+      if(this.money<75) { this._toast('A hangar repair costs $75.','warning'); return false; }
+      this.money-=75; VehicleStats.repair(record,finite(record.maxHealth,100));
+      for(const craft of this.aircraft.filter(value=>value.hangarId===id)) VehicleStats.repair(craft,finite(craft.maxHealth,100));
+      this._toast('Aircraft fully repaired for $75.','success'); this._sound('repair'); return true;
+    }
+
+    hangarRelease(id) {
+      if(!this._requireHangar()) return false;
+      const index=this.hangar.aircraft.findIndex(record=>record.id===id);
+      if(index<0) return false;
+      this.hangar.aircraft.splice(index,1);
+      for(const craft of this.aircraft) if(craft.hangarId===id) delete craft.hangarId;
+      this._toast('Hangar space released. Your deployed aircraft stays where it is.'); return true;
     }
 
     garageStore() {
@@ -1204,10 +1354,13 @@
       this.player.bubbleTimer = Math.max(0, this.player.bubbleTimer - dt);
       if (!this.player.bubbleTimer) this.player.bubble = '';
       this.vehiclePhysics.sync();
-      if (this.player.vehicleId) this._drive(this.current, dt, input); else this._walk(dt, input);
+      if (this.player.vehicleId) { if (!Aircraft.isAircraft(this.current)) this._drive(this.current, dt, input); }
+      else if (this.player.parachuting) this._parachuteStep(dt,input);
+      else this._walk(dt, input);
       for (const car of this.cars) if (car.traffic && car.health > 0 && car.id !== this.player.vehicleId) this._traffic(car, dt);
       this._pedestrians(dt);
       this._updateWitnessReports(dt);
+      this.aviation.step(dt,input);
       this._updatePolice(dt);
       const contacts = this.vehiclePhysics.step(dt);
       for (const contact of contacts) if (contact.prop && contact.speed > 75 && this.time - (contact.prop._lastImpactAt ?? -10) > .35) {
@@ -1216,17 +1369,20 @@
       }
       for (const contact of contacts) this._impact(contact.entity, contact.speed, contact.vehicle,
         contact.vehicle ? 'vehicle' : PROP_SOUND_MATERIALS[contact.prop?.kind] || 'stone');
+      for (const contact of contacts) if(Aircraft.isAircraft(contact.other) && contact.speed>65 && this.time-(contact.other._roadImpactAt ?? -10)>.6) {
+        contact.other._roadImpactAt=this.time;this.aviation.damage(contact.other,(contact.speed-45)*.1);
+      }
       this._vehicleDamageStep(dt);
-      for (const vehicle of this._vehicles()) this._vehiclePeople(vehicle, vehicle.vx || 0, vehicle.vy || 0);
+      for (const vehicle of this._solidVehicles()) this._vehiclePeople(vehicle, vehicle.vx || 0, vehicle.vy || 0);
       if (this.player.vehicleId) {
         const car = this.current;
-        if (!contacts.some(contact => contact.entity === car || contact.other === car)) this._nearMissStyle(car);
+        if (!Aircraft.isAircraft(car) && !contacts.some(contact => contact.entity === car || contact.other === car)) this._nearMissStyle(car);
         this.player.x = car.x; this.player.y = car.y; this.player.angle = car.angle; this.player.elevation = car.elevation;
         this.player.verticalVelocity = car.verticalVelocity; this.player.grounded = car.grounded;
       }
       this._projectiles(dt);
       this._propExplosions();
-      const finished = this.ragdolls.step(dt, { buildings: this.buildings, staticObjects: this.staticObjects, cars: this.cars, police: this.police, size: SIZE, terrain:this.world?.terrain });
+      const finished = this.ragdolls.step(dt, { buildings: this.buildings, staticObjects: this.staticObjects, cars: this.cars, police: this.police, aircraft:(this.aircraft || []).filter(craft=>craft.visible!==false), size: SIZE, terrain:this.world?.terrain });
       for (const body of finished) {
         const owner = body.owner;
         owner.stunned = 0; owner.ragdollGrace = 1.4;
@@ -1239,7 +1395,8 @@
         this.mission.timeLeft = Math.max(0, this.mission.timeLeft - dt);
         if (this.mission.timeLeft === 0 && !this.missionStats.overtime) { this.missionStats.overtime = true; this._toast('Overtime! Finish the gig anyway; base pay is safe.'); }
         const target = this.mission.targets[this.mission.targetIndex];
-        if (!this.ragdolls.get(this.player.id) && this.mission.type !== 'party' && (this.mission.type !== 'dash' || this.player.vehicleId) && distance(this.current, target) < 58 && Math.abs(this._base(this.current)-this._base(target))<3) this._advanceMission();
+        if(this.mission.aircraftJob) this._airMissionStep(dt,target);
+        else if (!this.ragdolls.get(this.player.id) && this.mission.type !== 'party' && (this.mission.type !== 'dash' || this.player.vehicleId) && distance(this.current, target) < 58 && Math.abs(this._base(this.current)-this._base(target))<3) this._advanceMission();
       }
       for (const p of this.particles) { p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= Math.exp(-2 * dt); p.vy = p.vy * Math.exp(-2 * dt) + 18 * dt; }
       this.particles = this.particles.filter(p => p.life > 0);
@@ -1255,6 +1412,25 @@
       }
       this.debris = this.debris.filter(piece => piece.life > 0);
       this.skidMarks.forEach(mark => { mark.life -= dt; }); this.skidMarks = this.skidMarks.filter(mark => mark.life > 0).slice(-250);
+    }
+
+    _airMissionStep(dt,target) {
+      const mission=this.mission,craft=this.current;
+      if(!mission) return;
+      if(!Aircraft.isAircraft(craft) || craft.exploded || craft.health<=0) {mission.boardingTime=0;return;}
+      if(mission.type==='airtaxi' && mission.targetIndex>0) {
+        const roughness=Math.max(0,Math.abs(finite(craft.verticalVelocity,0))-6)*.6+Math.max(0,Math.abs(finite(craft.roll,0))-.25)*12;
+        const damage=Math.max(0,finite(mission._lastHealth,craft.health)-craft.health);
+        this.missionStats.comfort=clamp(finite(this.missionStats.comfort,100)-roughness*dt-damage,0,100);
+        mission._lastHealth=craft.health;
+      }
+      const landing=mission.landingJob || mission.type==='sightseeing' && mission.targetIndex===mission.targets.length-1;
+      if(mission.landingJob && !Aircraft.getModel(craft).helicopter && !['helicopter','news','policeheli','transportheli'].includes(craft.aircraftType)) return;
+      const inRange=distance(craft,target)<(landing?85:210) && Math.abs(this._base(craft)-this._base(target))<(landing?2:12);
+      if(landing) {
+        mission.boardingTime=inRange && craft.grounded && Math.abs(craft.speed)<20 ? (mission.boardingTime || 0)+dt : 0;
+        if(mission.boardingTime>=2) { mission.boardingTime=0; this._advanceMission(); }
+      } else if(inRange && !craft.grounded) this._advanceMission();
     }
 
     _walk(dt, input) {
@@ -1298,7 +1474,7 @@
     }
 
     jump() {
-      if (this.player.vehicleId || this.ragdolls.get(this.player.id) || !this.player.grounded || this.player.stunned > 0) return false;
+      if (this.player.vehicleId || this.player.parachuting || this.ragdolls.get(this.player.id) || !this.player.grounded || this.player.stunned > 0) return false;
       this.player.verticalVelocity = 7.2; this.player.grounded = false; this._sound('jump', { x: this.player.x, y: this.player.y }); return true;
     }
 
@@ -1384,6 +1560,7 @@
     }
 
     _damageVehicle(car, amount) {
+      if(Aircraft.isAircraft(car)) return this.aviation.damage(car,amount);
       if (car.exploded || !Number.isFinite(amount) || amount <= 0) return;
       const model = VehicleStats.getModel(car);
       car.maxHealth = finite(car.maxHealth, this.maxHealth);
@@ -1424,14 +1601,22 @@
       car.engineHealth = car.handlingHealth = 0; this._wreckVehicle(car);
       this.vehiclePhysics.impulse(car, { x: 0, y: 3.2, z: 0 });
       if (distance(car, this.current) < 400) { this._sound('explosion', { x: car.x, y: car.y, intensity: 1 }); this._confetti(car.x, car.y, 65, finite(car.elevation, 0) + 0.8); }
+      this._blastFrom(car);
+      return true;
+    }
+
+    _onAircraftExplosion(craft) { this._blastFrom(craft); }
+
+    _blastFrom(car) {
       // Delayed chain fires give nearby drivers the same chance to get away.
       const radius = 160, height = finite(car.elevation, 0) + 0.7;
-      for (const other of this._vehicles()) {
+      for (const other of this._solidVehicles()) {
         const reach = Math.hypot(distance(car, other), (finite(other.elevation, 0) + 0.7 - height) * VehiclePhysics.SCALE);
         if (other === car || reach >= radius) continue;
         const strength = 1 - reach / radius, heading = Math.atan2(other.y - car.y, other.x - car.x);
         this._damageVehicle(other, 65 * strength);
-        this.vehiclePhysics.impulse(other, { x: Math.cos(heading) * 6 * strength, y: 3 * strength, z: Math.sin(heading) * 6 * strength });
+        if(Aircraft.isAircraft(other)) {other.speed+=Math.cos(heading-other.angle)*120*strength;other.vz+=3*strength;other.verticalVelocity=other.vz;}
+        else this.vehiclePhysics.impulse(other, { x: Math.cos(heading) * 6 * strength, y: 3 * strength, z: Math.sin(heading) * 6 * strength });
       }
       for (const person of this.peds.concat(this.player.vehicleId ? [] : [this.player])) {
         const reach = Math.hypot(distance(car, person), (finite(person.elevation, 0) + PERSON_HEIGHT / 2 - height) * VehiclePhysics.SCALE);
@@ -1531,11 +1716,16 @@
         this.police.push({ id: 'police-' + this._nextId++, ...this._vehicleState('compact'), x:point.x,y:point.y,angle:point.angle || 0,elevation:this._ground(point),verticalVelocity:0,grounded:true,speed: 0, route: [], routeTimer: 0, lastSeen: { x: (this._reportedLocation || this.current).x, y: (this._reportedLocation || this.current).y } });
         activeCount++;
       }
-      let seen = false, contact = false;
+      let seen = Boolean(this.airPoliceSeen && this.heat>0 && this.graceTimer<=0), contact = false;
+      if(seen) {
+        this._reportedLocation={x:this.current.x,y:this.current.y,elevation:this._base(this.current)};
+        for(const cop of this.police) cop.lastSeen={...this._reportedLocation};
+      }
       for (const cop of this.police) {
         if (cop.health <= 0 || cop.burning || cop.exploded) continue;
         cop.distracted = Math.max(0, (cop.distracted || 0) - dt);
-        const sight = this.heat > 0 && cop.distracted <= 0 && this.graceTimer <= 0 && distance(cop, this.current) < 340 + this.heat * 65 && !this._blockedLine(cop,this.current);
+        const sightRange=Math.hypot(distance(cop,this.current),(this._base(cop)-this._base(this.current))*20);
+        const sight = this.heat > 0 && cop.distracted <= 0 && this.graceTimer <= 0 && sightRange < 340 + this.heat * 65 && !this._blockedLine(cop,this.current);
         if (sight) { seen = true; cop.lastSeen = { x: this.current.x, y: this.current.y }; this._reportedLocation = { ...cop.lastSeen }; }
         cop.routeTimer -= dt;
         if (cop.routeTimer <= 0 || !cop.route.length) {
@@ -1571,10 +1761,12 @@
 
     exportSave() {
       this._syncGarage();
+      this._syncHangar();
       return {
         version: 2, money: this.money, score: this.score, bestScore: this.bestScore, completed: this.completed, upgrades: { ...this.upgrades },
         inventory: { equipped: this.inventory.equipped, unlocked: this.inventory.unlocked.slice(), pockets: { ...this.inventory.pockets }, ammo: { ...this.inventory.ammo } },
-        garage: { cars: this.garage.cars.map(car => ({ ...car })) }
+        garage: { cars: this.garage.cars.map(car => ({ ...car })) },
+        hangar: { aircraft: this.hangar.aircraft.map(craft => ({ ...craft })) }
       };
     }
 
@@ -1616,6 +1808,24 @@
           fireTime: clamp(finite(record.fireTime, 0), 0, 8), exploded: record.exploded === true });
       }
       this.garage = { cars };
+      const savedAircraft = data.version===2 && data.hangar && Array.isArray(data.hangar.aircraft) ? data.hangar.aircraft : [];
+      const aircraft=[];
+      for(const record of savedAircraft.slice(0,30)) {
+        if(aircraft.length>=3) break;
+        if(!record || typeof record!=='object' || typeof record.id!=='string' || !/^air-[1-9][0-9]{0,3}$/.test(record.id) ||
+          aircraft.some(craft=>craft.id===record.id) || !owns(Aircraft.AIRCRAFT_TYPES,record.aircraftType)) continue;
+        const maxHealth=clamp(finite(record.maxHealth,100),1,500);
+        aircraft.push({id:record.id,kind:'aircraft',aircraftType:record.aircraftType,color:typeof record.color==='string' && /^#[0-9a-f]{6}$/i.test(record.color)?record.color:'#ffd15b',
+          maxHealth,health:clamp(finite(record.health,maxHealth),0,maxHealth),engineHealth:clamp(finite(record.engineHealth,100),0,100),handlingHealth:clamp(finite(record.handlingHealth,100),0,100),
+          burning:record.burning===true && record.exploded!==true,fireTime:clamp(finite(record.fireTime,0),0,8),exploded:record.exploded===true});
+      }
+      this.hangar={aircraft};
+      const deployedAircraft=new Set();
+      for(const craft of this.aircraft) if(craft.hangarId) {
+        const record=aircraft.find(value=>value.id===craft.hangarId);
+        if(record && !deployedAircraft.has(record.id) && record.aircraftType===craft.aircraftType) { deployedAircraft.add(record.id);Object.assign(craft,{...record,id:craft.id,hangarId:record.id}); }
+        else delete craft.hangarId;
+      }
       const deployed = new Set();
       for (const car of this.cars) if (car.garageId) {
         const record = cars.find(saved => saved.id === car.garageId);

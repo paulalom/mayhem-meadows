@@ -34,6 +34,15 @@
   const vectorDistance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
   const restDistance = (a, b) => Math.hypot(ANATOMY[a][0] - ANATOMY[b][0], ANATOMY[a][1] - ANATOMY[b][1], ANATOMY[a][2] - ANATOMY[b][2]);
 
+  // Match the aircraft renderer's world yaw followed by local pitch and bank.
+  // Keep this independent of Cannon so articulated people use the same pose.
+  function aircraftOrientation(entity) {
+    const cy=Math.cos(-finite(entity.angle)/2),sy=Math.sin(-finite(entity.angle)/2);
+    const cp=Math.cos(finite(entity.pitch)/2),sp=Math.sin(finite(entity.pitch)/2);
+    const cr=Math.cos(finite(entity.roll)/2),sr=Math.sin(finite(entity.roll)/2);
+    return {x:cy*cp*sr+sy*sp*cr,y:cy*sp*sr+sy*cp*cr,z:cy*sp*cr-sy*cp*sr,w:cy*cp*cr-sy*sp*sr};
+  }
+
   function surfaceHeight(terrain, x, z, reference) {
     if (!terrain) return 0;
     const sample = typeof terrain.surfaceHeight === 'function' ? terrain.surfaceHeight : terrain.heightAt;
@@ -331,6 +340,20 @@
         boxes.push(prepareBox({ x: car.x / UNIT, z: car.y / UNIT, y: finite(car.elevation) + (height + bottom) / 2, hx: length / 2, hy: (height - bottom) / 2, hz: width / 2, angle, orientation: car.orientation,
           vx: clamp(finite(car.vx, finite(car.speed) * c) / UNIT, -20, 20), vy: clamp(finite(car.verticalVelocity), -20, 20), vz: clamp(finite(car.vy, finite(car.speed) * s) / UNIT, -20, 20), angularVelocity: car.angularVelocity, dynamic: true }));
       }
+      const aircraft=environment.aircraft||[];
+      const Aircraft=aircraft.length&&(root.MayhemAircraft||(typeof require==='function'?require('./aircraft.js'):null));
+      for(const craft of aircraft) {
+        if(!craft||craft.visible===false||craft.active===false||!Number.isFinite(craft.x)||!Number.isFinite(craft.y)||seen.has(craft.id||craft))continue;
+        const model=Aircraft?.AIRCRAFT_TYPES[craft.aircraftType];if(!model)continue;
+        seen.add(craft.id||craft);
+        const length=Math.max(.1,finite(craft.colliderLength,model.length)/UNIT),width=Math.max(.1,finite(craft.colliderWidth,model.width)/UNIT);
+        const height=Math.max(.1,finite(craft.colliderHeight,model.height)),orientation=aircraftOrientation(craft),basis=boxBasis(orientation,finite(craft.angle));
+        // Airframe geometry rotates around the ground anchor, whereas chassis
+        // geometry rotates about its centre. Rotate the centre offset as well.
+        boxes.push(prepareBox({x:craft.x/UNIT+basis[1]*height/2,y:finite(craft.elevation)+basis[4]*height/2,z:craft.y/UNIT+basis[7]*height/2,
+          hx:length/2,hy:height/2,hz:width/2,angle:finite(craft.angle),orientation,dynamic:true,
+          vx:clamp(finite(craft.vx)/UNIT,-20,20),vy:clamp(finite(craft.verticalVelocity,finite(craft.vz)),-20,20),vz:clamp(finite(craft.vy)/UNIT,-20,20),angularVelocity:craft.angularVelocity}));
+      }
       return boxes;
     }
 
@@ -440,7 +463,7 @@
     }
   }
 
-  const api = { RagdollWorld, BODYPARTS, JOINT_NAMES, STEP, FLOOR, CHARACTER_SCALE, PERSON_HEIGHT, MUZZLE_HEIGHT, PLAYER_RADIUS, NPC_RADIUS };
+  const api = { RagdollWorld, BODYPARTS, JOINT_NAMES, STEP, FLOOR, CHARACTER_SCALE, PERSON_HEIGHT, MUZZLE_HEIGHT, PLAYER_RADIUS, NPC_RADIUS, aircraftOrientation };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.MayhemPhysics = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

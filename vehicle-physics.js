@@ -6,13 +6,23 @@
   const SCALE = 20;
   const NO_ROADS = Object.freeze([]);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-  const height = entity => entity.kind === 'van' ? 1.7 : 1.3;
   const finite = (v, fallback = 0) => Number.isFinite(v) ? v : fallback;
+  function aircraftModel(entity) {
+    if(entity?.kind!=='aircraft')return null;
+    const Aircraft=root.MayhemAircraft||(typeof require==='function'?require('./aircraft.js'):null);
+    return Aircraft?.AIRCRAFT_TYPES[entity.aircraftType]||null;
+  }
+  const height = entity => aircraftModel(entity)?.height ?? (entity.kind === 'van' ? 1.7 : 1.3);
+  function quaternion(entity) {
+    const pose=aircraftModel(entity)?Physics.aircraftOrientation(entity):entity.orientation;
+    return pose?new C.Quaternion(pose.x,pose.y,pose.z,pose.w):new C.Quaternion().setFromEuler(0,-finite(entity.angle),0);
+  }
 
   function personContact(person, vehicle, radius, type) {
-    const q = vehicle.orientation ? new C.Quaternion(vehicle.orientation.x, vehicle.orientation.y, vehicle.orientation.z, vehicle.orientation.w) : new C.Quaternion().setFromEuler(0, -finite(vehicle.angle), 0);
+    const q = quaternion(vehicle);
     const inverse = q.conjugate(), h = height(vehicle), r = radius / SCALE;
-    const center = new C.Vec3(vehicle.x / SCALE, finite(vehicle.elevation) + h / 2, vehicle.y / SCALE);
+    const offset=aircraftModel(vehicle)?q.vmult(new C.Vec3(0,h/2,0)):new C.Vec3(0,h/2,0);
+    const center = new C.Vec3(vehicle.x / SCALE+offset.x, finite(vehicle.elevation)+offset.y, vehicle.y / SCALE+offset.z);
     const half = [type.length / 40, h / 2, type.width / 40];
     let best = null;
     for (const vertical of [r, Physics.PERSON_HEIGHT / 2, Physics.PERSON_HEIGHT - r]) {
@@ -39,7 +49,7 @@
   // coordinates; Cannon and the renderer share x/up/z coordinates in metres.
   class VehicleWorld {
     constructor(game, types) {
-      this.game = game; this.types = types; this.bodies = new Map(); this.impacts = []; this._pendingLaunches = [];
+      this.game = game; this.types = types; this.bodies = new Map(); this.aircraftBodies = new Map(); this.impacts = []; this._pendingLaunches = [];
       this.world = new C.World({ gravity: new C.Vec3(0, -18, 0), allowSleep: true });
       this.world.broadphase = new C.SAPBroadphase(this.world);
       this.world.solver.iterations = 12;
@@ -272,13 +282,65 @@
       this.bodies.set(entity.id, entry); return entry;
     }
 
+    _syncAircraft(dt=0) {
+      const alive=new Set();
+      for(const entity of this.game.aircraft||[]) {
+        const model=aircraftModel(entity);
+        if(!model||entity.visible===false||entity.active===false||!Number.isFinite(entity.x)||!Number.isFinite(entity.y))continue;
+        alive.add(entity.id);
+        let entry=this.aircraftBodies.get(entity.id);
+        if(!entry) {
+          const body=new C.Body({type:C.Body.KINEMATIC,mass:0,material:this.carMaterial,allowSleep:false});
+          body.kind='aircraft';body.entity=entity;
+          body.addShape(new C.Box(new C.Vec3(model.length/40,model.height/2,model.width/40)));
+          this.world.addBody(body);
+          entry={body,model,position:new C.Vec3(),quaternion:new C.Quaternion(),initialized:false};
+          this.aircraftBodies.set(entity.id,entry);
+        }
+        const body=entry.body;
+        body.entity=entity;
+        if(entry.model!==model) {
+          const shape=body.shapes[0];shape.halfExtents.set(model.length/40,model.height/2,model.width/40);
+          shape.updateConvexPolyhedronRepresentation();shape.updateBoundingSphereRadius();body.updateBoundingRadius();entry.model=model;
+        }
+        entry.quaternion.copy(quaternion(entity));
+        const offset=entry.quaternion.vmult(new C.Vec3(0,model.height/2,0));
+        entry.position.set(entity.x/SCALE+offset.x,finite(entity.elevation)+offset.y,entity.y/SCALE+offset.z);
+        if(dt>0&&entry.initialized) {
+          // Aviation has already advanced this tick. Let Cannon interpolate
+          // from the previous pose to that exact target, so contact velocity
+          // is real without advancing the aircraft's flight model a second time.
+          entry.position.vsub(body.position,body.velocity);body.velocity.scale(1/dt,body.velocity);
+          const rotation=entry.quaternion.mult(body.quaternion.conjugate());
+          if(rotation.w<0){rotation.x*=-1;rotation.y*=-1;rotation.z*=-1;rotation.w*=-1;}
+          const amount=Math.hypot(rotation.x,rotation.y,rotation.z),angle=2*Math.atan2(amount,rotation.w);
+          if(amount>.000001)body.angularVelocity.set(rotation.x/amount*angle/dt,rotation.y/amount*angle/dt,rotation.z/amount*angle/dt);
+          else body.angularVelocity.setZero();
+        } else {
+          body.position.copy(entry.position);body.quaternion.copy(entry.quaternion);body.velocity.setZero();body.angularVelocity.setZero();
+        }
+        body.force.setZero();body.torque.setZero();body.aabbNeedsUpdate=true;entry.initialized=true;
+        entity.colliderLength=model.length;entity.colliderWidth=model.width;entity.colliderHeight=model.height;entity.collisionHeight=model.height;
+      }
+      for(const [id,entry]of this.aircraftBodies)if(!alive.has(id)){this.world.removeBody(entry.body);this.aircraftBodies.delete(id);}
+      this.world.broadphase.dirty=true;
+    }
+
+    _finishAircraftStep() {
+      for(const entry of this.aircraftBodies.values()) {
+        entry.body.position.copy(entry.position);entry.body.quaternion.copy(entry.quaternion);
+        entry.body.aabbNeedsUpdate=true;
+      }
+      this.world.broadphase.dirty=true;
+    }
+
     sync() {
       const terrainChanged = this._terrainModel !== this._terrain();
       if (terrainChanged) this._makeFloor();
       if (terrainChanged || this._roads !== (this.game.roads || this.game.world?.roads || NO_ROADS)) this._makeBridges();
       if (terrainChanged || this.size !== this._worldSize()) this._boundaries();
       if (this._buildings !== this.game.buildings || this._objects !== this.game.staticObjects) {
-        for (const body of this.world.bodies.slice()) if (body.mass === 0 && body !== this.floor && body.kind !== 'boundary' && body.kind !== 'bridge') this.world.removeBody(body);
+        for (const body of this.world.bodies.slice()) if (body.type === C.Body.STATIC && body !== this.floor && body.kind !== 'boundary' && body.kind !== 'bridge') this.world.removeBody(body);
         for (const building of this.game.buildings) this._building(building);
         for (const object of this.game.staticObjects) if (!object.destroyed) this._fixed(object.kind, object.x, object.y, object.parts, object);
         this._buildings = this.game.buildings; this._objects = this.game.staticObjects;
@@ -293,14 +355,16 @@
         this._syncEntry(entity, entry);
       }
       for (const [id, entry] of this.bodies) if (!alive.has(id)) { this.world.removeBody(entry.body); this.bodies.delete(id); }
+      this._syncAircraft();
     }
 
-    control(entity, command) { this._body(entity).control = command; }
-    get(id) { return this.bodies.get(id)?.body || null; }
+    control(entity, command) { if(!aircraftModel(entity))this._body(entity).control = command; }
+    get(id) { return this.bodies.get(id)?.body || this.aircraftBodies.get(id)?.body || null; }
 
     // Blast vectors are changes in world-space velocity (metres per second).
     // Mirror only velocity fields so sync still detects pending teleports.
     impulse(entity, velocity) {
+      if(aircraftModel(entity))return this.get(entity.id);
       const entry = this._body(entity), body = entry.body;
       this._syncEntry(entity, entry, false);
       body.applyImpulse(new C.Vec3(finite(velocity.x) * body.mass, finite(velocity.y) * body.mass, finite(velocity.z) * body.mass));
@@ -413,6 +477,7 @@
 
     step(dt) {
       this.impacts = [];
+      this._syncAircraft(dt);
       // Two solver steps improve thin-post contacts and fast bumper impacts.
       for (let substep = 0; substep < 2; substep++) {
         for (const entry of this.bodies.values()) this._drive(entry, dt / 2);
@@ -421,10 +486,11 @@
         // cannot erase it during the same instant the bumper hits the wall.
         for (const { body, other, lift } of this._pendingLaunches.splice(0)) {
           body.applyImpulse(new C.Vec3(0, lift * body.mass, 0), new C.Vec3(0, 0, body.entity.id.length % 2 ? 0.24 : -0.24));
-          if (other.entity) other.applyImpulse(new C.Vec3(0, lift * other.mass * 0.8, 0), new C.Vec3(0.15, 0, 0));
+          if (other.entity && other.type===C.Body.DYNAMIC) other.applyImpulse(new C.Vec3(0, lift * other.mass * 0.8, 0), new C.Vec3(0.15, 0, 0));
           body.wakeUp(); if (other.entity) other.wakeUp();
         }
       }
+      this._finishAircraftStep();
       for (const entry of this.bodies.values()) {
         const body = entry.body, entity = body.entity;
         body.velocity.x = clamp(body.velocity.x, -32, 32); body.velocity.z = clamp(body.velocity.z, -32, 32); body.velocity.y = clamp(body.velocity.y, -22, 12);
@@ -444,6 +510,7 @@
     }
 
     reset(entity) {
+      if(aircraftModel(entity)){this._syncAircraft();return this.get(entity.id);}
       const entry = this._body(entity), body = entry.body;
       const pose = this._groundPose(entity.x, entity.y, entity.angle, body.shapes[0].halfExtents);
       body.position.set(entity.x / SCALE, pose.centreHeight, entity.y / SCALE);
@@ -490,6 +557,6 @@
       return ceiling;
     }
   }
-  root.MayhemVehiclePhysics = { VehicleWorld, height, personContact, SCALE };
+  root.MayhemVehiclePhysics = { VehicleWorld, height, personContact, quaternion, SCALE };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.MayhemVehiclePhysics;
 })(globalThis);

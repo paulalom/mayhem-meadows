@@ -45,7 +45,7 @@ Hosting serves each player their own game; it does not add multiplayer. Saves st
 | Hold right mouse | Aim on foot with a closer shoulder view and slower sensitivity |
 | Left-click | Fire the equipped popper/cannon or swing the hammer on foot |
 | C | Recenter the camera behind you |
-| E | Borrow/exit a nearby car; use the car wash |
+| E | Borrow/exit a nearby car or landed aircraft; use the car wash |
 | Space | Jump on foot; handbrake/drift while driving |
 | Hold Tab | Open the toy wheel; hover, use arrows, or press 1–3; release Tab to equip |
 | I | Open pockets to use supplies or shop for supplies and toys |
@@ -53,7 +53,9 @@ Hosting serves each player their own game; it does not add multiplayer. Saves st
 | Shift | Boost in a car; sprint on foot |
 | H | Horn; start a party at a party mission ring |
 | B / N | Previous / next vehicle radio station, including radio off |
-| F | Dramatic ragdoll flop on foot; stand up automatically |
+| F | Dramatic ragdoll flop on foot; parachute bailout from an aircraft |
+| Space / Ctrl in aircraft | Climb / descend; W/S controls plane throttle or helicopter forward/back movement, A/D turns |
+| Shift in aircraft | Plane boost; helicopter braking/hover assist |
 | R | Recover to a safe road position; right a flipped car |
 | P / Esc | Pause/resume; Esc also releases the mouse |
 
@@ -69,6 +71,10 @@ Compact, sports car, and van engines blend idle and loaded loops as you accelera
 - **Playable terrain:** the supplied grayscale PNG shapes the ground, including the northern ridge, river, and coast. The reference covers roughly 600 × 400 metres inside a 600-metre square world. Road grades are softened for arcade handling, buildings have level foundations, and bridges carry cars and pedestrians over the river. Walking, jumping, car bodies, ragdolls, aiming, and the camera use the same ground triangles. A splash returns you to a safe road.
 - **Central Station:** a west-bank railway enters from the north, branches into a two-track Docklands terminus, and continues to freight sidings. The station has solid platforms and canopies, buffers, a crossover between the platform tracks, a forecourt, and pedestrian access behind the buffers. River bridge approaches cross above the railway; quieter roads have open level-crossing gates. The depot has a solid roof and a marked helicopter landing pad. This update adds the infrastructure; scheduled moving trains are not implemented. The cleaned height-map export preserves the original water mask and untouched pixels; rebuild it with `npm run railway-heightmap`.
 - **Driving:** compact, sports car, and van handling; traffic; drifting and near-miss style points. Parked cars use clear roadside bays with access from the street. Cars are three-dimensional rigid bodies with gravity: impacts can bounce, lift, roll, or flip them before they land. Press R to right your ride and return to a safe road position.
+- **Aviation:** seven original Blender aircraft: the Bramble Skylark trainer, Mirth Islander commuter, civilian Pogo Whirlybird, Channel 6 news helicopter, Biscuit Air Patrol with a side-mounted cartoon cannon, Tumble Heavy Lift transport helicopter, and Fable Firefly fighter. Each uses the same flight handling for player and NPC pilots. The airport has level connected pavement, aircraft stands, helipads, queued runway movements and arrivals that go around an obstruction. Visiting military aircraft use a separate apron; a military base remains future content.
+- **Air jobs and hangars:** the airport button marks the route to your first aircraft. Fly passenger and cargo helicopter trips to the marina and downtown rooftop, follow a sightseeing route, or race through elevated gates. Land and stop for two seconds to load or unload. Three hangar slots preserve aircraft and component damage in local saves; retrieving an owned craft moves it instead of duplicating it. Airport repairs cost $75. G opens hangar management when near the apron; a Hangar tab is available for browsing anywhere.
+- **Flight and recovery:** planes have throttle, assisted banking, lift, stalls and landing damage; helicopters hover and climb directly. The flight camera keeps a stable horizon, and the HUD shows altitude above ground, throttle, landing and stall warnings. Extra surrounding airspace provides room for approaches. E exits only after landing; F deploys a steerable parachute. R returns an aircraft to an available stand without repairing it. Mouse look, radio, pause, mute and reduced motion also work in flight.
+- **Sky traffic and pursuit:** commuter flights board, taxi, take off, depart, return and land. News helicopters cover reported incidents independently of police. At maximum heat, a six-second warning precedes a single air patrol. Buildings and terrain block its sight; it searches the last confirmed location and returns to base after the pursuit. Its right-side cannon uses visible short bursts and a limited firing arc. Flying the patrol helicopter gives the player the same cannon; aim the camera to the right and hold left mouse to fire.
 - **Car stats and damage:** six fictional make/model combinations have their own acceleration, top speed, handling, grip and durability. The current-ride display and collection show live performance plus body, engine and handling health. Crashes damage civilian traffic and patrols as well as your ride; dents, cracked windows and engine smoke accompany the reduced power and grip. Critical damage ignites the engine, with an eight-second warning before a blast can shove nearby vehicles and tumble people. Press E to bail out of a burning ride, even at speed. Stop and use Repair Tape to extinguish it; garage repairs and the wash fully restore its systems. Saved rides retain their model and component damage. R rights your vehicle without repairing it.
 - **Jumping:** press Space on foot for a jump with gravity and a landing, including onto low solid surfaces. Holding Space does not repeatedly jump; left-click remains the toy action.
 - **Third-person camera:** mouse movement looks around on foot, with a closer shoulder view and slower sensitivity while aiming. The driving camera follows smoothly and gives you time to look around before returning behind the car. Buildings shorten the camera distance to keep the view clear. Press C whenever you want to recenter.
@@ -90,7 +96,7 @@ Contract timers determine bonuses. Finishing overtime still pays the base reward
 
 The toy wheel and pocket/collection menus freeze the town and mission timer. Browse your collection anywhere, then visit **GARAGE** on the minimap to make purchases or manage rides. Biscuits cost $15, tape costs $35, and refill packs cost $30. Press I or G again, or Escape, to close the menu. Touch driving remains outside this prototype.
 
-The [gameplay design](DESIGN.md) explains the intended loops, neighborhood layouts, tuning, scope, and next playtest questions. This is a small playable slice with simple traffic and patrol AI. Vehicles can leave the ground and rotate in three dimensions. On-foot jumping and ragdolls have vertical gravity. Fixed street/park obstacles have collision shapes. The hills and bridge routes are playable; building interiors, swimming, and aircraft are outside this prototype.
+The [gameplay design](DESIGN.md) explains the intended loops, neighborhood layouts, tuning, scope, and next playtest questions. This is a small playable slice with traffic, patrol and aviation AI. Vehicles can leave the ground and rotate in three dimensions. On-foot jumping and ragdolls have vertical gravity. Fixed street/park obstacles have collision shapes. The hills, bridges and airport are playable; building interiors, swimming and a military base remain outside this prototype.
 
 The original reference images are preserved in **assets/**. The attached height map is actually a **1536 × 1024, 8-bit RGB PNG**. Its grayscale values are imported into local numeric data in **height-data.js**; the game does not require image downloads or runtime image decoding. Elevations use an arcade scale rather than the map's printed mountain heights, with additional grading around roads and building pads.
 
@@ -128,6 +134,8 @@ npm run vendor
 | terrain.js | Shared ground triangles, softened road profiles, building pads and bridge surfaces |
 | core.js | Simulation, map, traffic, police, contracts, inventory, garage, rewards, and save validation |
 | vehicle-physics.js | Cannon vehicle bodies, gravity, orientation, elastic contacts, and fixed obstacle shapes |
+| aircraft.js | Shared arcade flight, airport traffic, news/police behavior and side-gun projectiles |
+| aircraft-models.js / assets/aircraft/ | Offline Blender mesh bundle, editable source, fleet preview and provenance |
 | physics.js | Ragdoll joints, gravity, contacts, and automatic get-up |
 | scene3d.js | Three.js world, models, perspective camera, lighting, and visual effects |
 | audio.js | Local music sequencer, vehicle radio, spatial engines/sirens, effects, and audio lifecycle |

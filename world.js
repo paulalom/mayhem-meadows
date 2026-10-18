@@ -335,17 +335,58 @@
     const railway=Railway.createRailway();
     Railway.crossings(railway,roads);
     const buildings = [], blocks = [], staticObjects = [];
-
     const targets = { heights: 26, works: 24, market: 42, riverfront: 16, willow: 42, orchard: 8, ridge:4, marsh:0 };
     const counts = Object.fromEntries(Object.keys(targets).map(id => [id, 0]));
     const styles = { heights:'cottage',works:'warehouse',market:'shop',riverfront:'cafe',willow:'cottage',orchard:'hangar',ridge:'cottage',marsh:'cottage' };
     const names = { heights:['Scone House','Crumb Cottage','Old Market House'],works:['Waffle Works','Fudge Factory','Disco Depot'],market:['Biscuit Bank','The Noodle Hut','Bean Palace','Sprinkle Shop'],riverfront:['Crumb Café','The Boathouse','Beach Snacks'],willow:['Willow House','Foxglove Cottage','Lavender Lodge'],orchard:['Sprinkle Hangar','Confetti Air Terminal','Biscuit Air Cargo'],ridge:['Eagle Lodge','Pine Chalet'],marsh:['Tidewell Lodge'] };
     const villageGreens=[{id:'willow-village-green',district:'willow',x:7460,y:2070,w:280,h:260},
       {id:'downtown-green',district:'market',x:6230,y:4080,w:200,h:150}];
-    const airport={runways:[{id:'airport-runway',x:11020,y:2450,w:160,h:1950,angle:0,role:'runway'}],
-      taxiways:[{id:'airport-taxiway',x:10750,y:2520,w:90,h:1850,angle:0,role:'taxiway'}],
-      aprons:[{id:'airport-apron',x:10440,y:3350,w:310,h:650,angle:0,role:'apron'}]};
-    const protectedPads=[...airport.runways,...airport.taxiways,...airport.aprons];
+    // Aircraft use the same world coordinates as roads (20 units per metre).
+    // The 20-metre runway, continuous taxi loop and generous stand spacing fit
+    // the small aircraft without wings crossing parked neighbors or buildings.
+    const airport={id:'meadows-airport',label:'Meadows Airport',departureThresholdId:'runway-south',
+      runways:[{id:'airport-runway',x:10860,y:2300,w:400,h:2200,angle:0,role:'runway',
+        thresholds:[{id:'runway-north',x:11060,y:2440,angle:Math.PI/2},{id:'runway-south',x:11060,y:4360,angle:-Math.PI/2}]}],
+      taxiways:[{id:'airport-taxiway',x:10670,y:2440,w:150,h:2060,angle:0,role:'taxiway'},
+        {id:'airport-taxiway-north',x:10745,y:2440,w:315,h:150,angle:0,role:'taxiway'},
+        {id:'airport-taxiway-south',x:10745,y:4285,w:315,h:150,angle:0,role:'taxiway'}],
+      aprons:[{id:'airport-apron',x:10310,y:2840,w:530,h:2000,angle:0,role:'apron'},
+        {id:'airport-visiting-apron',x:10310,y:1870,w:530,h:970,angle:0,role:'apron'},
+        {id:'airport-air-taxi-apron',x:10025,y:4090,w:285,h:260,angle:0,role:'apron'},
+        {id:'airport-storage-apron',x:10135,y:4350,w:420,h:720,angle:0,role:'apron'}],
+      walkways:[{id:'airport-pedestrian-access',x:10200,y:3388,w:70,h:24,angle:0,role:'walkway'},
+        {id:'airport-pedestrian-bend',x:10258,y:3400,w:24,h:212,angle:0,role:'walkway'},
+        {id:'airport-pedestrian-boarding',x:10270,y:3600,w:170,h:24,angle:0,role:'walkway'}],
+      pedestrianRoute:[{x:10200,y:3400},{x:10270,y:3400},{x:10270,y:3612},{x:10440,y:3612}],
+      helipads:[{id:'airport-helipad',label:'AIR TAXI',x:10435,y:3730,radius:110,aircraftType:'helicopter'},
+        {id:'news-helipad',label:'MEADOWS NEWS',x:10435,y:3980,radius:110,aircraftType:'news'},
+        {id:'police-helipad',label:'POLICE AIR',x:10405,y:4230,radius:110,aircraftType:'policeheli'},
+        {id:'air-taxi-return',label:'AIR TAXI ARRIVALS',x:10160,y:4220,radius:115,aircraftType:'helicopter',airTaxi:true,noSpawn:true}],
+      stands:[{id:'trainer-1',label:'TRAINER 1',x:10485,y:2900,angle:0,type:'plane',kind:'trainer',aircraftType:'trainer'},
+        {id:'trainer-2',label:'TRAINER 2',x:10485,y:3140,angle:0,type:'plane',kind:'trainer',aircraftType:'trainer'},
+        {id:'commuter-1',label:'COMMUTER',x:10430,y:3430,angle:0,type:'plane',kind:'commuter',aircraftType:'commuter'}],
+      militaryStands:[{id:'military-heli-visitor',label:'VISITING HEAVY LIFT',x:10550,y:2110,angle:0,radius:190,
+        type:'helicopter',kind:'transportheli',aircraftType:'transportheli'},
+        {id:'military-fighter-visitor',label:'VISITING JET',x:10450,y:2600,angle:-Math.PI/2,
+          type:'plane',kind:'fighter',aircraftType:'fighter'}],
+      storageStands:[{id:'airport-storage-1',label:'HANGAR RESERVE 1',x:10330,y:4530,angle:0,type:'any',noSpawn:true},
+        {id:'airport-storage-2',label:'HANGAR RESERVE 2',x:10330,y:4890,angle:0,type:'any',noSpawn:true}],
+      taxiNodes:[{id:'taxi-north',x:10745,y:2515},{id:'taxi-apron',x:10745,y:3670},
+        {id:'taxi-south',x:10745,y:4360},{id:'runway-entry',x:11060,y:4360}],
+      approachCorridors:[{id:'airport-approach',x:10840,y:200,w:440,h:5700,angle:0,role:'approach'}]};
+    for(const pad of airport.helipads)Object.assign(pad,{w:pad.radius*2,h:pad.radius*2,angle:0});
+    airport.taxiRoutes=[...airport.stands,...airport.militaryStands.filter(stand=>stand.type==='plane')].map(stand=>({id:'taxi-'+stand.id,standId:stand.id,thresholdId:'runway-south',
+      points:[{x:stand.x,y:stand.y},{x:10745,y:stand.y},{x:10745,y:4360},{x:11060,y:4360,angle:-Math.PI/2}]}));
+    const townHelipads=[{id:'marina-helipad',label:'MARINA AIR TAXI',x:3040,y:4740,radius:110,w:220,h:220,angle:0},
+      {id:'downtown-rooftop',label:'DOWNTOWN SKYPORT',x:7070,y:4470,radius:100,w:200,h:200,angle:0,rooftop:true,buildingId:'aviation-rooftop-building'}];
+    const rooftopLot={x:6930,y:4330,w:280,h:280,angle:0};
+    const padBox=pad=>({x:pad.x-pad.radius,y:pad.y-pad.radius,w:pad.radius*2,h:pad.radius*2,angle:pad.angle||0});
+    const marinaRoad=network.nearestRoad(townHelipads[0]);
+    townHelipads[0].accessRoute=[{x:marinaRoad.x,y:marinaRoad.y},{x:3040,y:4740}];
+    const marinaAccessLength=distance(townHelipads[0],marinaRoad),marinaAccessAngle=heading(townHelipads[0],marinaRoad);
+    const marinaAccess={x:(3040+marinaRoad.x-marinaAccessLength)/2,y:(4740+marinaRoad.y)/2-26,w:marinaAccessLength,h:52,angle:marinaAccessAngle,role:'walkway'};
+    const protectedPads=[...airport.runways,...airport.taxiways,...airport.aprons,...airport.walkways,
+      ...airport.approachCorridors,rooftopLot,padBox(townHelipads[0]),marinaAccess];
     const onLand=point=>point.x>=100&&point.y>=100&&point.x<=MAP_WIDTH-100&&point.y<=MAP_HEIGHT-100&&!HeightData.isWaterRaw(point.x,point.y,MAP_WIDTH,MAP_HEIGHT);
     // Sample whole oriented footprints, including their interiors: a building
     // must never straddle a narrow water channel hidden between its corners.
@@ -422,6 +463,17 @@
         addLot(street, s, pass % 2 ? -1 : 1); addLot(street, s + 40, pass % 2 ? 1 : -1);
       }
     }
+    // A broad, flat roof gives helicopter jobs a genuine landing destination.
+    // Keep it in the shared building list so collision and camera occlusion use
+    // exactly the same physical roof that the aircraft pilot sees.
+    const rooftopFront=network.nearestRoad(townHelipads[1]);
+    const rooftopBuilding={id:'aviation-rooftop-building',blockId:'aviation-rooftop',district:'market',
+      x:6950,y:4350,w:240,h:240,angle:0,height:14,style:'office',color:'#90b9c5',name:'Meadows Skyport',
+      roadId:rooftopFront.roadId,roadS:rooftopFront.s,frontAngle:Math.PI/2};
+    buildings.push(rooftopBuilding);
+    blocks.push({...rooftopLot,id:'aviation-rooftop',district:'market',kind:'shops',landUse:'market',
+      mapColor:DISTRICTS.market.mapColor,points:footprintCorners(rooftopLot),buildings:[rooftopBuilding],
+      garden:{...rooftopLot},courtyard:null,driveway:{x:7050,y:4590,w:40,h:20,angle:0},density:240*240/(280*280)});
     for(const building of railway.buildings) {
       const point=network.nearestRoad({x:building.x+building.w/2,y:building.y+building.h/2});
       building.blockId=building.id+'-lot';building.roadId=point.roadId;building.roadS=point.s;
@@ -554,7 +606,8 @@
       suburbs:[anchor('willow-green'),anchor('orchard-green')],
       byName:Object.fromEntries(nodes.map(point=>[point.id,anchor(point.id)]))
     };
-    const landscape={airport,greens:villageGreens,riverPath:[],hills:[],meadow:[],
+    const landscape={airport,helipads:townHelipads,airspace:{minX:-12000,minY:-12000,maxX:24000,maxY:20000,
+        ceiling:900,cruiseAltitude:60,departureAltitude:100},greens:villageGreens,riverPath:[],hills:[],meadow:[],
       landmarks:[{id:'eagle-peak',label:'EAGLE PEAK',...anchor('eagle-peak')},{id:'vista',label:'VISTA POINT',...anchor('vista')},
         {id:'marina',label:'MARINA',...anchor('marina-gate')},{id:'marsh',label:'TIDEWELL MARSH',...anchor('marsh-lookout')}],
       beach:{x:2480,y:4520,w:280,h:420,angle:-.42},mountainRoads:roads.filter(road=>road.district==='ridge').map(road=>road.id)};
@@ -570,6 +623,14 @@
     }
     result.terrain=Terrain.createTerrain(result);
     railway.helipad.elevation=railway.buildings[1].elevation+railway.buildings[1].height+.05;
+    airport.elevation=result.terrain.surfaceHeight(11060,3400);
+    for(const rect of [...airport.runways,...airport.taxiways,...airport.aprons,...airport.walkways])
+      rect.elevation=result.terrain.surfaceHeight(rect.x+rect.w/2,rect.y+rect.h/2);
+    for(const point of [...airport.stands,...airport.militaryStands,...airport.storageStands,...airport.helipads,...airport.pedestrianRoute,...airport.taxiNodes,...airport.runways[0].thresholds,...townHelipads]) {
+      const building=point.buildingId&&buildings.find(building=>building.id===point.buildingId);
+      point.elevation=building?building.elevation+building.height+.05:result.terrain.surfaceHeight(point.x,point.y);
+    }
+    for(const route of airport.taxiRoutes)for(const point of route.points)point.elevation=result.terrain.surfaceHeight(point.x,point.y);
     return result;
   }
 

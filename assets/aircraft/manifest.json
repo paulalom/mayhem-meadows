@@ -1,0 +1,73 @@
+{
+  "author": "Mayhem Meadows",
+  "license": "MIT",
+  "source": "aircraft-workshop.blend",
+  "generator": "../../tools/export-aircraft.py",
+  "units": "metres",
+  "coordinates": "+X forward; +Y up; +Z starboard",
+  "airframes": {
+    "trainer": {
+      "name": "Meadowlark trainer",
+      "bounds": {
+        "length": 7.1,
+        "height": 3.05,
+        "width": 10.58
+      },
+      "triangles": 892
+    },
+    "commuter": {
+      "name": "Cloudliner commuter",
+      "bounds": {
+        "length": 12.85,
+        "height": 5.1,
+        "width": 16.6
+      },
+      "triangles": 1148
+    },
+    "helicopter": {
+      "name": "Firefly civilian helicopter",
+      "bounds": {
+        "length": 11.184,
+        "height": 3.256,
+        "width": 10.208
+      },
+      "triangles": 1052
+    },
+    "news": {
+      "name": "Channel Six news helicopter",
+      "bounds": {
+        "length": 11.184,
+        "height": 3.256,
+        "width": 10.208
+      },
+      "triangles": 1288
+    },
+    "policeheli": {
+      "name": "Patrol police helicopter",
+      "bounds": {
+        "length": 11.184,
+        "height": 3.256,
+        "width": 10.208
+      },
+      "triangles": 1460
+    },
+    "transportheli": {
+      "name": "Atlas transport helicopter",
+      "bounds": {
+        "length": 17.18,
+        "height": 5.0,
+        "width": 14.206
+      },
+      "triangles": 1356
+    },
+    "fighter": {
+      "name": "Kestrel interceptor",
+      "bounds": {
+        "length": 14.2,
+        "height": 4.35,
+        "width": 10.22
+      },
+      "triangles": 952
+    }
+  }
+}

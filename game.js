@@ -11,12 +11,17 @@
   let muted = false, reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
   let audioSettings = normalizeSettings(), saveBlocked = false, toastUntil = 0, hudElapsed = 0, saveElapsed = 0;
   let width = 960, height = 650, scene = null, renderedFrames = 0, graphicsFailed = false;
-  let cameraSensitivity = 1, cameraInvertY = false, aiming = false;
+  let cameraSensitivity = 1, cameraInvertY = false, aiming = false, firing = false;
   let mouseLockPending = false, intentionalUnlock = false;
-  let wheelOpen = false, wheelIndex = 0, inventoryView = null, garageSignature = '';
+  let wheelOpen = false, wheelIndex = 0, inventoryView = null, garageSignature = '', hangarSignature = '', navigationTarget = null;
   const toyIds = ['popper', 'hammer', 'cannon'];
   const money = n => '$' + Math.round(n).toLocaleString();
-  const vehicleName = vehicle => { const model = VehicleStats.getModel(vehicle); return model.make + ' ' + model.model; };
+  const isAircraft = vehicle => vehicle?.kind === 'aircraft';
+  const aircraftModel = vehicle => MayhemAircraft.getModel(vehicle);
+  const isHelicopter = vehicle => isAircraft(vehicle) && aircraftModel(vehicle).class === 'helicopter';
+  const vehicleName = vehicle => { const model = isAircraft(vehicle) ? aircraftModel(vehicle) : VehicleStats.getModel(vehicle); return model.name || model.make + ' ' + model.model; };
+  const aircraftCondition = vehicle => clamp((vehicle.health ?? 100) / (vehicle.maxHealth || aircraftModel(vehicle).maxHealth || 100), 0, 1);
+  const aircraftStatus = vehicle => vehicle.exploded || vehicle.health <= 0 ? 'Needs hangar recovery' : vehicle.burning ? 'ENGINE FIRE · F to parachute' : vehicle.stalled ? 'STALL · lower nose / add throttle' : vehicle.stallWarning ? 'LOW AIRSPEED · add throttle' : (vehicle.flightPhase || vehicle.phase || (vehicle.grounded ? 'parked' : 'cruise')).replaceAll('-', ' ').toUpperCase();
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   const inventoryBusy = () => wheelOpen || inventoryView !== null;
@@ -60,7 +65,8 @@
     else audio.play(name, game, details);
   }
   function movementInput() {
-    return { up: keys.has('KeyW') || keys.has('ArrowUp'), down: keys.has('KeyS') || keys.has('ArrowDown'), left: keys.has('KeyA') || keys.has('ArrowLeft'), right: keys.has('KeyD') || keys.has('ArrowRight'), boost: keys.has('ShiftLeft') || keys.has('ShiftRight'), brake: keys.has('Space') };
+    const climb = keys.has('Space'), descend = keys.has('ControlLeft') || keys.has('ControlRight'), shift = keys.has('ShiftLeft') || keys.has('ShiftRight');
+    return { up: keys.has('KeyW') || keys.has('ArrowUp'), down: keys.has('KeyS') || keys.has('ArrowDown'), left: keys.has('KeyA') || keys.has('ArrowLeft'), right: keys.has('KeyD') || keys.has('ArrowRight'), boost: shift, brake: climb, climb, ascend: climb, jump: climb, descend, crouch: descend, hover: shift, fire: firing, aimAngle: scene?.viewYaw ?? game.current.angle, aimPitch: scene?.viewPitch ?? 0 };
   }
   function updateAudio(dt = 0) {
     audio.update(game, { active: playActive(), allowUI: uiAudioActive(), viewYaw: scene?.viewYaw ?? game.current.angle, input: movementInput(), dt });
@@ -120,7 +126,7 @@
     scene?.setAiming(aiming);
   }
   function releaseMouse() {
-    setAim(false); keys.clear();
+    setAim(false); keys.clear(); firing = false;
     if (mouseLocked()) { intentionalUnlock = true; document.exitPointerLock(); }
   }
   function lockMouse() {
@@ -172,7 +178,7 @@
       keys.clear();
       if (!playActive()) releaseMouse();
     } else {
-      setAim(false); keys.clear();
+      setAim(false); keys.clear(); firing = false;
       if (!intentionalUnlock && playActive()) setPause(true);
       intentionalUnlock = false;
     }
@@ -238,15 +244,12 @@
     closeWheel(false, false); keys.clear(); releaseMouse();
     if (inventoryView !== view) $('inventory-screen').querySelector('.inventory-scroll').scrollTop = 0;
     inventoryView = view; $('inventory-screen').hidden = false;
-    $('pockets-panel').hidden = view !== 'pockets';
-    $('collection-panel').hidden = view !== 'garage';
-    $('pockets-tab').setAttribute('aria-selected', String(view === 'pockets'));
-    $('collection-tab').setAttribute('aria-selected', String(view === 'garage'));
-    $('pockets-tab').tabIndex = view === 'pockets' ? 0 : -1;
-    $('collection-tab').tabIndex = view === 'garage' ? 0 : -1;
-    $('inventory-title').textContent = view === 'pockets' ? 'Pockets full of possibilities.' : 'Your questionable collection.';
+    for (const [name, panel, tab] of [['pockets', 'pockets-panel', 'pockets-tab'], ['garage', 'collection-panel', 'collection-tab'], ['hangar', 'hangar-panel', 'hangar-tab']]) {
+      $(panel).hidden = view !== name; $(tab).setAttribute('aria-selected', String(view === name)); $(tab).tabIndex = view === name ? 0 : -1;
+    }
+    $('inventory-title').textContent = view === 'pockets' ? 'Pockets full of possibilities.' : view === 'hangar' ? 'A little more altitude.' : 'Your questionable collection.';
     renderInventory();
-    $(view === 'pockets' ? 'pockets-tab' : 'collection-tab').focus({ preventScroll: true });
+    $(view === 'pockets' ? 'pockets-tab' : view === 'hangar' ? 'hangar-tab' : 'collection-tab').focus({ preventScroll: true });
     updateAudio();
     if (previousView !== view) sound(previousView ? 'menu-select' : 'menu-open');
   }
@@ -258,7 +261,7 @@
     $('garage-count').textContent = records.length + ' / 3 rides';
     $('garage-empty').hidden = records.length !== 0;
     const currentSaved = records.some(record => record.id === game.current.garageId);
-    $('store-car').disabled = !game.garageAvailable || !game.player.vehicleId || currentSaved || records.length >= 3;
+    $('store-car').disabled = !game.garageAvailable || !game.player.vehicleId || isAircraft(game.current) || currentSaved || records.length >= 3;
     $('store-car').textContent = currentSaved ? 'Ride already saved' : records.length >= 3 ? 'Garage full · release a slot' : 'Save current ride';
     const signature = JSON.stringify([records, game.garageAvailable, game.money, game.maxHealth]);
     if (signature === garageSignature) return;
@@ -299,12 +302,38 @@
       (replacement || $('collection-tab')).focus({ preventScroll: true });
     }
   }
+  function renderHangar() {
+    const records = game.hangar?.aircraft || [], available = game.hangarAvailable === true;
+    $('hangar-count').textContent = records.length + ' / 3 aircraft';
+    $('hangar-empty').hidden = records.length !== 0;
+    const currentSaved = records.some(record => record.id === game.current.hangarId);
+    $('store-aircraft').disabled = !available || !isAircraft(game.current) || currentSaved || records.length >= 3;
+    $('store-aircraft').textContent = currentSaved ? 'Aircraft already saved' : records.length >= 3 ? 'Hangar full · release a slot' : 'Save current aircraft';
+    const signature = JSON.stringify([records, (game.aircraft || []).map(aircraft => [aircraft.id, aircraft.hangarId, aircraft.health, aircraft.engineHealth]), available, game.money]);
+    if (signature === hangarSignature) return;
+    hangarSignature = signature;
+    const fragment = document.createDocumentFragment();
+    for (const record of records) {
+      const deployed = game.aircraft?.find(aircraft => aircraft.hangarId === record.id), aircraft = { ...record, ...deployed, kind: 'aircraft' };
+      const card = document.createElement('article'); card.className = 'saved-car';
+      const heading = document.createElement('h3'); heading.className = 'saved-car-name'; heading.textContent = vehicleName(aircraft);
+      const condition = document.createElement('p'); condition.className = 'saved-car-condition'; condition.textContent = Math.round(aircraftCondition(aircraft) * 100) + '% airframe · ' + Math.round(aircraft.engineHealth ?? 100) + '% engine · ' + aircraftModel(aircraft).seats + ' seats';
+      const actions = document.createElement('div'); actions.className = 'saved-car-actions';
+      const damaged = aircraftCondition(aircraft) < 1 || aircraft.engineHealth < 100 || aircraft.burning || aircraft.exploded;
+      for (const [action, label, disabled] of [['retrieve', 'Bring to stand ↗', !available || aircraft.health <= 0 || aircraft.burning || aircraft.exploded], ['repair', 'Service · $75', !available || !damaged || game.money < 75], ['release', 'Release slot', !available]]) {
+        const button = document.createElement('button'); button.type = 'button'; button.className = 'inventory-action'; button.dataset.hangarAction = action; button.dataset.aircraftId = record.id; button.textContent = label; button.disabled = Boolean(disabled); actions.append(button);
+      }
+      card.append(heading, condition, actions); fragment.append(card);
+    }
+    $('hangar-aircraft').replaceChildren(fragment);
+  }
   function renderInventory() {
     if (!inventoryView) return;
     const available = game.garageAvailable, fallen = !!game.physics?.get('player');
-    $('inventory-location').textContent = available ? 'At Sprinkle Garage · supplies, toys and car care are open.' : 'Browse anywhere. Visit Sprinkle Garage and stop to shop or manage rides.';
-    $('inventory-location').dataset.available = String(available);
-    $('inventory-location').classList.toggle('available', available);
+    const atService = inventoryView === 'hangar' ? game.hangarAvailable === true : available;
+    $('inventory-location').textContent = inventoryView === 'hangar' ? (atService ? 'At the airfield · store, retrieve or service your aircraft.' : 'Browse anywhere. Land and stop at the airport apron to manage aircraft.') : available ? 'At Sprinkle Garage · supplies, toys and car care are open.' : 'Browse anywhere. Visit Sprinkle Garage and stop to shop or manage rides.';
+    $('inventory-location').dataset.available = String(atService);
+    $('inventory-location').classList.toggle('available', atService);
     for (const id of Object.keys(POCKET_ITEMS)) {
       const definition = POCKET_ITEMS[id], count = game.inventory.pockets[id];
       const card = document.querySelector('[data-pocket="' + id + '"]');
@@ -325,16 +354,20 @@
       button.disabled = owned || !available || game.money < GADGETS[id].price;
     });
     renderGarage();
+    renderHangar();
   }
   function inventoryAction(action) {
     action(); events(); save(); renderInventory(); hud();
   }
   $('inventory-toggle').addEventListener('click', () => openInventory('pockets'));
   $('garage-toggle').addEventListener('click', () => openInventory('garage'));
+  $('hangar-toggle').addEventListener('click', () => openInventory('hangar'));
   $('close-inventory').addEventListener('click', () => closeInventory());
   $('pockets-tab').addEventListener('click', () => openInventory('pockets'));
   $('collection-tab').addEventListener('click', () => openInventory('garage'));
+  $('hangar-tab').addEventListener('click', () => openInventory('hangar'));
   $('store-car').addEventListener('click', () => inventoryAction(() => game.garageStore()));
+  $('store-aircraft').addEventListener('click', () => inventoryAction(() => game.hangarStore()));
   $('inventory-screen').addEventListener('click', event => {
     const button = event.target.closest('button'); if (!button || button.disabled) return;
     if (button.dataset.usePocket) inventoryAction(() => game.usePocket(button.dataset.usePocket));
@@ -344,6 +377,12 @@
     if (button.dataset.paintCar) inventoryAction(() => game.garagePaint(button.dataset.paintCar, button.dataset.color));
     if (button.dataset.repairCar) inventoryAction(() => game.garageRepair(button.dataset.repairCar));
     if (button.dataset.releaseCar) inventoryAction(() => game.garageRelease(button.dataset.releaseCar));
+    if (button.dataset.hangarAction) inventoryAction(() => {
+      const id = button.dataset.aircraftId;
+      if (button.dataset.hangarAction === 'retrieve' && game.hangarRetrieve(id)) { closeInventory(); scene?.recenter(); }
+      if (button.dataset.hangarAction === 'repair') game.hangarRepair(id);
+      if (button.dataset.hangarAction === 'release') game.hangarRelease(id);
+    });
   });
   document.querySelectorAll('.wheel-option').forEach(button => {
     button.addEventListener('pointerenter', () => { if (wheelOpen && !button.disabled) { const previous = wheelIndex; wheelIndex = toyIds.indexOf(button.dataset.gadget); renderWheel(); if (wheelIndex !== previous) sound('menu-select'); } });
@@ -401,13 +440,24 @@
   document.querySelectorAll('.contract-button').forEach(button => button.addEventListener('click', () => {
     if (!started) start();
     if (paused || inventoryBusy() || !$('help-screen').hidden) { toast('Resume the game to accept a gig.'); return; }
-    game.acceptMission(button.dataset.mission); events(); canvas.focus();
+    if (['airtaxi', 'aircargo', 'sightseeing', 'airrace'].includes(button.dataset.mission)) game.startMission(button.dataset.mission);
+    else game.acceptMission(button.dataset.mission);
+    events(); canvas.focus();
   }));
   document.querySelectorAll('.purchase-button').forEach(button => button.addEventListener('click', () => {
     if (!started || paused || inventoryBusy() || !$('help-screen').hidden) { toast('Visit a garage while playing to buy a tune-up.'); return; }
     game.purchase(button.dataset.upgrade); events(); save(); canvas.focus();
   }));
   $('abandon-button').addEventListener('click', () => { if (!paused && !inventoryBusy() && started) { game.abandonMission(); events(); canvas.focus(); } });
+  $('airport-route').addEventListener('click', () => {
+    const airport = game.world.landscape?.airport || game.world.airport;
+    const pad = airport?.helipads?.[0];
+    if (!pad) return;
+    navigationTarget = { x: pad.x, y: pad.y, name: 'Meadows Airport' };
+    if (!started) start();
+    toast('Airport marked on your compass. Follow Terminal Avenue to the airfield in the northeast.');
+    canvas.focus(); hud();
+  });
   canvas.addEventListener('contextmenu', event => event.preventDefault());
   // Mouse edges fire for each button in a chord, including aim + fire.
   canvas.addEventListener('mousedown', event => {
@@ -416,15 +466,15 @@
     event.preventDefault();
     if (!mouseLocked()) { lockMouse(); return; }
     if (event.button === 2) setAim(true);
-    if (event.button === 0) useToy();
+    if (event.button === 0) { firing = isAircraft(game.current); useToy(); }
   });
   canvas.addEventListener('pointermove', event => {
     if (mouseLocked() && playActive()) scene?.orbit(event.movementX, event.movementY, { sensitivity: cameraSensitivity * (aiming ? 0.55 : 1), invertY: cameraInvertY });
   });
-  window.addEventListener('mouseup', event => { if (event.button === 2) setAim(false); });
-  canvas.addEventListener('pointercancel', () => setAim(false));
+  window.addEventListener('mouseup', event => { if (event.button === 2) setAim(false); if (event.button === 0) firing = false; });
+  canvas.addEventListener('pointercancel', () => { setAim(false); firing = false; });
   window.addEventListener('keydown', event => {
-    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.metaKey || event.altKey || (event.ctrlKey && !isAircraft(game.current))) return;
     if (event.code === 'Escape' && !$('help-screen').hidden) { event.preventDefault(); closeHelp(); return; }
     if (!started || !$('help-screen').hidden) return;
     if (wheelOpen) {
@@ -441,11 +491,14 @@
     if (inventoryView) {
       if (document.activeElement?.getAttribute('role') === 'tab' && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.code)) {
         event.preventDefault();
-        if (!event.repeat) openInventory(event.code === 'Home' ? 'pockets' : event.code === 'End' ? 'garage' : inventoryView === 'pockets' ? 'garage' : 'pockets');
+        if (!event.repeat) {
+          const views = ['pockets', 'garage', 'hangar'], direction = event.code === 'ArrowLeft' ? -1 : 1;
+          openInventory(event.code === 'Home' ? 'pockets' : event.code === 'End' ? 'hangar' : views[(views.indexOf(inventoryView) + direction + views.length) % views.length]);
+        }
       } else if (event.code === 'Escape' || event.code === 'KeyI' || event.code === 'KeyG') {
         event.preventDefault();
         if (!event.repeat) {
-          const requested = event.code === 'KeyI' ? 'pockets' : event.code === 'KeyG' ? 'garage' : null;
+          const requested = event.code === 'KeyI' ? 'pockets' : event.code === 'KeyG' ? (game.hangarAvailable ? 'hangar' : 'garage') : null;
           if (!requested || requested === inventoryView) closeInventory(); else openInventory(requested);
         }
       } else if (event.code === 'Tab') {
@@ -461,8 +514,8 @@
     }
     if (paused || graphicsFailed || document.activeElement !== canvas) return;
     if (event.code === 'Tab') { event.preventDefault(); if (!event.repeat) openWheel(); return; }
-    if (event.code === 'KeyI' || event.code === 'KeyG') { event.preventDefault(); if (!event.repeat) openInventory(event.code === 'KeyI' ? 'pockets' : 'garage'); return; }
-    const controlled = ['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight','Space','KeyE','KeyH','KeyR','KeyC','KeyF','KeyB','KeyN'];
+    if (event.code === 'KeyI' || event.code === 'KeyG') { event.preventDefault(); if (!event.repeat) openInventory(event.code === 'KeyI' ? 'pockets' : game.hangarAvailable ? 'hangar' : 'garage'); return; }
+    const controlled = ['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight','ControlLeft','ControlRight','Space','KeyE','KeyH','KeyR','KeyC','KeyF','KeyB','KeyN'];
     if (!controlled.includes(event.code)) return;
     event.preventDefault(); keys.add(event.code);
     if (!event.repeat) {
@@ -472,7 +525,7 @@
       if (event.code === 'KeyH') game.horn();
       if (event.code === 'KeyR') { game.recover(); setAim(false); scene?.recenter(); }
       if (event.code === 'KeyC') scene?.recenter();
-      if (event.code === 'KeyF') { if (game.flop()) { keys.clear(); setAim(false); } }
+      if (event.code === 'KeyF') { if (isAircraft(game.current) ? game.bailOut() : game.flop()) { keys.clear(); firing = false; setAim(false); } }
       if (event.code === 'KeyB') cycleRadio(-1);
       if (event.code === 'KeyN') cycleRadio(1);
       updateAudio(); radioUI();
@@ -532,7 +585,27 @@
     drawMinimap();
   }
   new ResizeObserver(resize).observe(canvas); resize();
-  function target() { return game.mission?.targets?.[game.mission.targetIndex]; }
+  function target() { return game.mission?.targets?.[game.mission.targetIndex] || navigationTarget; }
+  function drawAircraftMarker(aircraft, scale, w, h) {
+    const controlled = game.player.vehicleId === aircraft.id, helicopter = isHelicopter(aircraft);
+    const x = clamp(aircraft.x * scale, 5, w - 5), y = clamp(aircraft.y * scale, 5, h - 5);
+    const altitude = Math.max(0, aircraft.altitudeAGL ?? aircraft.agl ?? 0);
+    mini.save(); mini.translate(x, y);
+    mini.strokeStyle = controlled ? '#fff8d9' : aircraft.aircraftType === 'policeheli' ? '#ff8294' : aircraft.aircraftType === 'news' ? '#f5d96c' : '#70e6db';
+    mini.fillStyle = mini.strokeStyle; mini.lineWidth = controlled ? 1.6 : 1;
+    if (altitude > 2) { mini.globalAlpha = 0.35; mini.beginPath(); mini.arc(0, 0, controlled ? 7 : 5, 0, Math.PI * 2); mini.stroke(); mini.globalAlpha = 1; }
+    mini.save(); mini.rotate(aircraft.angle || 0);
+    if (helicopter) {
+      mini.beginPath(); mini.ellipse(0, 0, 2.5, 1.7, 0, 0, Math.PI * 2); mini.fill();
+      mini.beginPath(); mini.moveTo(-5, 0); mini.lineTo(4, 0); mini.moveTo(0, -4); mini.lineTo(0, 4); mini.stroke();
+    } else {
+      mini.beginPath(); mini.moveTo(5, 0); mini.lineTo(-3, -2); mini.lineTo(-2, 0); mini.lineTo(-3, 2); mini.closePath(); mini.fill();
+      mini.beginPath(); mini.moveTo(0, -5); mini.lineTo(0, 5); mini.moveTo(-3, -2.5); mini.lineTo(-3, 2.5); mini.stroke();
+    }
+    mini.restore();
+    if (altitude > 12) { mini.beginPath(); mini.moveTo(6, 2); mini.lineTo(6, -2); mini.lineTo(4.5, -.5); mini.moveTo(6, -2); mini.lineTo(7.5, -.5); mini.stroke(); }
+    mini.restore();
+  }
   function drawMinimap() {
     const r = minimap.getBoundingClientRect(), w = r.width, h = r.height, scale = w / SIZE;
     mini.clearRect(0, 0, w, h); mini.fillStyle = '#608d76'; mini.fillRect(0, 0, w, h);
@@ -560,7 +633,6 @@
       mini.beginPath();track.points.forEach((point,i)=>i?mini.lineTo(point.x*scale,point.y*scale):mini.moveTo(point.x*scale,point.y*scale));mini.stroke();
     }
     mini.setLineDash([]);
-
     for (const building of game.buildings) {
       mini.save(); mini.translate((building.x + building.w / 2) * scale, (building.y + building.h / 2) * scale);
       mini.rotate(building.angle || 0);
@@ -568,11 +640,21 @@
       mini.restore();
     }
     for (const service of game.services) { mini.fillStyle = service.id === 'wash' ? '#70e6db' : '#e6f77c'; mini.fillRect(service.x * scale - 2, service.y * scale - 2, 4, 4); }
+    const airport = game.world.landscape?.airport || game.world.airport;
+    for (const runway of airport?.runways || []) {
+      mini.fillStyle = '#eef4dd'; mini.fillRect(runway.x * scale, runway.y * scale, Math.max(1.5, runway.w * scale), runway.h * scale);
+    }
+    for (const pad of airport?.helipads || []) {
+      mini.strokeStyle = '#70e6db'; mini.lineWidth = 0.8; mini.strokeRect(pad.x * scale - 2, pad.y * scale - 2, 4, 4);
+    }
     const t = target();
     if (t) { mini.strokeStyle = '#effa88'; mini.lineWidth = 2; mini.beginPath(); mini.arc(t.x * scale, t.y * scale, 5, 0, Math.PI * 2); mini.stroke(); }
     for (const police of game.police) { mini.fillStyle = game.heat ? '#ff8294' : '#a7cee4'; mini.beginPath(); mini.arc(police.x * scale, police.y * scale, 2, 0, Math.PI * 2); mini.fill(); }
-    mini.save(); mini.translate(game.current.x * scale, game.current.y * scale); mini.rotate(game.current.angle);
-    mini.fillStyle = '#fff8d9'; mini.beginPath(); mini.moveTo(6, 0); mini.lineTo(-4, -4); mini.lineTo(-3, 0); mini.lineTo(-4, 4); mini.closePath(); mini.fill(); mini.restore();
+    for (const aircraft of game.aircraft || []) if (aircraft.active !== false && aircraft.visible !== false && !aircraft.exploded) drawAircraftMarker(aircraft, scale, w, h);
+    if (!isAircraft(game.current)) {
+      mini.save(); mini.translate(clamp(game.current.x * scale, 5, w - 5), clamp(game.current.y * scale, 5, h - 5)); mini.rotate(game.current.angle);
+      mini.fillStyle = '#fff8d9'; mini.beginPath(); mini.moveTo(6, 0); mini.lineTo(-4, -4); mini.lineTo(-3, 0); mini.lineTo(-4, 4); mini.closePath(); mini.fill(); mini.restore();
+    }
   }
   function render(dt) {
     if (aiming && (!playActive() || !mouseLocked() || game.player.vehicleId || game.physics?.get('player'))) setAim(false);
@@ -591,6 +673,7 @@
     canvas.dataset.aiming = String(aiming);
     renderInventory();
     const fallen = game.physics?.get('player');
+    const flying = isAircraft(game.current), helicopter = flying && isHelicopter(game.current);
     canvas.dataset.ragdollCount = String(game.physics?.bodies.size || 0);
     canvas.dataset.playerRagdoll = fallen?.phase || 'none';
     canvas.dataset.playerRagdollAge = Number(fallen?.age || 0).toFixed(4);
@@ -611,18 +694,34 @@
     canvas.dataset.verticalVelocity = Number(game.current.verticalVelocity || 0).toFixed(3);
     canvas.dataset.grounded = String(game.current.grounded !== false);
     canvas.dataset.frames = String(renderedFrames);
-    $('aim-reticle').hidden = !playActive() || !mouseLocked() || !!game.player.vehicleId || !!fallen;
+    const armedAircraft = flying && game.current.aircraftType === 'policeheli';
+    $('aim-reticle').hidden = !playActive() || !mouseLocked() || (!!game.player.vehicleId && !armedAircraft) || !!fallen;
     $('aim-reticle').classList.toggle('aiming', aiming);
     $('mouse-hint').hidden = !playActive() || mouseLocked();
     $('game-shell').classList.toggle('aiming', aiming);
-    $('speed-value').textContent = game.player.vehicleId ? Math.round(Math.abs(game.current.speed || 0) * 3.6 / 20) + ' KM/H' : fallen ? (fallen.phase === 'recover' ? 'GETTING UP' : 'WHOOPS!') : 'ON FOOT';
-    $('speed-caption').textContent = game.player.vehicleId ? (game.current.upright === false ? 'R · RIGHT THIS RIDE' : 'SHIFT BOOST · SPACE DRIFT') : fallen ? 'R · SKIP THE DRAMA' : 'SPACE · JUMP   F · FLOP';
+    $('speed-value').textContent = game.player.vehicleId ? Math.round(Math.abs(game.current.speed || 0) * 3.6 / 20) + ' KM/H' : game.player.parachuting ? 'PARACHUTE' : fallen ? (fallen.phase === 'recover' ? 'GETTING UP' : 'WHOOPS!') : 'ON FOOT';
+    $('speed-caption').textContent = flying ? (helicopter ? 'SPACE CLIMB · CTRL DESCEND · SHIFT HOVER' : 'W/S THROTTLE · SPACE CLIMB · CTRL DESCEND') : game.player.vehicleId ? (game.current.upright === false ? 'R · RIGHT THIS RIDE' : 'SHIFT BOOST · SPACE DRIFT') : game.player.parachuting ? 'WASD · STEER TO A CLEAR LANDING' : fallen ? 'R · SKIP THE DRAMA' : 'SPACE · JUMP   F · FLOP';
+    $('flight-panel').hidden = !flying;
+    $('game-shell').classList.toggle('flying', flying);
+    if (flying) {
+      const aircraft = game.current, altitude = Math.max(0, aircraft.altitudeAGL ?? aircraft.agl ?? 0), throttle = clamp(aircraft.throttle || 0, 0, 1);
+      $('flight-speed').textContent = Math.round(Math.abs(aircraft.speed || 0) * 3.6 / 20) + ' km/h';
+      $('flight-altitude').textContent = Math.round(altitude) + ' m AGL';
+      $('flight-throttle').textContent = Math.round(throttle * 100) + '%';
+      $('flight-throttle-bar').style.width = throttle * 100 + '%';
+      $('flight-phase').textContent = aircraftStatus(aircraft);
+      const warning = aircraft.stalled ? 'STALL · W throttle, CTRL lower nose' : aircraft.stallWarning ? 'LOW AIRSPEED · increase throttle' : helicopter ? (altitude < 12 ? 'Land gently · stop before pressing E' : 'SHIFT steadies your hover') : aircraft.grounded ? 'W throttle → SPACE lift off' : altitude < 15 ? 'APPROACH · align runway, ease throttle' : 'A/D bank · F parachute · R recover';
+      $('flight-warning').textContent = warning; $('flight-warning').dataset.danger = String(!!(aircraft.stalled || aircraft.stallWarning || aircraft.burning));
+      canvas.dataset.aircraftType = aircraft.aircraftType; canvas.dataset.altitudeAgl = altitude.toFixed(2); canvas.dataset.throttle = throttle.toFixed(3); canvas.dataset.flightPhase = aircraft.flightPhase || aircraft.phase || '';
+    } else { delete canvas.dataset.aircraftType; delete canvas.dataset.altitudeAgl; delete canvas.dataset.throttle; delete canvas.dataset.flightPhase; }
     const t = target();
     $('target-compass').hidden = !t;
     if (t) {
       const bearing = Math.atan2(t.y - game.current.y, t.x - game.current.x) - (scene?.viewYaw ?? game.current.angle);
       $('target-arrow').style.transform = 'rotate(' + Math.atan2(Math.sin(bearing), Math.cos(bearing)) * 180 / Math.PI + 'deg)';
       $('target-distance').textContent = Math.round(dist(t, game.current) / 20) + 'm';
+      const targetGround = game.world.terrain?.surfaceHeight?.(t.x, t.y) || 0;
+      $('target-altitude').textContent = Number.isFinite(t.elevation) ? 'TARGET ' + Math.round(Math.max(0, t.elevation - targetGround)) + 'm AGL' : Number.isFinite(t.altitude) ? 'ALT ' + Math.round(t.altitude) + 'm' : t.name || '';
     }
     $('cash').textContent = money(game.money); $('score').textContent = Math.round(game.score).toLocaleString(); $('best').textContent = Math.round(Math.max(game.bestScore || 0, game.score)).toLocaleString();
     $('heat').textContent = '★'.repeat(game.heat) + '☆'.repeat(3 - game.heat);
@@ -632,17 +731,17 @@
     $('composure-bar').style.width = game.player.composure + '%';
     $('composure-meter')?.setAttribute('aria-valuenow', Math.round(game.player.composure));
     const car = game.player.vehicleId ? game.current : null;
-    const condition = car ? VehicleStats.condition(car) * 100 : 100;
+    const condition = car ? (flying ? aircraftCondition(car) : VehicleStats.condition(car)) * 100 : 100;
     const rideName = car ? vehicleName(car) : 'Fresh sneakers';
     $('ride-name').textContent = rideName; $('ride-name').title = rideName;
     $('ride-stats').hidden = !car;
     $('ride-health').hidden = !car;
-    $('ride-status').textContent = car ? VehicleStats.status(car) : 'Ready for a stroll';
+    $('ride-status').textContent = car ? flying ? aircraftStatus(car) : VehicleStats.status(car) : game.player.parachuting ? 'Parachute · steer to a clear landing' : 'Ready for a stroll';
     $('ride-status').dataset.danger = Boolean(car?.burning);
     if (car) {
-      const stats = VehicleStats.performance(car);
-      $('ride-stats').textContent = 'ACC ' + (stats.acceleration / 20).toFixed(1) + ' m/s² · TOP ' + Math.round(stats.maxSpeed * 3.6 / 20) + ' km/h · TURN ' + stats.handling.toFixed(1);
-      $('ride-health').textContent = 'ENGINE ' + Math.round(stats.engineHealth) + '% · HANDLING ' + Math.round(stats.handlingHealth) + '%';
+      const stats = flying ? aircraftModel(car) : VehicleStats.performance(car);
+      $('ride-stats').textContent = flying ? (helicopter ? 'HELICOPTER' : 'FIXED WING') + ' · TOP ' + Math.round(stats.maxSpeed * 3.6 / 20) + ' km/h · ' + stats.seats + ' SEATS' : 'ACC ' + (stats.acceleration / 20).toFixed(1) + ' m/s² · TOP ' + Math.round(stats.maxSpeed * 3.6 / 20) + ' km/h · TURN ' + stats.handling.toFixed(1);
+      $('ride-health').textContent = 'ENGINE ' + Math.round(flying ? car.engineHealth ?? 100 : stats.engineHealth) + '% · HANDLING ' + Math.round(flying ? car.handlingHealth ?? 100 : stats.handlingHealth) + '%';
     }
     $('ride-bar').style.width = condition + '%';
     $('ride-meter')?.setAttribute('aria-valuenow', Math.round(condition));
@@ -650,21 +749,28 @@
     const mission = game.mission;
     $('objective-title').textContent = mission?.title || 'Your town. Your terrible ideas.';
     const objective = target();
-    $('objective-detail').textContent = mission ? (mission.type === 'party' ? 'Drive to the ring. Press H to start the party.' : mission.stage === 'pickup' ? 'Reach the glowing ring to pick up the disco ball.' : mission.stage === 'dropoff' ? 'Deliver that disco ball to the glowing ring.' : 'Drive through the glowing rings in order.') : 'Borrow a ride with E, then pick a gig from Dispatch.';
+    const aerialMission = mission && ['airtaxi', 'aircargo', 'sightseeing', 'airrace'].includes(mission.type);
+    $('objective-detail').textContent = aerialMission ? (['airtaxi', 'aircargo'].includes(mission.type) ? 'HELICOPTER · ' + (objective?.name || 'Reach the marked pad') + '. Land and stop for 2 seconds.' : mission.type === 'sightseeing' && mission.targetIndex === mission.targets.length - 1 ? 'Return to the airport pad. Land and stop to finish.' : 'Fly through ' + (objective?.name || 'the elevated rings') + ' at the marked altitude.') : mission ? (mission.type === 'party' ? 'Drive to the ring. Press H to start the party.' : mission.stage === 'pickup' ? 'Reach the glowing ring to pick up the disco ball.' : mission.stage === 'dropoff' ? 'Deliver that disco ball to the glowing ring.' : 'Drive through the glowing rings in order.') : navigationTarget ? 'Follow the compass to Meadows Airport. E borrows a parked plane or helicopter.' : 'Borrow a ride with E. Find planes and helicopters at the airport in the northeast.';
     $('mission-time').textContent = mission ? (mission.timeLeft > 0 ? Math.ceil(mission.timeLeft) + 's bonus' : 'OVERTIME · finish for base pay') : 'FREE ROAM';
-    $('mission-progress').textContent = mission ? `${mission.targetIndex + 1}/${mission.targets.length} · ${Math.round(dist(objective, game.current) / 20)}m` : 'No rush. Cause a little joy.';
+    $('mission-progress').textContent = mission ? `${mission.targetIndex + 1}/${mission.targets.length} · ${Math.round(dist(objective, game.current) / 20)}m` + (mission.type === 'airtaxi' ? ` · COMFORT ${Math.round(game.missionStats.comfort ?? 100)}%` : '') : 'No rush. Cause a little joy.';
     $('mission-status').textContent = mission ? 'Gig in progress · base pay ' + money(mission.reward) : `${game.completed || 0} gigs delivered. Choose your next questionable errand.`;
     $('abandon-button').hidden = !mission;
     document.querySelectorAll('.contract-button').forEach(b => { b.disabled = !!mission; });
-    const nearest = game.services.find(s => dist(s, game.current) < 115);
+    const nearest = game.services.find(s => ['garage', 'wash'].includes(s.id) && dist(s, game.current) < 115);
     $('garage-status').textContent = nearest ? (nearest.id === 'wash' ? 'At the wash · E repairs and clears heat.' : 'At the garage · G saves rides. I buys supplies.') : 'Visit GARAGE for rides, toys and supplies. WASH clears heat.';
     $('boost-price').textContent = game.upgrades.boost >= 3 ? 'MAXED' : money(200 + game.upgrades.boost * 150);
     $('armor-price').textContent = game.upgrades.armor >= 3 ? 'MAXED' : money(150 + game.upgrades.armor * 125);
     let hint = nearest ? (nearest.id === 'wash' ? 'E · wash & cool off ($75)' : 'G · garage collection   I · supplies & toys') : car ? (Math.abs(car.speed) < 45 ? 'E · hop out   H · honk   SPACE · drift' : 'SPACE · drift   SHIFT · boost   H · honk') : game.cars.some(c => dist(c, game.player) < 65) ? 'E · borrow this ride' : 'RIGHT MOUSE · aim   LEFT MOUSE · ' + GADGETS[game.inventory.equipped].name + '   TAB · toys';
-    if (car?.burning) hint = 'ENGINE FIRE · ' + Math.max(0, Math.ceil(8 - car.fireTime)) + 's · E BAIL OUT · stop + I for repair tape';
-    else if (car && car.engineHealth <= 0) hint = 'ENGINE STALLED · stop + I for repair tape · E hop out';
-    else if (car?.upright === false) hint = 'R · right your ride and return to the road';
-    else if (car && car.elevation > 0.16) hint = 'AIRBORNE!   R · recover to the road';
+    if (flying) hint = helicopter ? 'W/S forward / back · A/D turn · SPACE / CTRL altitude · SHIFT hover · F parachute' : 'W/S throttle · A/D bank · SPACE / CTRL pitch · SHIFT boost · F parachute';
+    else if ((game.aircraft || []).some(aircraft => aircraft.active !== false && aircraft.visible !== false && aircraft.health > 0 && aircraft.grounded && MayhemAircraft.boardingDistance(aircraft,game.player)<65)) hint = 'E · borrow aircraft · SPACE climb · CTRL descend';
+    if (game.hangarAvailable) hint += '   G · hangar';
+    if (armedAircraft) hint += '   LEFT MOUSE · side gun (aim right of cabin)';
+    if (flying && car.burning) hint = 'ENGINE FIRE · F PARACHUTE · R airport recovery';
+    else if (!flying && car?.burning) hint = 'ENGINE FIRE · ' + Math.max(0, Math.ceil(8 - car.fireTime)) + 's · E BAIL OUT · stop + I for repair tape';
+    else if (car && car.engineHealth <= 0) hint = flying ? 'ENGINE LOST · glide to land · F parachute · R airport recovery' : 'ENGINE STALLED · stop + I for repair tape · E hop out';
+    else if (!flying && car?.upright === false) hint = 'R · right your ride and return to the road';
+    else if (!flying && car && car.elevation > 0.16) hint = 'AIRBORNE!   R · recover to the road';
+    if (game.player.parachuting) hint = 'PARACHUTE · WASD steers toward a clear landing · R recover';
     $('interaction-hint').textContent = hint;
     if (fallen) $('interaction-hint').textContent = fallen.phase === 'recover' ? 'Just finding my feet…  R · recover now' : 'Oh, crumbs! Getting up shortly…  R · recover now';
     $('interaction-hint').hidden = !started;

@@ -13,6 +13,7 @@
   const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
   const midi = note => 440 * 2 ** ((note - 69) / 12);
   const VehicleStats = root.MayhemVehicleStats || (typeof require === 'function' ? require('./vehicle-stats.js') : null);
+  const Aircraft = root.MayhemAircraft || (typeof require === 'function' ? require('./aircraft.js') : null);
   const SAMPLE_KEYS = ['engine-compact', 'engine-sports', 'engine-van', 'engine-high-compact', 'engine-high-sports', 'engine-high-van', 'skid', 'siren', 'horn', 'crash', 'pop',
     'impact-light', 'impact-heavy', 'break-wood', 'break-metal', 'break-stone', 'break-foliage', 'explosion',
     'hammer', 'cannon-launch', 'cannon-burst', 'biscuit', 'tape', 'refill', 'door', 'splash', 'boost',
@@ -26,7 +27,10 @@
   const ENGINE_TYPES = {
     compact: { limit: 300, idle: 42, range: 100, cutoff: 700, wave: 'sawtooth' },
     sports: { limit: 370, idle: 58, range: 150, cutoff: 1100, wave: 'sawtooth' },
-    van: { limit: 260, idle: 30, range: 70, cutoff: 480, wave: 'triangle' }
+    van: { limit: 260, idle: 30, range: 70, cutoff: 480, wave: 'triangle' },
+    prop: { limit: 720, idle: 62, range: 110, cutoff: 1300, wave: 'sawtooth', pulse: 0.12 },
+    rotor: { limit: 520, idle: 26, range: 20, cutoff: 850, wave: 'triangle', pulse: 0.35 },
+    jet: { limit: 1800, idle: 100, range: 180, cutoff: 2800, wave: 'sawtooth' }
   };
 
   function normalizeSettings(value) {
@@ -40,12 +44,13 @@
   }
 
   function spatialAt(game, entity, yaw) {
-    const player = game?.player || {}, listener = game?.cars?.find(car => car.id === player.vehicleId) || player;
+    const player = game?.player || {}, listener = player.vehicleId && (game?.current || game?.cars?.find(car => car.id === player.vehicleId) || game?.aircraft?.find(aircraft => aircraft.id === player.vehicleId)) || player;
     if (!Number.isFinite(entity?.x) || !Number.isFinite(entity?.y)) return { distance: 0, pan: 0, attenuation: 1 };
-    const dx = entity.x - finite(listener.x), dy = entity.y - finite(listener.y), distance = Math.hypot(dx, dy);
+    const dx = entity.x - finite(listener.x), dy = entity.y - finite(listener.y), dz = (finite(entity.elevation) - finite(listener.elevation)) * 20;
+    const distance = Math.hypot(dx, dy, dz), range = entity.kind === 'aircraft' ? 2800 : 900;
     yaw = finite(yaw, finite(listener.angle));
     return { distance, pan: distance > 1 ? clamp((-dx * Math.sin(yaw) + dy * Math.cos(yaw)) / distance, -1, 1) : 0,
-      attenuation: distance < 900 ? (1 - distance / 900) / (1 + (distance / 180) ** 2) : 0 };
+      attenuation: distance < range ? (1 - distance / range) / (1 + (distance / (range / 5)) ** 2) : 0 };
   }
 
   function groundSurface(game, point) {
@@ -63,36 +68,40 @@
   // Map x/y and speed use 20 units per metre, as in the vehicle physics engine.
   function deriveAudioFrame(game, options = {}) {
     const player = game?.player || {}, cars = Array.isArray(game?.cars) ? game.cars : [];
-    const police = Array.isArray(game?.police) ? game.police : [];
-    const vehicle = player.vehicleId ? cars.find(car => car.id === player.vehicleId) : null;
+    const police = Array.isArray(game?.police) ? game.police : [], aircraft = Array.isArray(game?.aircraft) ? game.aircraft : [];
+    const vehicle = player.vehicleId ? cars.concat(aircraft).find(car => car.id === player.vehicleId) : null;
     const listener = vehicle || player, input = options.input || {};
     const yaw = finite(options.viewYaw, finite(listener.angle));
     const hasEngine = car => car && finite(car.health, 100) > 0 && finite(car.engineHealth, 100) > 0 && !car.exploded;
     const spatial = entity => spatialAt(game, entity, yaw);
     const engine = (car, controlled, location) => {
-      const kind = ENGINE_TYPES[car.kind] ? car.kind : 'compact', type = ENGINE_TYPES[kind];
-      const model = VehicleStats?.getModel ? VehicleStats.getModel(car) : root.MayhemCore?.CAR_TYPES?.[kind];
-      const limit = clamp(finite(model?.maxSpeed, type.limit), 1, 1000);
+      const flying = car.kind === 'aircraft', model = flying ? Aircraft?.getModel?.(car) : VehicleStats?.getModel ? VehicleStats.getModel(car) : root.MayhemCore?.CAR_TYPES?.[car.kind];
+      const kind = flying ? (car.aircraftType === 'fighter' ? 'jet' : model?.class === 'helicopter' || /heli|news/.test(car.aircraftType || '') ? 'rotor' : 'prop') : ENGINE_TYPES[car.kind] ? car.kind : 'compact', type = ENGINE_TYPES[kind];
+      const limit = clamp(finite(model?.maxSpeed, type.limit), 1, 3000);
       const speed = clamp(Math.abs(finite(car.speed)), 0, limit * 1.7), ratio = speed / limit;
-      const throttle = controlled ? (input.up || input.down && finite(car.speed) < 15 ? 1 : 0.18) : clamp(ratio * 1.3 + 0.18, 0.18, 0.85);
-      const gear = Math.min(3, Math.floor(ratio * 4));
-      const rev = clamp((ratio * 4 - gear) * 0.6 + throttle * 0.3 + (controlled && input.boost ? 0.16 : 0), 0, 1.2);
+      const throttle = flying ? clamp(finite(car.throttle, controlled && input.up ? 1 : 0.2), 0, 1) : controlled ? (input.up || input.down && finite(car.speed) < 15 ? 1 : 0.18) : clamp(ratio * 1.3 + 0.18, 0.18, 0.85);
+      const gear = flying ? 0 : Math.min(3, Math.floor(ratio * 4));
+      const rev = flying ? clamp(throttle * 0.8 + ratio * 0.2, 0, 1.2) : clamp((ratio * 4 - gear) * 0.6 + throttle * 0.3 + (controlled && input.boost ? 0.16 : 0), 0, 1.2);
       const damage = 1 - clamp(finite(car.engineHealth, 100) / 100, 0, 1);
       return { id: String(car.id), kind, controlled, speed, throttle, gear, damage, frequency: type.idle + type.range * rev,
         cutoff: type.cutoff + 1500 * rev, gain: (controlled ? 0.115 : 0.06 * location.attenuation) * (0.65 + throttle * 0.35),
+        pulse: type.pulse ? (kind === 'rotor' ? 9 : 22) + throttle * (kind === 'rotor' ? 5 : 18) : 0,
         pan: controlled ? 0 : location.pan, distance: controlled ? 0 : location.distance };
     };
     const nearby = cars.filter(car => hasEngine(car) && car.id !== vehicle?.id && car.traffic)
       .concat(police.filter(hasEngine)).map(car => ({ car, location: spatial(car) }))
       .filter(item => item.location.attenuation > 0.004).sort((a, b) => a.location.distance - b.location.distance).slice(0, 4);
-    const engines = nearby.map(item => engine(item.car, false, item.location));
+    const nearbyAircraft = aircraft.filter(item => item.id !== vehicle?.id && hasEngine(item) && item.active !== false && item.visible !== false && (finite(item.throttle) > 0.04 || item.grounded === false))
+      .map(car => ({ car, location: spatial(car) })).filter(item => item.location.attenuation > 0.004)
+      .sort((a, b) => a.location.distance - b.location.distance).slice(0, 3);
+    const engines = nearby.concat(nearbyAircraft).map(item => engine(item.car, false, item.location));
     if (hasEngine(vehicle)) engines.unshift(engine(vehicle, true, {}));
     const heat = clamp(finite(game?.heat), 0, 3);
     const sirens = heat > 0 ? police.filter(cop => hasEngine(cop) && !cop.burning).map(cop => ({ id: String(cop.id), ...spatial(cop) }))
       .filter(cop => cop.attenuation > 0.004).sort((a, b) => a.distance - b.distance).slice(0, 3)
       .map(cop => ({ ...cop, gain: cop.attenuation * 0.095, rate: heat > 1 ? 1.45 : 0.65 })) : [];
     let skid = 0, road = 0, boost = 0;
-    if (vehicle) {
+    if (vehicle && vehicle.kind !== 'aircraft') {
       const angle = finite(vehicle.angle), lateral = Math.abs(-finite(vehicle.vx) * Math.sin(angle) + finite(vehicle.vy) * Math.cos(angle));
       const speed = Math.abs(finite(vehicle.speed));
       const terrain = game?.terrain || game?.world?.terrain, ground = terrain?.surfaceHeight?.(vehicle.x, vehicle.y);
@@ -103,10 +112,11 @@
     }
     const walking = !vehicle && player.grounded !== false && finite(player.stunned) <= 0 &&
       !(game?.ragdolls?.get && game.ragdolls.get(player.id)) && !!(input.up || input.down || input.left || input.right);
-    const fires = cars.concat(police).filter(car => car.burning && !car.exploded).map(car => ({ id: String(car.id), ...spatial(car) }))
+    const fires = cars.concat(police, aircraft).filter(car => car.burning && !car.exploded).map(car => ({ id: String(car.id), ...spatial(car) }))
       .filter(car => car.attenuation > 0.01).sort((a, b) => a.distance - b.distance).slice(0, 3);
     const district = game?.districtAt?.(listener)?.id;
-    return { mode: vehicle ? 'vehicle' : 'foot', engines, sirens, skid, road, boost, walking, running: !!input.boost,
+    const wind = vehicle?.kind === 'aircraft' && vehicle.grounded === false ? clamp(Math.abs(finite(vehicle.speed)) / 1200, 0, 1) * 0.055 : 0;
+    return { mode: vehicle ? 'vehicle' : 'foot', engines, sirens, skid, road, boost, wind, walking, running: !!input.boost,
       surface: groundSurface(game, listener), ambience: DISTRICT_AMBIENCE[district] || null, fires,
       warning: vehicle?.burning && !vehicle.exploded ? { id: String(vehicle.id), progress: clamp(finite(vehicle.fireTime) / 8, 0, 1) } : null };
   }
@@ -197,6 +207,7 @@
           this._syncNoise('skid', frame.skid, 1600, 'bandpass', 1.5);
           this._syncNoise('road', frame.road, frame.surface === 'grass' ? 700 : frame.surface === 'sand' ? 950 : 450, 'lowpass', 0.7);
           this._syncNoise('boost', frame.boost, 2100, 'bandpass', 0.6);
+          this._syncNoise('flight-wind', frame.wind, 1100, 'lowpass', 0.5);
           if (frame.boost > 0 && this._boosting === false && this._context.currentTime - this._boostAt > 1.2) {
             const burst = this._sampleVoice('boost', { level: 0.075, duration: 0.8 });
             if (burst) { this._boostAt = this._context.currentTime; this._lastPlayedSample = 'boost'; this._lastPlayedEvent = 'boost'; }
@@ -428,12 +439,21 @@
       const sub = this._node('createOscillator'); sub.type = 'sine'; sub.frequency.value = description.frequency * 0.5;
       const subGain = this._node('createGain'); subGain.gain.value = 0.55;
       const intake = this._node('createBufferSource'); intake.buffer = this._noise; intake.loop = true;
-      const intakeGain = this._node('createGain'); intakeGain.gain.value = 0.12;
-      main.connect(filter); sub.connect(subGain); subGain.connect(filter); intake.connect(intakeGain); intakeGain.connect(filter); filter.connect(gain);
+      const intakeGain = this._node('createGain'); intakeGain.gain.value = description.kind === 'jet' ? 0.7 : 0.12;
+      main.connect(filter); sub.connect(subGain); subGain.connect(filter); intake.connect(intakeGain); intakeGain.connect(filter);
+      const sources = [main, sub, intake], nodes = [main, sub, subGain, intake, intakeGain, filter, gain];
+      let pulse = null;
+      if (type.pulse) {
+        const pulseGain = this._node('createGain'); pulseGain.gain.value = 1 - type.pulse;
+        pulse = this._node('createOscillator'); pulse.type = 'sine'; pulse.frequency.value = description.pulse;
+        const depth = this._node('createGain'); depth.gain.value = type.pulse;
+        pulse.connect(depth); depth.connect(pulseGain.gain); filter.connect(pulseGain); pulseGain.connect(gain);
+        sources.push(pulse); nodes.push(pulseGain, pulse, depth);
+      } else filter.connect(gain);
       const pan = this._output(gain, description.pan, this._effects);
-      const record = this._record([main, sub, intake], [main, sub, subGain, intake, intakeGain, filter, gain, ...(pan ? [pan] : [])], gain, 'effects');
-      record.main = main; record.sub = sub; record.filter = filter; record.pan = pan; record.kind = description.kind; record.intakeGain = intakeGain;
-      main.start(); sub.start(); intake.start(); return record;
+      const record = this._record(sources, [...nodes, ...(pan ? [pan] : [])], gain, 'effects');
+      record.main = main; record.sub = sub; record.filter = filter; record.pan = pan; record.kind = description.kind; record.intakeGain = intakeGain; record.pulse = pulse;
+      for (const source of sources) source.start(); return record;
     }
     _addLoadedEngine(record, kind) {
       const sample = this._samples.get('engine-high-' + kind);
@@ -481,7 +501,8 @@
         else {
           this._ramp(record.main.frequency, item.frequency, 0.08);
           this._ramp(record.sub.frequency, item.frequency * 0.5, 0.08); this._ramp(record.filter.frequency, item.cutoff, 0.08);
-          this._ramp(record.intakeGain.gain, 0.07 + item.throttle * 0.07 + item.damage * 0.12, 0.08);
+          this._ramp(record.intakeGain.gain, item.kind === 'jet' ? 0.55 + item.throttle * 0.4 : 0.07 + item.throttle * 0.07 + item.damage * 0.12, 0.08);
+          if (record.pulse) this._ramp(record.pulse.frequency, item.pulse, 0.1);
         }
         if (record.gear !== undefined && record.gear !== item.gear && item.controlled && item.speed > 40) this._noiseHit(now, 0.055, 0.02, 450, 'lowpass', 'effects');
         record.gear = item.gear;

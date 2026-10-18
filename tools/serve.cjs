@@ -8,6 +8,8 @@ const port = Number(process.env.PORT) || 4173;
 const allowed = new Set(['/index.html', '/styles.css', '/height-data.js', '/terrain.js', '/world.js', '/core.js', '/physics.js', '/vehicle-stats.js', '/vehicle-physics.js', '/audio.js', '/game.js', '/scene3d.js', '/vendor/three.min.js', '/vendor/cannon.min.js']);
 allowed.add('/railway.js');allowed.add('/railway-render.js');
 allowed.add('/assets/audio/samples.js');
+allowed.add('/aircraft.js');
+allowed.add('/aircraft-models.js');
 allowed.add('/assets/audio/manifest.json');
 for (const sample of require('../assets/audio/manifest.json').samples) {
   if (/^[a-z0-9-]+\.mp3$/.test(sample.file)) allowed.add('/assets/audio/' + sample.file);

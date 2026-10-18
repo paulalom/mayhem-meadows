@@ -150,7 +150,14 @@
     // would leave sloped physical triangles beneath the wheels and body.
     const parkingPads=[],parkingCells=new Map(),parkingShoulders=new Set(),support=step*Math.SQRT2,blend=step*2;
     function parkingGroup(pad){while(pad.parent!==pad){pad.parent=pad.parent.parent;pad=pad.parent;}return pad;}
-    for(const bay of world.parkingBays||[]) {
+    const airport=world.landscape?.airport;
+    const aircraftPads=airport?[...(airport.runways||[]),...(airport.taxiways||[]),...(airport.aprons||[]),...(airport.walkways||[])]:[];
+    for(const pad of world.landscape?.helipads||[])if(!pad.rooftop)
+      aircraftPads.push({x:pad.x-pad.radius,y:pad.y-pad.radius,w:pad.radius*2,h:pad.radius*2,angle:pad.angle||0});
+    // Airport surfaces join the same linked support groups as parking bays.
+    // Their overlapping support vertices give the whole runway/taxi/apron one
+    // height in the rendered mesh and Cannon heightfield, including shoulders.
+    for(const bay of [...(world.parkingBays||[]),...aircraftPads]) {
       const cx=bay.x+bay.w/2,cy=bay.y+bay.h/2,c=Math.cos(bay.angle||0),s=Math.sin(bay.angle||0),hw=bay.w/2,hh=bay.h/2;
       const pad={cx,cy,c,s,hw,hh,base:heightAt(cx,cy),indices:[]};pad.parent=pad;parkingPads.push(pad);
       const radius=Math.hypot(hw+support,hh+support);

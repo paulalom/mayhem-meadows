@@ -27,8 +27,8 @@
       this.renderer.shadowMap.type = T.PCFSoftShadowMap;
       this.renderer.setClearColor('#c4dce5');
       this.scene = new T.Scene();
-      this.scene.fog = new T.Fog('#c4dce5', 95, 650);
-      this.camera = new T.PerspectiveCamera(57, 1, 0.06, 950);
+      this.scene.fog = new T.Fog('#c4dce5', 240, 2200);
+      this.camera = new T.PerspectiveCamera(57, 1, 0.06, 3000);
       this.camera.position.set(game.current.x / UNIT, 3.4, game.current.y / UNIT + 5.7);
       this._yaw = -Math.PI / 2;
       this._requestedYaw = this._yaw;
@@ -69,6 +69,8 @@
       this._propVolumes = [];
       this._propAimMeshes = [];
       this._vehicles = new Map();
+      this._aircraft = new Map();
+      this._aircraftGeometries = new Map();
       this._residents = new Map();
       this._ragdollRenderedCount = 0;
       this._worldInfo = { characterScale: CHARACTER_SCALE, sidewalkWidth: SIDEWALK_WIDTH, buildings: game.buildings.length, districts: {}, landscape: {} };
@@ -688,11 +690,14 @@
       this._terrainMesh.receiveShadow = true;
       landscape.add(this._terrainMesh);
       const waterLevel = field.waterLevel ?? 0;
-      const waterGeometry = this._geometry(new T.PlaneGeometry(size + 240, size + 240));
+      const airspace=this.game.world?.landscape?.airspace;
+      const waterWidth=airspace ? (airspace.maxX-airspace.minX)/UNIT+2000 : size+240;
+      const waterDepth=airspace ? (airspace.maxY-airspace.minY)/UNIT+2000 : size+240;
+      const waterGeometry = this._geometry(new T.PlaneGeometry(waterWidth,waterDepth));
       this._riverSurface = new T.Mesh(waterGeometry, this._material('#7eb9c7'));
       this._riverSurface.name = 'Coastal water';
       this._riverSurface.rotation.x = -Math.PI / 2;
-      this._riverSurface.position.set(size / 2, waterLevel, size / 2);
+      this._riverSurface.position.set(airspace?(airspace.minX+airspace.maxX)/UNIT/2:size/2,waterLevel,airspace?(airspace.minY+airspace.maxY)/UNIT/2:size/2);
       water.add(this._riverSurface);
       // Only glints are animated; the large sea and river remain one surface.
       // Each glint starts on a water cell, including the southern ocean.
@@ -788,7 +793,12 @@
       const airport = layout.airport;
       if (airport) {
         for (const apron of airport.aprons || []) this._groundRect(apron, '#bec5b6', .019);
-        for (const taxiway of airport.taxiways || []) this._groundRect(taxiway, '#81939b', .023);
+        for (const taxiway of airport.taxiways || []) {
+          this._groundRect(taxiway, '#81939b', .023);
+          const cx = (taxiway.x + taxiway.w / 2) / UNIT, cz = (taxiway.y + taxiway.h / 2) / UNIT;
+          this._surfaceBox('#edcd65', cx, cz, .05, taxiway.w > taxiway.h ? taxiway.w / UNIT : .10, .008,
+            taxiway.h >= taxiway.w ? taxiway.h / UNIT : .10, taxiway.angle || 0);
+        }
         for (const runway of airport.runways || []) {
           this._groundRect(runway, '#6c7f88', .025);
           const width = runway.w / UNIT, length = runway.h / UNIT, yaw = runway.angle || 0;
@@ -801,8 +811,31 @@
             this._surfaceBox('#f4efd9', cx + c * across - s * along, cz + s * across + c * along, .044, 2.4, .008, .18, yaw + Math.PI / 2);
           }
         }
-        if (this._worldInfo) this._worldInfo.airport = { runways: airport.runways?.length || 0, taxiways: airport.taxiways?.length || 0, aprons: airport.aprons?.length || 0 };
+        for (const pad of airport.helipads || []) this._aviationPad(pad);
+        for (const stand of (airport.stands || []).concat(airport.militaryStands || [])) {
+          const x = stand.x / UNIT, z = stand.y / UNIT, elevation = stand.elevation ?? this._surfaceY(x, z);
+          if (stand.type === 'transportheli' || stand.aircraftType === 'transportheli') this._aviationPad(stand);
+          for (const side of [-1, 1]) this._static(this._cube, this._material('#efd57b'), x, elevation + .07, z + side * 3,
+            4.3, .012, .10, [0, -(stand.angle || 0), 0], false);
+          this._sign(stand.label || 'AIRCRAFT STAND', x - 3, elevation + .9, z - 3.3, -(stand.angle || 0), '#f1d776', '#3d555f', 2.3, .4);
+        }
+        if (this._worldInfo) this._worldInfo.airport = { runways: airport.runways?.length || 0, taxiways: airport.taxiways?.length || 0, aprons: airport.aprons?.length || 0,
+          helipads: airport.helipads?.length || 0, stands: (airport.stands?.length || 0) + (airport.militaryStands?.length || 0) };
       }
+      for (const pad of layout.helipads || []) this._aviationPad(pad);
+    }
+
+    _aviationPad(pad) {
+      const x = pad.x / UNIT, z = pad.y / UNIT, radius = (pad.radius || 100) / UNIT;
+      const elevation = pad.elevation ?? this._surfaceY(x, z), yaw = -(pad.angle || 0);
+      this._static(this._cylinder, this._material(pad.rooftop ? '#546b76' : '#7c9393'), x, elevation + .035, z, radius, .04, radius, null, false);
+      this._helipadRing ??= this._geometry(new this.T.TorusGeometry(1, .016, 4, 48));
+      this._static(this._helipadRing, this._material('#f4edc9'), x, elevation + .068, z, radius * .82, radius * .82, radius * .82, [-Math.PI / 2, 0, 0], false);
+      const c = Math.cos(yaw), s = Math.sin(yaw);
+      for (const side of [-1, 1]) this._static(this._cube, this._material('#f4edc9'), x + c * side * radius * .25, elevation + .071, z - s * side * radius * .25,
+        radius * .11, .012, radius, [0, yaw, 0], false);
+      this._static(this._cube, this._material('#f4edc9'), x, elevation + .071, z, radius * .60, .012, radius * .11, [0, yaw, 0], false);
+      this._sign(pad.label || 'HELIPAD', x, elevation + 1, z - radius - .2, 0, '#e6deb6', '#415f67', 2.6, .42);
     }
 
     _physicalProps() {
@@ -1017,6 +1050,139 @@
       model.effects = this._makeVehicleEffects(entity.id);
       model.geometries = this._geometries.slice(geometryStart);
       return model;
+    }
+
+    _aircraftModel(entity) {
+      const T = this.T, group = new T.Group(), visual = new T.Group();
+      const type = entity.aircraftType || entity.type || entity.kind;
+      const aliases = { news: 'newsHelicopter', policeheli: 'policeHelicopter', transportheli: 'transportHelicopter' };
+      const assets = root.MayhemAircraftModels || {};
+      const asset = assets[type] || assets[aliases[type]];
+      const definition = root.MayhemAircraft?.AIRCRAFT_TYPES?.[type] || {};
+      const parts = [], materials = [];
+      group.name = 'Aircraft ' + entity.id; visual.name = type; group.add(visual);
+      this._aircraftGeometries ??= new Map();
+      // Blender exports each named mesh around its own origin. Geometry remains
+      // shared by the fleet; only an aircraft's mutable damage palette is owned.
+      for (let i = 0; i < (asset?.parts.length || 0); i++) {
+        const part = asset.parts[i], key = type + ':' + i;
+        let geometry = this._aircraftGeometries.get(key);
+        if (!geometry) {
+          geometry = this._geometry(new T.BufferGeometry());
+          geometry.setAttribute('position', new T.Float32BufferAttribute(part.positions, 3));
+          if (part.indices?.length) geometry.setIndex(part.indices);
+          geometry.computeVertexNormals(); geometry.computeBoundingSphere();
+          this._aircraftGeometries.set(key, geometry);
+        }
+        const material = this._material(part.color || entity.color || '#e8e3ca').clone();
+        materials.push({ material, color: material.color.clone() });
+        const mesh = new T.Mesh(geometry, material);
+        mesh.name = part.name || 'Airframe';
+        mesh.position.fromArray(part.pivot || [0, 0, 0]);
+        mesh.castShadow = mesh.receiveShadow = true; visual.add(mesh);
+        parts.push({ mesh, animation: part.animation || (/propeller/i.test(part.name) ? 'propeller' : /tail.*rotor/i.test(part.name) ? 'tailRotor' : /rotor/i.test(part.name) ? 'mainRotor' : null) });
+      }
+      // Keep a visible recovery silhouette if a locally cached page predates
+      // the model bundle; normal game builds always use the Blender meshes.
+      if (!parts.length) {
+        const helicopter = ['helicopter', 'news', 'policeheli', 'transportheli'].includes(type);
+        this._box(visual, entity.color || '#e8e3ca', 0, 1.3, 0, helicopter ? 4.4 : 6, 1.35, 1.45);
+        this._box(visual, '#517d94', 1.5, 1.55, 0, 1.1, .72, 1.5);
+        this._box(visual, '#e8e3ca', -2.8, 1.5, 0, 3.8, .27, .35);
+        const rotor = new T.Group(); rotor.position.set(0, helicopter ? 2.8 : 1.3, 0);
+        if (!helicopter) rotor.position.x = 3.2;
+        this._box(rotor, '#394957', 0, 0, 0, helicopter ? 8 : .12, helicopter ? .10 : 2.6, .12);
+        visual.add(rotor); parts.push({ mesh: rotor, animation: helicopter ? 'mainRotor' : 'propeller' });
+        if (!helicopter) this._box(visual, '#e8e3ca', .1, 1.7, 0, 1.3, .17, 9);
+      }
+      const dimensions = asset?.bounds || { length: definition.length / UNIT, width: definition.width / UNIT };
+      const model = { group, visual, type, parts, materials, length: dimensions.length || 7, width: dimensions.width || 9,
+        fireAnchor: new T.Vector3(), phase: 0, effects: this._makeVehicleEffects('aircraft-' + entity.id) };
+      if (type === 'fighter') {
+        model.exhaust = this._mesh(this._cone, this._material('#ffa94f', { unlit: true, opacity: .78, depthWrite: false }), visual,
+          -model.length * .47, 1.1, 0, .32, 1, .32, false);
+        model.exhaust.rotation.z = Math.PI / 2; model.exhaust.raycast = () => {};
+      }
+      if (type === 'policeheli') {
+        const beam = new T.Group(); beam.name = 'Police searchlight';
+        const cone = this._mesh(this._cone, this._material('#fff4ad', { unlit: true, opacity: .09, depthWrite: false }), beam, 0, 0, 0, 1, 1, 1, false);
+        const pool = this._mesh(this._cylinder, this._material('#fff1a5', { unlit: true, opacity: .20, depthWrite: false }), beam, 0, 0, 0, 1, .02, 1, false);
+        cone.raycast = pool.raycast = () => {};
+        this.scene.add(beam); model.searchlight = { group: beam, cone, pool, origin: new T.Vector3(), target: new T.Vector3(), direction: new T.Vector3(), up: new T.Vector3(0, 1, 0) };
+        model.muzzle = this._mesh(this._sphere, this._material('#ffe9a2', { unlit: true }), visual, .3, 1.42, 1.84, .20, .20, .55, false);
+        model.muzzle.visible = false;
+      }
+      this.scene.add(group);
+      return model;
+    }
+
+    _retireAircraft(id, model) {
+      model.group.visible = model.effects.group.visible = false;
+      if (model.searchlight) model.searchlight.group.visible = false;
+      this.scene.remove(model.group, model.effects.group);
+      if (model.searchlight) this.scene.remove(model.searchlight.group);
+      for (const entry of model.materials) entry.material.dispose();
+      const key = 'vehicle-flash-aircraft-' + id, flash = this._materials.get(key);
+      flash?.dispose(); this._materials.delete(key);
+      model.effects.flames.dispose(); model.effects.smoke.dispose();
+      this._aircraft.delete(id);
+    }
+
+    _aircraftStep(dt) {
+      this._aircraft ??= new Map();
+      const active = new Set();
+      for (const entity of this.game.aircraft || []) {
+        active.add(entity.id);
+        let model = this._aircraft.get(entity.id);
+        const type = entity.aircraftType || entity.type || entity.kind;
+        if (model && model.type !== type) { this._retireAircraft(entity.id, model); model = null; }
+        if (!model) { model = this._aircraftModel(entity); this._aircraft.set(entity.id, model); }
+        model.group.visible = entity.visible !== false;
+        model.group.position.set(entity.x / UNIT, Number.isFinite(entity.elevation) ? entity.elevation : 0, entity.y / UNIT);
+        // Heading is world yaw, with pitch and bank applied around the airframe's
+        // local axes. The camera never inherits either of these rotations.
+        model.group.rotation.set(0, -(entity.angle || 0), 0);
+        model.visual.rotation.set(entity.roll || 0, 0, entity.pitch || 0, 'YZX');
+        const powered = !entity.destroyed && !entity.exploded && (entity.engineOn !== false) && ((entity.throttle || 0) > .01 || entity.rotorSpeed > .01 || entity.flightPhase && !['parked', 'boarding'].includes(entity.flightPhase) || entity.id === this.game.player.vehicleId);
+        model.phase += powered ? dt * 32 : 0;
+        for (const part of model.parts) {
+          const phase = powered && Number.isFinite(entity.rotorAngle) && part.animation !== 'propeller' ? entity.rotorAngle : model.phase;
+          if (part.animation === 'mainRotor') part.mesh.rotation.y = phase;
+          if (part.animation === 'tailRotor') part.mesh.rotation.z = phase * 1.7;
+          if (part.animation === 'propeller') part.mesh.rotation.x = phase * 1.3;
+        }
+        const condition = clamp((entity.health ?? 100) / (entity.maxHealth || 100), 0, 1);
+        for (const entry of model.materials) entry.material.color.copy(entry.color).multiplyScalar(entity.exploded ? .13 : .45 + condition * .55);
+        if (model.exhaust) {
+          model.exhaust.visible = powered && entity.throttle > .3;
+          model.exhaust.scale.y = .5 + (entity.throttle || 0) * (this.reducedMotion ? 1 : 1.3 + Math.sin((this.game.time || 0) * 21) * .12);
+        }
+        this._vehicleEffects(model, { ...entity, engineHealth: entity.engineHealth ?? condition * 100 });
+        model.effects.group.visible &&= model.group.visible;
+        if (model.muzzle) model.muzzle.visible = model.group.visible && Boolean(entity.gunFiring) && (this.reducedMotion || Math.sin((this.game.time || 0) * 38) > 0);
+        if (model.searchlight) {
+          const beam = model.searchlight;
+          beam.group.visible = model.group.visible && Boolean(entity.searchlight) && !entity.exploded;
+          if (beam.group.visible) {
+            model.group.updateWorldMatrix(true, true);
+            beam.origin.set(1.85, .63, -.35); model.visual.localToWorld(beam.origin);
+            const target = entity.lastSeen;
+            const tx = target?.x / UNIT, tz = target?.y / UNIT;
+            const distance = target ? Math.hypot(tx - beam.origin.x, tz - beam.origin.z) : Infinity;
+            beam.target.set(distance < 120 ? tx : beam.origin.x + Math.cos(entity.angle || 0) * 5,
+              distance < 120 ? target.elevation || this._surfaceY(tx, tz) : this._surfaceY(beam.origin.x, beam.origin.z),
+              distance < 120 ? tz : beam.origin.z + Math.sin(entity.angle || 0) * 5);
+            beam.direction.copy(beam.origin).sub(beam.target);
+            const length = Math.max(.1, beam.direction.length()), radius = clamp(length * .12, 1.5, 9);
+            beam.cone.position.copy(beam.origin).add(beam.target).multiplyScalar(.5);
+            beam.cone.quaternion.setFromUnitVectors(beam.up, beam.direction.normalize());
+            beam.cone.scale.set(radius, length, radius);
+            beam.pool.position.copy(beam.target); beam.pool.position.y += .05; beam.pool.scale.set(radius, .02, radius);
+          }
+        }
+      }
+      for (const [id, model] of this._aircraft) if (!active.has(id)) this._retireAircraft(id, model);
+      if (this.canvas?.dataset) this.canvas.dataset.aircraftCount = String(active.size);
     }
 
     _mergeColored(group, preserve = [], paintMaterial = null) {
@@ -1369,6 +1535,7 @@
       subjects.push(...(this._bridgeAimMeshes || []));
       for (const model of this._residents?.values() || []) if (model.group.visible) subjects.push(model.group);
       for (const [id, model] of this._vehicles || []) if (model.group.visible && id !== this.game.player.vehicleId) subjects.push(model.group);
+      for (const [id, model] of this._aircraft || []) if (model.group.visible && id !== this.game.player.vehicleId) subjects.push(model.visual);
       for (const group of subjects) group.updateWorldMatrix(true, true);
       for (const hit of this._ray.intersectObjects(subjects, true)) if (hit.object.isMesh) { saveHit(hit.point); break; }
       if (this._terrainRayPoint(this._aimHit)) saveHit(this._aimHit);
@@ -1595,11 +1762,12 @@
 
     _cameraStep(dt) {
       const current = this.game.current, driving = Boolean(this.game.player.vehicleId);
+      const flying = driving && (current.kind === 'aircraft' || Boolean(current.aircraftType));
       const fallen = !driving && this._bodyFor(this.game.player);
       let x = current.x / UNIT, z = current.y / UNIT;
       const elevation = Number.isFinite(current.elevation) ? current.elevation : this._surfaceY(x, z);
       // A roof landing needs the pivot above the roof's near-plane envelope.
-      let targetHeight = fallen ? Math.max(0.55, (fallen.joints.pelvis.y + fallen.joints.chest.y) / 2 + 0.15) : elevation + (driving ? 1.15 : FOOT_PIVOT);
+      let targetHeight = fallen ? Math.max(0.55, (fallen.joints.pelvis.y + fallen.joints.chest.y) / 2 + 0.15) : elevation + (flying ? 1.8 : driving ? 1.15 : FOOT_PIVOT);
       targetHeight = Math.max(targetHeight, this._surfaceY(x, z) + .48);
       if (fallen) {
         // A physical pelvis is smaller than the camera clearance envelope.
@@ -1630,7 +1798,7 @@
       // A shoulder exit can move the pivot uphill. Keep its new position above
       // that slope before solving a boom from the relocated fallen body.
       targetHeight = Math.max(targetHeight, this._surfaceY(x, z) + .48);
-      const mode = driving ? 'drive' : 'foot';
+      const mode = flying ? 'flight' : driving ? 'drive' : 'foot';
       if (this._lastVehicleId !== this.game.player.vehicleId) {
         if (driving) this._driveOffset = angle(this._yaw - current.angle);
         else this._requestedYaw = this._yaw;
@@ -1649,10 +1817,12 @@
       const aiming = this._aiming && !driving && !fallen;
       this._aimBlend = mix(this._aimBlend, aiming ? 1 : 0, this._hasCamera ? 1 - Math.exp(-dt * 12) : 1);
       const speed = driving ? Math.abs(current.speed || 0) / UNIT : 0;
-      const distance = driving ? 7.4 + Math.min(1.8, speed * 0.06) : mix(5.5, 2.9, this._aimBlend);
+      const aircraftModel = flying && this._aircraft?.get(current.id);
+      const flightBoom = clamp((aircraftModel?.length || 8) * .8 + (aircraftModel?.width || 9) * .6, 14, 26);
+      const distance = flying ? flightBoom + Math.min(6, speed * .08) : driving ? 7.4 + Math.min(1.8, speed * 0.06) : mix(5.5, 2.9, this._aimBlend);
       const horizontal = Math.cos(this._viewPitch) * distance;
       const shoulder = driving ? 0 : 0.70 * this._aimBlend;
-      const clearance = driving ? 1.5 : mix(1.05, 0.50, this._aimBlend);
+      const clearance = flying ? 3 : driving ? 1.5 : mix(1.05, 0.50, this._aimBlend);
       const lift = -Math.sin(this._viewPitch) * distance + clearance;
       const targetY = targetHeight;
       this._cameraTarget.set(x, targetY, z);
@@ -1682,7 +1852,7 @@
       const obstructed = fraction < 0.995;
       const safeFraction = obstructed ? Math.max(0, fraction - 0.045) : 1;
       this._desiredCamera.set(mix(x, endX, safeFraction), mix(targetY, endY, safeFraction), mix(z, endZ, safeFraction));
-      const snap = !this._hasCamera || Math.hypot(this.camera.position.x - x, this.camera.position.z - z) > 18;
+      const snap = !this._hasCamera || Math.hypot(this.camera.position.x - x, this.camera.position.z - z) > Math.max(18, distance * 2);
       if (snap) this.camera.position.copy(this._desiredCamera);
       else this.camera.position.lerp(this._desiredCamera, 1 - Math.exp(-dt * (obstructed ? 18 : 9)));
       // Position interpolation can cut a corner. Recheck the interpolated boom
@@ -1706,7 +1876,7 @@
       this._viewDirection.set(Math.cos(this._yaw) * Math.cos(this._viewPitch), Math.sin(this._viewPitch), Math.sin(this._yaw) * Math.cos(this._viewPitch));
       this._lookTarget.copy(this.camera.position).add(this._viewDirection);
       this.camera.lookAt(this._lookTarget);
-      const fov = mix(57, 48, this._aimBlend);
+      const fov = flying ? 64 + Math.min(5, speed * .035) : mix(57, 48, this._aimBlend);
       if (Math.abs(this.camera.fov - fov) > 0.0001) { this.camera.fov = fov; this.camera.updateProjectionMatrix(); }
       this.camera.updateMatrixWorld(true);
       this._hasCamera = true;
@@ -1728,8 +1898,9 @@
       this._cameraInfo.fov = this.camera.fov;
       // Sun follows a snapped grid so shadows stay stable as the town scrolls.
       const shadowX = Math.round(x / 5) * 5, shadowZ = Math.round(z / 5) * 5;
-      this._sun.position.set(shadowX - 22, 48, shadowZ - 30);
-      this._sun.target.position.set(shadowX, 0, shadowZ);
+      const shadowHeight = flying ? elevation : 0;
+      this._sun.position.set(shadowX - 22, shadowHeight + 48, shadowZ - 30);
+      this._sun.target.position.set(shadowX, shadowHeight, shadowZ);
     }
 
     _people(dt) {
@@ -1760,6 +1931,12 @@
         model.rightArm.rotation.z = Math.PI / 2 + pitch;
         model.rightArm.rotation.y = -0.1;
       }
+      for (const [id, toy] of Object.entries(model.toys)) toy.visible = !player.parachuting && id === equipped;
+      if (player.parachuting) {
+        model.leftLeg.rotation.z = .12; model.rightLeg.rotation.z = -.12;
+        model.leftArm.rotation.z = 2.4; model.rightArm.rotation.z = 2.4;
+        model.rightArm.rotation.y = 0;
+      }
       for (const ped of game.peds) {
         const resident = this._residents.get(ped.id);
         if (!resident) continue;
@@ -1782,6 +1959,37 @@
         this._bubbleText(resident.bubble, ped.bubbleTimer > 0 ? ped.bubble : '');
       }
       this._ragdollPeople();
+      this._parachuteStep();
+    }
+
+    _parachuteStep() {
+      const player = this.game.player;
+      if (player.parachuting && !this._parachute) {
+        const T = this.T, group = new T.Group(); group.name = 'Player parachute';
+        const geometry = this._geometry(new T.SphereGeometry(1, 16, 5, 0, TAU, 0, Math.PI / 2));
+        const positions = geometry.attributes.position, colors = new Float32Array(positions.count * 3), color = new T.Color();
+        for (let i = 0; i < positions.count; i++) {
+          const panel = Math.floor((Math.atan2(positions.getZ(i), positions.getX(i)) + Math.PI) * 4 / Math.PI);
+          color.set(panel % 2 ? '#f4d35c' : '#ee805f'); colors.set([color.r, color.g, color.b], i * 3);
+        }
+        geometry.setAttribute('color', new T.BufferAttribute(colors, 3));
+        const material = new T.MeshLambertMaterial({ color: '#ffffff', vertexColors: true, flatShading: true, side: T.DoubleSide });
+        this._materials.set('parachute-canopy', material);
+        this._mesh(geometry, material, group, 0, 3.6, 0, 2.7, 1.1, 2.2, true);
+        const up = new T.Vector3(0, 1, 0), bottom = new T.Vector3(), top = new T.Vector3(), direction = new T.Vector3();
+        for (const front of [-1, 1]) for (const side of [-1, 1]) {
+          bottom.set(front * .18, 1.32, side * .29); top.set(front * 1.9, 3.6, side * 1.55);
+          direction.copy(top).sub(bottom);
+          const rope = this._mesh(this._cylinder, this._material('#f7eed5'), group, 0, 0, 0, .014, direction.length(), .014, false);
+          rope.position.copy(top).add(bottom).multiplyScalar(.5); rope.quaternion.setFromUnitVectors(up, direction.normalize());
+        }
+        this.scene.add(group); this._parachute = group;
+      }
+      if (this._parachute) {
+        this._parachute.visible = Boolean(player.parachuting && !player.vehicleId);
+        this._parachute.position.set(player.x / UNIT, player.elevation || 0, player.y / UNIT);
+        this._parachute.rotation.set(0, -(player.angle || 0), this.reducedMotion ? 0 : Math.sin((this.game.time || 0) * 1.7) * .025);
+      }
     }
 
     _cars(dt) {
@@ -1823,19 +2031,22 @@
         this._toyShots.frustumCulled = false;
         this.scene.add(this._toyShots);
       }
-      const shots = this.game.projectiles || [];
+      const shots = (this.game.projectiles || []).concat(this.game.aircraftProjectiles || []);
       let count = 0;
       for (const shot of shots) {
         if (count === 32) break;
-        if (shot.life <= 0 || !Number.isFinite(shot.x + shot.y + shot.height + shot.angle)) continue;
-        this._dummy.position.set(shot.x / UNIT, shot.height, shot.y / UNIT);
-        this._dummy.rotation.set(this.game.time * 8, -shot.angle, this.game.time * 5);
-        this._dummy.scale.set(0.19, 0.19, 0.19);
+        const height = shot.height ?? shot.elevation;
+        const heading = Number.isFinite(shot.angle) ? shot.angle : Math.atan2(shot.vy || 0, shot.vx || 0);
+        if (shot.life <= 0 || !Number.isFinite(shot.x + shot.y + height + heading)) continue;
+        this._dummy.position.set(shot.x / UNIT, height, shot.y / UNIT);
+        this._dummy.rotation.set(this.game.time * 8, -heading, this.game.time * 5);
+        const aerial = Boolean(shot.ownerId);
+        this._dummy.scale.set(aerial ? .30 : .19, aerial ? .16 : .19, aerial ? .16 : .19);
         this._dummy.updateMatrix();
         this._toyShots.setMatrixAt(count, this._dummy.matrix);
         let hue = 0;
         for (const letter of String(shot.id)) hue = (hue + letter.charCodeAt(0)) % palette.length;
-        this._color.set(palette[hue]); this._toyShots.setColorAt(count, this._color);
+        this._color.set(shot.color || palette[hue]); this._toyShots.setColorAt(count, this._color);
         count++;
       }
       this._toyShots.count = count;
@@ -1906,11 +2117,16 @@
       const mission = game.mission, target = mission && mission.targets[mission.targetIndex];
       this._target.visible = Boolean(target);
       if (target) {
-        this._target.position.set(target.x / UNIT, this._surfaceY(target.x / UNIT, target.y / UNIT), target.y / UNIT);
-        this._surfaceQuaternion(target.x / UNIT, target.y / UNIT, 0, this._targetRing.quaternion);
-        this._targetRing.rotateX(-Math.PI / 2);
+        this._target.position.set(target.x / UNIT, target.elevation ?? this._surfaceY(target.x / UNIT, target.y / UNIT), target.y / UNIT);
+        if (target.aerial) {
+          this._targetRing.rotation.set(0, -(target.angle ?? game.current.angle) + Math.PI / 2, 0);
+        } else {
+          this._surfaceQuaternion(target.x / UNIT, target.y / UNIT, 0, this._targetRing.quaternion);
+          this._targetRing.rotateX(-Math.PI / 2);
+        }
         const pulse = this.reducedMotion ? 1 : 1 + Math.sin(game.time * 3) * 0.045;
-        this._targetRing.scale.set(pulse, pulse, pulse);
+        this._targetRing.scale.setScalar(pulse * (target.aerial ? 2.5 : 1));
+        this._targetBeam.visible = !target.aerial;
         this._targetDiamond.rotation.y = this.reducedMotion ? 0 : game.time;
         this._targetDiamond.position.y = 3.4 + (this.reducedMotion ? 0 : Math.sin(game.time * 2.8) * 0.15);
       }
@@ -1922,6 +2138,7 @@
       this._syncDestructibleProps();
       this._people(step);
       this._cars(options.paused ? 0 : step);
+      this._aircraftStep(options.paused ? 0 : step);
       this._effects();
       this._landscapeStep(this.game.time);
       this._cameraStep(step);
@@ -1938,6 +2155,7 @@
       this._bridgeUndersides?.dispose();
       this._bridgePiers?.dispose();
       for (const model of this._vehicles.values()) { model.effects.flames.dispose(); model.effects.smoke.dispose(); }
+      for (const [id, model] of this._aircraft || []) this._retireAircraft(id, model);
       for (const geometry of this._geometries) geometry.dispose();
       for (const material of this._materials.values()) material.dispose();
       for (const texture of this._textures) texture.dispose();

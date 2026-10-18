@@ -121,7 +121,7 @@ The playable world spans 600 metres in each direction, with the supplied map cov
 | West Beach & Marina | Coastal cafes and homes following the bay | Scenic driving beside the shore and harbor |
 | Docklands | Warehouses, loading yards and a southern pier approach | Industrial silhouettes, open yards and the car wash |
 | Ridge Heights | Northwest hills, hairpins, a summit road and a viewpoint branch | Climbing, coasting and exploring a different kind of road |
-| Airport | Terminal, hangars and runway landmarks across the river | A destination reached by two physical bridge routes |
+| Airport | Terminal, hangars, level runway, connected taxiways, stands and helipads across the river | Borrow aircraft, board passengers, manage hangar saves and watch NPC flights |
 | Tidewell Marsh | Quiet roads along the southeast wetland edge | Open terrain and a quieter lookout beyond the busy city |
 
 Buildings face their streets, with changing setbacks and spacing as the city opens into suburbs. Each rotated building footprint drives rendering, car collision, ragdoll collision and sight obstruction. Open gaps stay open. Sidewalks follow the actual road curves. Houses have deeper garden setbacks; urban fronts keep room for walking past furniture and doorways. Trees, benches and other solid street props use shared visual and physical shapes.
@@ -163,7 +163,7 @@ Technical shape: plain HTML/CSS/JavaScript, local geometry and audio, checked-in
 
 ## Deliberate cuts
 
-No multiplayer, huge procedural city, interiors, stairs, swimming, aircraft, character customization editor, loot grids or weight management, realistic damage, complex combat, story campaign, licensed music, or online economy in this slice. Touch controls and gamepad support can follow once keyboard driving and the camera are good.
+No multiplayer, huge procedural city, interiors, stairs, swimming, military base, character customization editor, loot grids or weight management, realistic damage, complex combat, story campaign, licensed music, or online economy in this slice. Touch controls and gamepad support can follow once keyboard driving and the camera are good.
 
 ## Playtest questions and acceptance checks
 
