@@ -290,8 +290,8 @@
       return this.game.world?.terrain?.heightAt(x * UNIT, z * UNIT) ?? 0;
     }
 
-    _surfaceY(x, z) {
-      return this.game.world?.terrain?.surfaceHeight(x * UNIT, z * UNIT) ?? this._groundY(x, z);
+    _surfaceY(x, z, reference) {
+      return this.game.world?.terrain?.surfaceHeight(x * UNIT, z * UNIT, reference) ?? this._groundY(x, z);
     }
 
     _surfaceQuaternion(x, z, heading, quaternion) {
@@ -1808,7 +1808,13 @@
       if (!this.game.world?.terrain) return 1;
       const dx = endX - x, dy = endY - y, dz = endZ - z;
       const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy, dz) / .20)), clearance = .22;
-      const blocked = at => mix(y, endY, at) < this._surfaceY(mix(x, endX, at), mix(z, endZ, at)) + clearance;
+      const blocked = at => {
+        const px=mix(x,endX,at),pz=mix(z,endZ,at),py=mix(y,endY,at);
+        const floor=this._surfaceY(px,pz,y),deck=this._surfaceY(px,pz);
+        // Below a bridge the boom can reach the underside, while above it
+        // the deck remains the floor. Keep the near plane clear on both sides.
+        return py<floor+clearance || deck>floor+.2 && py>deck-.32-clearance;
+      };
       if (blocked(0)) return 0;
       for (let i = 1; i <= steps; i++) if (blocked(i / steps)) {
         let low = (i - 1) / steps, high = i / steps;
@@ -1840,7 +1846,7 @@
       const elevation = Number.isFinite(current.elevation) ? current.elevation : this._surfaceY(x, z);
       // A roof landing needs the pivot above the roof's near-plane envelope.
       let targetHeight = fallen ? Math.max(0.55, (fallen.joints.pelvis.y + fallen.joints.chest.y) / 2 + 0.15) : elevation + (flying ? 1.8 : driving ? 1.15 : FOOT_PIVOT);
-      targetHeight = Math.max(targetHeight, this._surfaceY(x, z) + .48);
+      targetHeight = Math.max(targetHeight, this._surfaceY(x, z, elevation) + .48);
       if (fallen) {
         // A physical pelvis is smaller than the camera clearance envelope.
         // Move the look-at pivot out of that envelope before solving the boom,
@@ -1869,7 +1875,7 @@
       }
       // A shoulder exit can move the pivot uphill. Keep its new position above
       // that slope before solving a boom from the relocated fallen body.
-      targetHeight = Math.max(targetHeight, this._surfaceY(x, z) + .48);
+      targetHeight = Math.max(targetHeight, this._surfaceY(x, z, elevation) + .48);
       const mode = flying ? 'flight' : driving ? 'drive' : 'foot';
       if (this._lastVehicleId !== this.game.player.vehicleId) {
         if (driving) this._driveOffset = angle(this._yaw - current.angle);
@@ -1955,7 +1961,7 @@
       if (this.camera.position.distanceToSquared(this._cameraTarget) < minimumBoom * minimumBoom && this._desiredCamera.distanceToSquared(this._cameraTarget) > minimumBoom * minimumBoom) {
         this.camera.position.copy(this._desiredCamera);
       }
-      this.camera.position.y = Math.max(this._surfaceY(this.camera.position.x, this.camera.position.z) + .23, this.camera.position.y);
+      this.camera.position.y = Math.max(this._surfaceY(this.camera.position.x, this.camera.position.z, elevation) + .23, this.camera.position.y);
       // Looking is independent of the physical boom pivot. Locking lookAt to
       // the character makes the centre crosshair point at the player's back.
       // The view instead faces ahead, including when walls shorten the boom.

@@ -41,6 +41,12 @@ test('a bridge supports walking over the original river bed without filling it',
   const terrain=Terrain.createTerrain({size:12000,sidewalkWidth:32,roads:[road],buildings:[]});
   assert.ok(terrain.heightAt(8520,3600)<0);
   assert.ok(terrain.surfaceHeight(8520,3600)>=2);
+  const ground=terrain.heightAt(8520,3600),deck=terrain.surfaceHeight(8520,3600);
+  assert.equal(terrain.surfaceHeight(8520,3600,ground),ground,'a reference below the bridge selects the river bed');
+  assert.equal(terrain.surfaceHeight(8520,3600,deck-.1),deck,'small contact penetration still selects the deck');
+  assert.equal(terrain.surfaceHeight(8520,3600,deck+5),deck,'falling from above selects the deck');
+  assert.deepEqual(terrain.surfaceNormalAt(8520,3600,ground),terrain.normalAt(8520,3600),'lower ground keeps its own slope');
+  assert.deepEqual(terrain.surfaceNormalAt(8520,3600,deck),terrain.surfaceNormalAt(8520,3600),'deck support uses its road grade');
   assert.equal(terrain.isWater(8520,3600),true);
   assert.ok(terrain.surfaceHeight(8520,3800)<terrain.surfaceHeight(8520,3600),'deck support stays inside bridge width');
 });

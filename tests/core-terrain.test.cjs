@@ -1,6 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
 const {Game}=require('../core.js');
+const {createTerrain}=require('../terrain.js');
 const {MUZZLE_HEIGHT,PERSON_HEIGHT,PLAYER_RADIUS}=require('../physics.js');
 const {makeFlatGame}=require('./helpers/flat-game.cjs');
 const advance=(game,seconds,input={})=>{for(let elapsed=0;elapsed<seconds-1e-8;elapsed+=1/60)game.update(1/60,input);};
@@ -30,6 +31,77 @@ function terrainGame(sample=()=>12) {
   for(const car of game.cars)game.vehiclePhysics.reset(car);
   return game;
 }
+
+function bridgeGame(clearance=4) {
+  const game=terrainGame();game.cars=[];
+  const road={id:'underpass-fixture',bridge:true,width:100,points:[{x:900,y:1080},{x:1500,y:1080}]};
+  const terrain=createTerrain({size:3200,sidewalkWidth:32,roads:[road],buildings:[]});
+  terrain.heights.fill(12);
+  for(const point of road.points)point.elevation=12+clearance;
+  game.roads=game.world.roads=[road];game.terrain=game.world.terrain=terrain;
+  Object.assign(game.player,{x:1200,y:920,elevation:12});game.vehiclePhysics.sync();
+  return game;
+}
+
+test('walking beneath a bridge in either direction stays on the lower ground',()=>{
+  const game=bridgeGame(),terrain=game.terrain;
+  near(game.vehiclePhysics.support(1200,1080,12.045),12);
+  near(game.vehiclePhysics.support(1200,1080,11.9),12);
+  for(const input of [{down:true},{up:true}])for(let frame=0;frame<126;frame++) {
+    game.update(1/60,input);
+    near(game.player.elevation,terrain.heightAt(game.player.x,game.player.y));
+    assert.equal(game.player.grounded,true);
+  }
+  near(game.player.y,920);
+});
+
+test('jumping into a bridge underside stops at the ceiling and lands below it',()=>{
+  const game=bridgeGame(2.4);game.player.y=1080;
+  let peak=12;
+  for(let frame=0;frame<90;frame++) {
+    game.update(1/60,{jump:true});peak=Math.max(peak,game.player.elevation);
+    assert.ok(game.player.elevation+PERSON_HEIGHT<=14.4-.32+.001,'head stays below the solid deck');
+  }
+  assert.ok(peak>12.4,'jump reaches the underside');near(game.player.elevation,12);assert.equal(game.player.grounded,true);
+});
+
+test('ragdoll recovery beneath a bridge returns to the lower ground',()=>{
+  const game=bridgeGame();game.player.y=1080;
+  assert.equal(game.flop(),true);const body=game.ragdolls.get(game.player.id);
+  for(let frame=0;frame<300;frame++) {
+    game.update(1/60,{});
+    assert.ok(game.player.elevation<13,'ragdoll and get-up stay below the bridge');
+    for(const joint of Object.values(body.joints))assert.ok(joint.y<15.68,'limbs stay below the deck');
+  }
+  assert.equal(game.ragdolls.get(game.player.id),undefined);near(game.player.elevation,12);
+});
+
+test('landing from above and walking up a bridge grade retain deck support',()=>{
+  const game=bridgeGame();game.roads[0].points[0].elevation=15;game.roads[0].points[1].elevation=17;
+  game.vehiclePhysics._makeBridges();
+  Object.assign(game.player,{y:1080,elevation:19,grounded:false});advance(game,1);
+  near(game.player.elevation,16);assert.equal(game.player.grounded,true);
+  advance(game,1,{right:true});assert.ok(game.player.elevation>16.5);near(game.player.elevation,game.terrain.surfaceHeight(game.player.x,game.player.y));
+  advance(game,1,{jump:true});near(game.player.elevation,game.terrain.surfaceHeight(game.player.x,game.player.y));assert.equal(game.player.grounded,true);
+});
+
+test('both real railway underpasses keep walking on the track bed',()=>{
+  const game=new Game({seed:42});game.cars=[];game.peds=[];game.police=[];game.vehiclePhysics.sync();
+  const crossings=game.world.railway.crossings.filter(crossing=>crossing.kind==='overpass');assert.equal(crossings.length,2);
+  for(const crossing of crossings) {
+    const road=game.network.pointOnRoad(crossing.roadId,crossing.s),angle=road.angle+Math.PI/2;
+    const start={x:crossing.x-Math.cos(angle)*140,y:crossing.y-Math.sin(angle)*140};
+    Object.assign(game.player,start,{elevation:game.terrain.heightAt(start.x,start.y),verticalVelocity:0,grounded:true});
+    let clearance=0;
+    for(let frame=0;frame<110;frame++) {
+      game._walk(1/60,{up:true,moveAngle:angle});
+      near(game.player.elevation,game.terrain.heightAt(game.player.x,game.player.y));assert.equal(game.player.grounded,true);
+      clearance=Math.max(clearance,game.terrain.surfaceHeight(game.player.x,game.player.y)-game.player.elevation);
+    }
+    assert.ok(clearance>3.5,'walk actually passes beneath the deck');
+    assert.ok(Math.hypot(game.player.x-start.x,game.player.y-start.y)>280,'walk crosses the full bridge width');
+  }
+});
 
 test('hill walking follows the surface and a held Space jumps once above local ground',()=>{
   const game=terrainGame((x,z)=>10+.12*x+.08*z);game.cars=[];

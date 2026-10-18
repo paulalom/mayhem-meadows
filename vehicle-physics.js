@@ -107,9 +107,9 @@
 
     _terrain() { return this.game.terrain || this.game.world?.terrain || null; }
 
-    groundHeight(x, z) {
+    groundHeight(x, z, reference) {
       const terrain = this._terrain();
-      return terrain ? finite((terrain.surfaceHeight || terrain.heightAt).call(terrain, x, z)) : 0;
+      return terrain ? finite((terrain.surfaceHeight || terrain.heightAt).call(terrain, x, z, reference)) : 0;
     }
 
     _surfaceNormal(x, z) {
@@ -592,7 +592,7 @@
     }
 
     support(x, z, top = 100) {
-      const ground = this.groundHeight(x, z), bottom = Math.min(-0.1, finite(this.heightfield?.minValue) - 1, ground - 1);
+      const ground = this.groundHeight(x, z, top), bottom = Math.min(-0.1, finite(this.heightfield?.minValue) - 1, ground - 1);
       const ray = this.world.raycastClosest(new C.Vec3(x / SCALE, top, z / SCALE), new C.Vec3(x / SCALE, bottom, z / SCALE), { skipBackfaces: true }, this._ray || (this._ray = new C.RaycastResult()));
       if (ray && this._ray.body === this.floor && !this.heightfield) return 0;
       return ray ? this._ray.hitPointWorld.y : ground;

@@ -167,16 +167,17 @@
       const bounds = this.world?.bounds;
       return { minX: finite(bounds?.minX, 0), minY: finite(bounds?.minY, 0), maxX: finite(bounds?.maxX, SIZE), maxY: finite(bounds?.maxY, SIZE) };
     }
-    _ground(point,y) {
+    _ground(point,y,reference) {
       const x=typeof point==='object' ? point.x : point;
+      reference=typeof point==='object' ? point.elevation : reference;
       y=typeof point==='object' ? point.y : y;
-      return finite(this.world?.terrain?.surfaceHeight(x,y),0);
+      return finite(this.world?.terrain?.surfaceHeight(x,y,reference),0);
     }
     _base(entity) {
       return Number.isFinite(entity.elevation) ? entity.elevation : this._ground(entity.x+(entity.w || 0)/2,entity.y+(entity.h || 0)/2);
     }
     _onGround(entity) {
-      const normal=this.world?.terrain?.surfaceNormalAt?.(entity.x,entity.y) || this.world?.terrain?.normalAt?.(entity.x,entity.y);
+      const normal=this.world?.terrain?.surfaceNormalAt?.(entity.x,entity.y,entity.elevation) || this.world?.terrain?.normalAt?.(entity.x,entity.y);
       const allowance='speed' in entity ? Math.max(.2,VehiclePhysics.height(entity)/2*(1/Math.max(.35,finite(normal?.y,1))-1)+.1) : .2;
       return Math.abs(this._base(entity)-this._ground(entity))<allowance && Math.abs(finite(entity.verticalVelocity,0))<2;
     }
@@ -1549,7 +1550,7 @@
       if (length) {
         x /= length; y /= length; this.player.angle = Math.atan2(y, x);
         const dx = x * (input.boost ? 220 : 155) * dt, dy = y * (input.boost ? 220 : 155) * dt;
-        if(onTerrain) { this.player.elevation=this._ground(this.player.x+dx,this.player.y+dy); this.player.verticalVelocity=0; }
+        if(onTerrain) { this.player.elevation=this._ground(this.player.x+dx,this.player.y+dy,feet); this.player.verticalVelocity=0; }
         const landing = this.vehiclePhysics.support(this.player.x + dx, this.player.y + dy, feet + 0.045);
         if (this.player.verticalVelocity <= 0 && feet >= landing && this.player.elevation <= landing + 0.015) {
           this.player.elevation = landing; this.player.verticalVelocity = 0;
@@ -1789,7 +1790,7 @@
         } else if (distance(ped, { x: ped.homeX, y: ped.homeY }) > 85) ped.angle = Math.atan2(ped.homeY - ped.y, ped.homeX - ped.x);
         const dx = Math.cos(ped.angle) * ped.pace * dt, dy = Math.sin(ped.angle) * ped.pace * dt;
         if(this.railTraffic?.pedestrianBlocked(ped,dx,dy))continue;
-        ped.elevation=this._ground(ped.x+dx,ped.y+dy);
+        ped.elevation=this._ground(ped.x+dx,ped.y+dy,ped.elevation);
         if (this._move(ped, dx, dy, NPC_RADIUS)) {
           if (path) { ped.pathDirection *= -1; ped.pathIndex = clamp(ped.pathIndex + ped.pathDirection,0,path.points.length-1); }
           else ped.angle = wrapAngle(ped.angle + Math.PI * (0.65 + this._random() * 0.2));

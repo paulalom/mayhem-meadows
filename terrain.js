@@ -362,7 +362,7 @@
         bridgeCells.get(key).push(segment);
       }
     }
-    function bridgeAt(x,y) {
+    function bridgeAt(x,y,reference=Infinity) {
       let best=null;
       const nearby=bridgeCells.get(Math.floor(x/bridgeCellSize)+','+Math.floor(y/bridgeCellSize));
       if(!nearby)return best;
@@ -370,13 +370,16 @@
         const hit=closest(x,y,segment.a,segment.b);
         if(hit.distance>segment.road.width/2+(world.sidewalkWidth||32)+2)continue;
         const height=mix(segment.a.elevation,segment.b.elevation,hit.t);
+        // Keep overhead decks separate from the ground beneath them, allowing
+        // a small step or contact penetration when already walking on a deck.
+        if(height>reference+.2)continue;
         if(!best||hit.distance<best.distance-.000001||Math.abs(hit.distance-best.distance)<.000001&&height>best.height)best={height,segment,distance:hit.distance};
       }
       return best;
     }
-    const surfaceHeight=(x,y)=>Math.max(heightAt(x,y),bridgeAt(x,y)?.height??-Infinity);
-    function surfaceNormalAt(x,y) {
-      const bridge=bridgeAt(x,y);if(!bridge||bridge.height<heightAt(x,y))return normalAt(x,y);
+    const surfaceHeight=(x,y,reference)=>Math.max(heightAt(x,y),bridgeAt(x,y,reference)?.height??-Infinity);
+    function surfaceNormalAt(x,y,reference) {
+      const bridge=bridgeAt(x,y,reference);if(!bridge||bridge.height<heightAt(x,y))return normalAt(x,y);
       const {a,b,length}=bridge.segment,grade=(b.elevation-a.elevation)/(length/UNIT),nx=-(b.x-a.x)/length*grade,nz=-(b.y-a.y)/length*grade,l=Math.hypot(nx,1,nz);
       return {x:nx/l,y:1/l,z:nz/l};
     }

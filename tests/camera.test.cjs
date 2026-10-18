@@ -48,7 +48,7 @@ function assertSafeCamera(scene) {
   assert.ok(Math.abs(info.targetX - scene.game.current.x / 20) < 1e-9);
   assert.ok(Math.abs(info.targetZ - scene.game.current.y / 20) < 1e-9);
   assert.equal(scene._insideBuilding(info.x, info.y, info.z), false, 'camera must stay outside the actual rotated buildings and near-plane clearance');
-  assert.ok(info.y >= scene._surfaceY(info.x, info.z) + .2, 'camera must stay above the actual terrain surface');
+  assert.ok(info.y >= scene._surfaceY(info.x, info.z,scene.game.current.elevation) + .2, 'camera must stay above the actual terrain surface');
   scene.camera.updateMatrixWorld();
   const direction = scene.camera.getWorldDirection(new T.Vector3());
   assert.ok(Math.abs(wrapped(info.viewYaw - Math.atan2(direction.z, direction.x))) < 1e-9,
@@ -94,6 +94,21 @@ test('initial on-foot and driving cameras have comfortable viewing distance thro
   frames(scene, 120);
   assert.equal(scene.cameraInfo.mode, 'foot');
   assert.ok(scene.cameraInfo.distance > 2);
+});
+
+test('underpass camera follows the lower player and its boom stops below the deck',()=>{
+  const scene=makeScene(),field=scene.game.world.terrain;
+  for(const crossing of scene.game.world.railway.crossings.filter(crossing=>crossing.kind==='overpass')) {
+    const ground=field.heightAt(crossing.x,crossing.y),deck=field.surfaceHeight(crossing.x,crossing.y);
+    place(scene,{x:crossing.x,y:crossing.y,elevation:ground},0);scene.recenter();scene._hasCamera=false;
+    frames(scene,60);
+    assert.ok(scene.cameraInfo.targetY<deck-2,'look-at target stays with the player under the bridge');
+    assert.ok(scene.cameraInfo.y<deck-.32-.2,'camera near plane stays below the underside');
+    assert.ok(scene.cameraInfo.distance>1,'camera retains a usable view');
+    for(let frame=0;frame<90;frame++){scene.orbit(8,-1);frames(scene,1);assert.ok(scene.cameraInfo.targetY<deck-2);}
+    place(scene,{x:crossing.x,y:crossing.y,elevation:deck},0);scene.recenter();scene._hasCamera=false;frames(scene,60);
+    assert.ok(scene.cameraInfo.targetY>deck,'walking on top keeps the look-at target above the deck');
+  }
 });
 
 test('camera stays finite and outside buildings across sampled streets, corners, headings, and modes', () => {
