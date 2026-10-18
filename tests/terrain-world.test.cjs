@@ -73,6 +73,29 @@ test('both river crossings have playable decks and retain the river bed undernea
   }
 });
 
+test('bridge decks clear the full terrain width and meet adjoining ground streets',()=>{
+  for(const road of world.roads.filter(road=>road.bridge||road.railOverpasses?.length)) {
+    for(let i=1;i<road.points.length;i++) {
+      const a=road.points[i-1],b=road.points[i],length=Math.hypot(b.x-a.x,b.y-a.y);
+      for(let j=0;j<=8;j++)for(const side of [-1,-.5,0,.5,1]) {
+        const t=j/8,offset=side*(road.width/2+world.sidewalkWidth);
+        const x=a.x+(b.x-a.x)*t-(b.y-a.y)/length*offset,y=a.y+(b.y-a.y)*t+(b.x-a.x)/length*offset;
+        const deck=a.elevation+(b.elevation-a.elevation)*t;
+        assert.ok(world.terrain.heightAt(x,y)<=deck+.00001,road.id+' terrain rises through its deck at '+i+','+t+','+side);
+      }
+    }
+    for(const [id,point] of [[road.a,road.points[0]],[road.b,road.points.at(-1)]]) {
+      const streets=world.roads.filter(other=>!other.bridge&&!other.railOverpasses?.length&&(other.a===id||other.b===id));
+      if(!streets.length)continue;
+      assert.ok(Math.abs(world.terrain.heightAt(point.x,point.y)-point.elevation)<.025,road.id+' has no step at '+id);
+      for(const street of streets) {
+        const end=street.points[street.a===id?0:street.points.length-1];
+        assert.ok(Math.abs(end.elevation-point.elevation)<.025,'the ground street and deck share their junction height');
+      }
+    }
+  }
+});
+
 test('terrain is populated before world consumers and roads expose metre elevations',()=>{
   const t=world.terrain;
   assert.equal(t.count,257);assert.equal(t.rows,258);assert.equal(t.heights.length,t.count*t.rows);assert.equal(t.step,world.size/256);

@@ -125,6 +125,25 @@
       const value=raised[i].height-edge.cost;if(value>edge.vertex.height+.00001){edge.vertex.height=value;raised.push(edge.vertex);}
     }
     for(const road of world.roads||[]) for(const point of road.points) {point.elevation=point._terrainVertex.height;delete point._terrainVertex;}
+    // Bridge spans use a continuous upper profile: eliminate dips between
+    // ramps without lowering rail clearance or changing shared end heights.
+    // Its non-increasing slopes also let terrain triangles fit beneath it.
+    for(const road of world.roads||[])if(road.bridge||road.railOverpasses?.length) {
+      const arc=[0],hull=[];
+      for(let i=1;i<road.points.length;i++)arc.push(arc[i-1]+Math.hypot(road.points[i].x-road.points[i-1].x,road.points[i].y-road.points[i-1].y));
+      for(let i=0;i<road.points.length;i++) {
+        while(hull.length>1) {
+          const a=hull.at(-2),b=hull.at(-1);
+          if((road.points[b].elevation-road.points[a].elevation)/(arc[b]-arc[a])>=(road.points[i].elevation-road.points[b].elevation)/(arc[i]-arc[b]))break;
+          hull.pop();
+        }
+        hull.push(i);
+      }
+      for(let j=1;j<hull.length;j++) {
+        const a=hull[j-1],b=hull[j];
+        for(let i=a+1;i<b;i++)road.points[i].elevation=mix(road.points[a].elevation,road.points[b].elevation,(arc[i]-arc[a])/(arc[b]-arc[a]));
+      }
+    }
     const gradeHeight=new Float32Array(heights.length),gradeDistance=new Float32Array(heights.length),gradeMax=new Float32Array(heights.length),militaryRoadCells=new Set();
     gradeDistance.fill(Infinity);
     function cells(minX,minY,maxX,maxY,visit) {
@@ -337,6 +356,67 @@
         const grade=militaryRoadCells.has(item.index)&&militaryRoadCells.has(next)?militaryGrade:.13;
         const minimum=militarySupport(pads,originX+(col+dx)*step,originY+(row+dy)*step,step)??-Infinity;
         lowerPadGrade(next,Math.max(minimum,item.height+step/UNIT*grade*Math.hypot(dx,dy)));
+      }
+    }
+    // Deck profiles survive the later road, lot and railway grading. Reconnect
+    // their ground ends after those edits, then cut every supporting triangle
+    // below the deck plane. A centreline-only cut misses terrain at the edges.
+    const deckCeilings=new Float32Array(heights.length),deckFill=[];
+    deckCeilings.fill(Infinity);
+    const groundJunctions=new Set();
+    for(const road of world.roads||[])if(!road.bridge&&!road.railOverpasses?.length){groundJunctions.add(road.a);groundJunctions.add(road.b);}
+    for(const segment of bridgeSegments) {
+      const {a,b,road,length}=segment,dx=b.x-a.x,dy=b.y-a.y;
+      if(!length)continue;
+      const support=step*Math.SQRT2+2,half=road.width/2+(world.sidewalkWidth||32),margin=half+support;
+      const first=a===road.points[0]&&groundJunctions.has(road.a),last=b===road.points.at(-1)&&groundJunctions.has(road.b);
+      cells(Math.min(a.x,b.x)-margin,Math.min(a.y,b.y)-margin,Math.max(a.x,b.x)+margin,Math.max(a.y,b.y)+margin,(x,y,index)=>{
+        const hit=closest(x,y,a,b);if(hit.distance>margin)return;
+        const t=((x-a.x)*dx+(y-a.y)*dy)/(length*length),height=mix(a.elevation,b.elevation,t);
+        // Extend the plane to neighboring vertices, so interpolating a cell
+        // cannot put its interior above the physical, planar bridge collider.
+        const groundEnd=groundJunctions.has(road.a)&&Math.hypot(x-road.points[0].x,y-road.points[0].y)<margin
+          ||groundJunctions.has(road.b)&&Math.hypot(x-road.points.at(-1).x,y-road.points.at(-1).y)<margin;
+        deckCeilings[index]=Math.min(deckCeilings[index],height-(groundEnd?0:.02));
+        if(waterRaw(x,y)||railLocked.has(index))return;
+        if((first&&Math.hypot(x-a.x,y-a.y)<=support)||(last&&Math.hypot(x-b.x,y-b.y)<=support)) {
+          heights[index]=height;deckFill.push(index);
+        }
+      });
+    }
+    // Carry raised abutments along the existing road cuts with a gentle grade.
+    // Linked parking/airfield pads retain one level if the fill reaches them.
+    const deckPadLevels=new Map();
+    function raiseDeckApproach(index,value) {
+      const pad=parkingCells.get(index),group=pad&&parkingGroups.get(parkingGroup(pad));
+      if(group) {
+        const level=deckPadLevels.get(group)??Math.max(...Array.from(group.indices,index=>heights[index]));
+        if(value<=level+.00001)return;
+        const raised=Math.fround(value);deckPadLevels.set(group,raised);group.level=raised;
+        for(const member of group.indices){heights[member]=raised;deckFill.push(member);}
+      } else if(value>heights[index]+.00001){heights[index]=value;deckFill.push(index);}
+    }
+    for(let i=0;i<deckFill.length;i++) {
+      const index=deckFill[i],col=index%count,row=Math.floor(index/count);
+      for(const [dx,dy] of [[-1,0],[1,0],[0,-1],[0,1],[-1,1],[1,-1]]) {
+        if(col+dx<0||col+dx>=count||row+dy<0||row+dy>=rows)continue;
+        const next=index+dy*count+dx;if(!padGradeActive(next)||railLocked.has(next))continue;
+        if(waterRaw(originX+(col+dx)*step,originY+(row+dy)*step))continue;
+        raiseDeckApproach(next,heights[index]-step/UNIT*.13*Math.hypot(dx,dy));
+      }
+    }
+    for(let index=0;index<heights.length;index++)if(heights[index]>deckCeilings[index]) {
+      heights[index]=deckCeilings[index];gridPush({index,height:heights[index]});
+    }
+    // A deck cut can share vertices with a neighboring street. Continue its
+    // grade into that street rather than leaving a new lip at the cut edge.
+    while(gridHeap.length) {
+      const item=gridPop();if(item.height>heights[item.index]+.00001)continue;
+      const col=item.index%count,row=Math.floor(item.index/count);
+      for(const [dx,dy] of [[-1,0],[1,0],[0,-1],[0,1],[-1,1],[1,-1]]) {
+        if(col+dx<0||col+dx>=count||row+dy<0||row+dy>=rows)continue;
+        const next=item.index+dy*count+dx;if(!padGradeActive(next)||railLocked.has(next))continue;
+        lowerPadGrade(next,item.height+step/UNIT*MAX_ROAD_GRADE*Math.hypot(dx,dy));
       }
     }
     // Recheck after all neighboring pads have blended. Solid foundations cover

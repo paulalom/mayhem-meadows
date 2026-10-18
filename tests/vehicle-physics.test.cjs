@@ -264,6 +264,40 @@ function terrainCar(town, x, y, elevation = town.terrain.surfaceHeight(x, y)) {
   town.cars.push(ride); town.vehiclePhysics.sync(); return ride;
 }
 
+test('cars traverse both real river bridges and their ground approaches in either direction', () => {
+  const world = require('../world.js').createWorld();
+  for (const ids of [
+    ['willow-bottom-road', 'bridge-north-approach', 'bridge-north', 'airport-north-link'],
+    ['eastmarket-road', 'bridge-city-approach', 'bridge-city', 'airport-city-link']
+  ]) for (const reverse of [false, true]) {
+    const path = [];
+    for (const [i, id] of ids.entries()) {
+      const road = world.network.roadById.get(id), from = i === 0 ? road.length - 180 : 0, to = i === ids.length - 1 ? 180 : road.length;
+      for (let s = from; s < to; s += 12) path.push(world.network.pointOnRoad(id, s));
+      path.push(world.network.pointOnRoad(id, to));
+    }
+    if (reverse) path.reverse();
+    const town = terrainTown(world.terrain, world.roads), start = path[0], physics = town.vehiclePhysics;
+    const ride = terrainCar(town, start.x, start.y);
+    ride.angle = Math.atan2(path[1].y - start.y, path[1].x - start.x); physics.reset(ride);
+    let next = 1, maxGap = 0, stalledFrames = 0;
+    for (let frame = 0; frame < 2400 && next < path.length; frame++) {
+      while (next < path.length - 1 && Math.hypot(ride.x - path[next].x, ride.y - path[next].y) < 35) next++;
+      const target = path[next];
+      physics.control(ride, { targetSpeed: 110, heading: Math.atan2(target.y - ride.y, target.x - ride.x) });
+      physics.step(1 / 60);
+      maxGap = Math.max(maxGap, Math.abs(ride.elevation - world.terrain.surfaceHeight(ride.x, ride.y)));
+      if (frame > 120 && ride.speed < 30) stalledFrames++;
+      if (next === path.length - 1 && Math.hypot(ride.x - target.x, ride.y - target.y) < 35) next++;
+    }
+    const label = ids[2] + (reverse ? ' westbound' : ' eastbound');
+    assert.equal(next, path.length, label + ' completes the crossing without getting stuck on a terrain/deck step');
+    assert.ok(maxGap < .55, label + ' stays close to the driving surface');
+    assert.ok(stalledFrames < 60, label + ' has no sustained collision stop');
+    assert.ok(ride.upright, label + ' remains upright');
+  }
+});
+
 test('Cannon heightfield rows and triangle halves match absolute sampled terrain, including negative heights', () => {
   const terrain = sampledTerrain(3, 200, (x, z) => -4 + 0.6 * x + 0.5 * z - 0.01 * x * z);
   const town = terrainTown(terrain), physics = town.vehiclePhysics;

@@ -123,3 +123,17 @@ test('wide hillside road and pavement faces match terrain throughout each face, 
     }
   }
 });
+
+test('rendered river bridges and approaches keep grass below every pavement face', () => {
+  const world = require('../world.js').createWorld(), field = world.terrain;
+  const scene = makeScene({ ...world, roads: world.roads.filter(road => road.bridge || road.railOverpasses?.length) });
+  scene._roads();
+  for (const name of ['Curved roads', 'Continuous sidewalks']) {
+    const geometry = scene._roadGroup.getObjectByName(name).geometry, positions = geometry.attributes.position, indices = geometry.index;
+    for (let i = 0; i < indices.count; i += 3) for (const weights of [[1 / 3, 1 / 3, 1 / 3], [.2, .3, .5]]) {
+      const coordinate = axis => weights.reduce((sum, weight, j) => sum + weight * positions['get' + axis](indices.getX(i + j)), 0);
+      const x = coordinate('X'), y = coordinate('Y'), z = coordinate('Z');
+      assert.ok(y > field.heightAt(x * 20, z * 20) + .025, name + ' stays above the physical terrain throughout its triangles');
+    }
+  }
+});
