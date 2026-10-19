@@ -162,6 +162,7 @@
     }
 
     get current() { return this.cars.find(car => car.id === this.player.vehicleId) || this.aircraft?.find(craft => craft.id === this.player.vehicleId) || this.player; }
+    get ridingTrain() { return this.railTraffic?.cars.find(car => car.id === this.player.trainRide?.carId && car.visible && car.active) || null; }
     districtAt(point = this.current) { return districtAt(point); }
     _worldBounds() {
       const bounds = this.world?.bounds;
@@ -373,7 +374,7 @@
     _activePeds() { return this.peds.filter(ped=>!ped.transportedBy); }
 
     _standingPeople() {
-      const people = this.player.vehicleId ? this._activePeds() : [this.player].concat(this._activePeds());
+      const people = this.player.vehicleId || this.player.trainRide ? this._activePeds() : [this.player].concat(this._activePeds());
       return people.filter(person => !this.ragdolls.get(person.id));
     }
 
@@ -811,6 +812,7 @@
     interact() {
       if (this.ragdolls.get(this.player.id)) return false;
       if (this.player.parachuting) { this._toast('Land your parachute before boarding a ride.'); return false; }
+      if (this.player.trainRide) return this._exitTrain();
       if (Aircraft.isAircraft(this.current)) return this.aviation.interact();
       if (!this.player.vehicleId && this.aviation.enterNearest()) return true;
       if (this.player.vehicleId && this.current.burning) return this._exitCar(this.current, true);
@@ -823,6 +825,8 @@
         if (wash && (this.heat > 0 || this._witnessReports.length || VehicleStats.isDamaged(car))) return this._useService(wash);
         return this._exitCar(car);
       }
+      const train = this.railTraffic.boardingTarget(this.player);
+      if (train) return this._boardTrain(train);
       const nearby = this.cars.filter(car => car.health > 0 && !car.burning && !car.exploded && distance(car, this.player) < 75 && Math.abs(car.speed) < 110 && this._onGround(car) && car.upright !== false).sort((a, b) => distance(a, this.player) - distance(b, this.player));
       if (nearby.length) {
         const car = nearby[0];
@@ -836,8 +840,42 @@
       }
       const service = this.services.find(s => distance(s, this.player) < 100);
       if (service) return this._useService(service);
-      this._toast('Get closer to a car, garage, or car wash.');
+      this._toast('Get closer to a ride, train side or rear, or garage.');
       return false;
+    }
+
+    _boardTrain(target) {
+      this.player.trainRide = { carId: target.carId, along: target.along, across: target.across, facing: target.facing };
+      this._syncTrainRide();
+      this._toast('Hold tight! Press your interact key again to hop off.');
+      this._sound('enter', { x: this.player.x, y: this.player.y, kind: 'train' });
+      return true;
+    }
+
+    _syncTrainRide() {
+      const pose = this.railTraffic.riderPose(this.player.trainRide), bounds = this._worldBounds();
+      if (!pose || pose.x < bounds.minX + 18 || pose.x > bounds.maxX - 18 || pose.y < bounds.minY + 18 || pose.y > bounds.maxY - 18) {
+        this._exitTrain(true); return;
+      }
+      Object.assign(this.player, pose);
+    }
+
+    _exitTrain(forced = false) {
+      const bounds = this._worldBounds();
+      const point = this.railTraffic.exitPoints(this.player.trainRide).find(p => {
+        p.elevation = this._ground({ ...p, elevation: this.player.elevation });
+        return p.x >= bounds.minX + PLAYER_RADIUS && p.x <= bounds.maxX - PLAYER_RADIUS && p.y >= bounds.minY + PLAYER_RADIUS && p.y <= bounds.maxY - PLAYER_RADIUS &&
+          Math.abs(p.elevation - this.player.elevation) < 1.8 && this._dry(p) && this._isFree(p.x,p.y,PLAYER_RADIUS,p.elevation) &&
+          !this._solidVehicles().some(vehicle => this._personVehicleContact(p,vehicle,PLAYER_RADIUS)) &&
+          !this._standingPeople().some(person => distance(person,p)<PLAYER_RADIUS+NPC_RADIUS && Math.abs(this._base(person)-p.elevation)<PERSON_HEIGHT);
+      });
+      if (!point && !forced) { this._toast('No clear ground to hop off here. Try a little farther along.'); return false; }
+      const exit = point || this._safeRoadPosition(this.player, PLAYER_RADIUS);
+      this.player.trainRide = null;
+      Object.assign(this.player, { x: exit.x, y: exit.y, elevation: this._ground(exit), verticalVelocity: 0, grounded: true, ragdollGrace: 1.4 });
+      this._sound('exit', { x: this.player.x, y: this.player.y, kind: 'train' });
+      if (forced) this._toast('End of the line! Back on solid ground.');
+      return true;
     }
 
     _exitCar(car, forced = false) {
@@ -872,7 +910,7 @@
     }
 
     action(angle = this.player.angle, options) {
-      if (this.player.vehicleId || this._actionCooldown > 0 || this.ragdolls.get(this.player.id)) return false;
+      if (this.player.vehicleId || this.player.trainRide || this._actionCooldown > 0 || this.ragdolls.get(this.player.id)) return false;
       angle = finite(angle, this.player.angle); this.player.angle = angle;
       // Pitch is optional for older arcade callers. Heights are world metres;
       // planar positions are simulation units (20 units per metre).
@@ -1005,6 +1043,7 @@
     _knockDown(person, impulse) {
       if(person.transportedBy)return false;
       if (this.ragdolls.get(person.id) || person.ragdollGrace > 0) return false;
+      if (person === this.player && person.trainRide) this._exitTrain(true);
       const body = this.ragdolls.trigger(person, impulse,{terrain:this.world?.terrain});
       if (!body) return false;
       person.stunned = 3.8; person.bubble = this._pick(CURSES); person.bubbleTimer = 3;
@@ -1019,11 +1058,12 @@
     }
 
     flop() {
-      if (this.player.vehicleId || this.player.parachuting || this.ragdolls.get(this.player.id) || this.player.ragdollGrace > 0) return false;
+      if (this.player.vehicleId || this.player.trainRide || this.player.parachuting || this.ragdolls.get(this.player.id) || this.player.ragdollGrace > 0) return false;
       return this._knockDown(this.player, { x: Math.cos(this.player.angle) * 2.2, y: 2.2, z: Math.sin(this.player.angle) * 2.2 });
     }
 
     recover() {
+      if (this.player.trainRide) this._exitTrain(true);
       this.ragdolls.clear(this.player.id);
       this.player.parachuting = false;
       this.player.stunned = 0; this.player.ragdollGrace = 1.4;
@@ -1048,6 +1088,7 @@
     }
 
     _caught() {
+      if (this.player.trainRide) this._exitTrain(true);
       this.ragdolls.clear(this.player.id);
       this.player.stunned = 0; this.player.ragdollGrace = 1.4;
       const car = this.player.vehicleId ? this.current : null;
@@ -1438,9 +1479,10 @@
       if (!this.player.bubbleTimer) this.player.bubble = '';
       this.vehiclePhysics.sync();
       this.railTraffic.step(dt);
+      if (this.player.trainRide) this._syncTrainRide();
       if (this.player.vehicleId) { if (!Aircraft.isAircraft(this.current)) this._drive(this.current, dt, input); }
       else if (this.player.parachuting) this._parachuteStep(dt,input);
-      else this._walk(dt, input);
+      else if (!this.player.trainRide) this._walk(dt, input);
       for (const car of this.cars) if (car.traffic && car.health > 0 && car.id !== this.player.vehicleId) this._traffic(car, dt);
       this._pedestrians(dt);
       this._updateWitnessReports(dt);
@@ -1566,14 +1608,14 @@
     }
 
     jump() {
-      if (this.player.vehicleId || this.player.parachuting || this.ragdolls.get(this.player.id) || !this.player.grounded || this.player.stunned > 0) return false;
+      if (this.player.vehicleId || this.player.trainRide || this.player.parachuting || this.ragdolls.get(this.player.id) || !this.player.grounded || this.player.stunned > 0) return false;
       this.player.verticalVelocity = 7.2; this.player.grounded = false; this._sound('jump', { x: this.player.x, y: this.player.y }); return true;
     }
 
     _waterRecovery(dt) {
       const terrain=this.world?.terrain;
       if(!terrain) return;
-      for(const entity of this._vehicles().concat(this.player.vehicleId ? [] : [this.player])) {
+      for(const entity of this._vehicles().concat(this.player.vehicleId || this.player.trainRide ? [] : [this.player])) {
         const submerged=terrain.isWater(entity.x,entity.y) && this._base(entity)<finite(terrain.waterLevel,0)-.4;
         if(!submerged) { entity.waterTimer=0; entity._submerged=false; continue; }
         if(!entity._submerged) {

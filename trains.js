@@ -64,6 +64,45 @@
       }
     }
     get colliders(){return this.cars.concat(this.barriers).filter(c=>c.visible&&c.active);}
+    boardingTarget(person){
+      if(person.vehicleId||person.trainRide||person.parachuting||person.grounded===false)return null;
+      let nearest=null;
+      for(const car of this.cars){
+        if(!car.visible||!car.active||Math.abs(person.elevation-car.elevation)>1.8)continue;
+        const c=Math.cos(car.angle),s=Math.sin(car.angle),dx=person.x-car.x,dy=person.y-car.y;
+        const along=dx*c+dy*s,across=-dx*s+dy*c,half=car.railModel.length/2,width=car.railModel.width/2;
+        const service=this.services.find(value=>value.id===car.serviceId),rear=service?.leg==='outbound'?1:-1;
+        const candidates=[];
+        if(Math.abs(along)<=half)candidates.push({along:clamp(along,-half+16,half-16),across:(across<0?-1:1)*(width+8),facing:across<0?Math.PI/2:-Math.PI/2});
+        if(service&&car===service.cars[rear===1?0:service.cars.length-1]&&along*rear>=half&&Math.abs(across)<=width+12)
+          candidates.push({along:rear*(half+8),across:clamp(across,-width+8,width-8),facing:rear===1?Math.PI:0});
+        for(const target of candidates){const gap=Math.hypot(along-target.along,across-target.across);
+          if(gap>42||nearest&&gap>=nearest.distance)continue;
+          const pose=this.riderPose({carId:car.id,...target});
+          const bounds=this.game._worldBounds?.();
+          if(bounds&&(pose.x<bounds.minX+18||pose.x>bounds.maxX-18||pose.y<bounds.minY+18||pose.y>bounds.maxY-18))continue;
+          if(this.game._blockedLine?.(person,pose,person.elevation+.8,pose.elevation+.8))continue;
+          if(this.game._isFree&&!this.game._isFree(pose.x,pose.y,8,pose.elevation))continue;
+          if(this.colliders.some(other=>other!==car&&this.game._personVehicleContact?.(pose,other,8)))continue;
+          nearest={carId:car.id,...target,distance:gap};
+        }
+      }
+      return nearest;
+    }
+    riderPose(ride){
+      const car=this.cars.find(value=>value.id===ride.carId&&value.visible&&value.active);if(!car)return null;
+      const c=Math.cos(car.angle),s=Math.sin(car.angle);
+      return {x:car.x+c*ride.along-s*ride.across,y:car.y+s*ride.along+c*ride.across,
+        elevation:car.elevation+.35+Math.sin(car.pitch)*ride.along/20,angle:car.angle+ride.facing,verticalVelocity:car.verticalVelocity||0,grounded:false};
+    }
+    exitPoints(ride){
+      const car=this.cars.find(value=>value.id===ride.carId);if(!car)return [];
+      const half=car.railModel.length/2,width=car.railModel.width/2,side=Math.sign(ride.across)||1;
+      // Try the boarding side first, then clear ground beside the other side.
+      return [side,-side].flatMap(sign=>[ride.along,0,-half-26,half+26].map(along=>({
+        x:car.x+Math.cos(car.angle)*along-Math.sin(car.angle)*sign*(width+26),
+        y:car.y+Math.sin(car.angle)*along+Math.cos(car.angle)*sign*(width+26)})));
+    }
     event(type,data={}){this.events.push({time:this.time,type,...data});if(this.events.length>4096)this.events.splice(0,1024);}
     step(dt){if(!Number.isFinite(dt)||dt<=0)return;if(this.game.world?.railway!==this.layout||!this.game.world?.terrain?.heightAt){for(const c of this.cars.concat(this.barriers))c.visible=c.active=false;this.reservations.clear();return;}this.accumulator+=Math.min(dt,1);while(this.accumulator>=1/60-1e-9){this.accumulator-=1/60;this._tick(1/60);}}
     _request(service,leg){const route=this.routes[service.id][leg];if(route.blocks.some(b=>this.reservations.has(b.id)&&this.reservations.get(b.id)!==service.id))return false;
@@ -78,7 +117,7 @@
       for(const service of this.services)if(service.state==='running')this._move(service,dt);
     }
     _occupied(gate){
-      const game=this.game,vehicles=(game.cars||[]).concat(game.police||[],game.aircraft||[]),people=(game.peds||[]).concat(game.player&&!game.player.vehicleId?[game.player]:[]);
+      const game=this.game,vehicles=(game.cars||[]).concat(game.police||[],game.aircraft||[]),people=(game.peds||[]).concat(game.player&&!game.player.vehicleId&&!game.player.trainRide?[game.player]:[]);
       return vehicles.concat(people).some(entity=>{if(entity.visible===false)return false;
         const model=entity.railModel||entity.aircraftType&&root.MayhemAircraft?.AIRCRAFT_TYPES[entity.aircraftType],radius=model?Math.hypot(model.length,model.width)/2:entity.kind?45:10;
         if(!inCrossing(gate,entity,radius+8))return false;const base=game.world.terrain.heightAt(entity.x,entity.y);return (entity.elevation??base)-base<=3.05;

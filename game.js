@@ -102,7 +102,7 @@
   function radioUI() {
     const driving = Boolean(game.player.vehicleId);
     $('radio-panel').hidden = !started || !driving || graphicsFailed;
-    $('equipped-panel').hidden = driving && !(isAircraft(game.current) && MayhemAircraft.weaponsFor(game.current));
+    $('equipped-panel').hidden = Boolean(game.player.trainRide) || driving && !(isAircraft(game.current) && MayhemAircraft.weaponsFor(game.current));
     const station = STATIONS.find(item => item.id === audioSettings.radioStation);
     const name = station?.name || 'Radio off';
     const status = muted || audioSettings.masterVolume === 0 ? 'Sound muted' : audioSettings.musicVolume === 0 ? 'Music volume 0' : audio.getStatus().state === 'unavailable' ? 'Audio unavailable' : station?.genre || 'Enjoy the engine';
@@ -224,7 +224,7 @@
     }
   }
   function setAim(value) {
-    aiming = Boolean(value && playActive() && mouseLocked() && !game.player.vehicleId && !game.physics?.get('player'));
+    aiming = Boolean(value && playActive() && mouseLocked() && !game.player.vehicleId && !game.player.trainRide && !game.physics?.get('player'));
     scene?.setAiming(aiming);
   }
   function releaseMouse() {
@@ -833,12 +833,14 @@
     mini.restore();
   }
   function render(dt) {
-    if (aiming && (!playActive() || !mouseLocked() || game.player.vehicleId || game.physics?.get('player'))) setAim(false);
+    if (aiming && (!playActive() || !mouseLocked() || game.player.vehicleId || game.player.trainRide || game.physics?.get('player'))) setAim(false);
     if (scene && !graphicsFailed) { scene.update(dt, { reducedMotion, paused: paused || menuBusy() || !started }); renderedFrames++; }
   }
   function hud() {
     radioUI();
     drawMinimap();
+    const train = game.ridingTrain;
+    const trainService = train && game.railTraffic.services.find(service => service.id === train.serviceId);
     const tank = isTank(game.current);
     const tankReload = Math.max(0, Number.isFinite(game.current.gunCooldown) ? game.current.gunCooldown : 0);
     const tankGunStatus = game.current.health <= 0 || game.current.exploded ? 'CANNON DISABLED' : tankReload > 0 ? `RELOAD ${tankReload.toFixed(1)}s` : 'CANNON READY';
@@ -901,8 +903,9 @@
     } else { delete canvas.dataset.tankReload; delete canvas.dataset.tankTurretAngle; delete canvas.dataset.tankGunPitch; }
     $('mouse-hint').hidden = !playActive() || mouseLocked();
     $('game-shell').classList.toggle('aiming', aiming);
-    $('speed-value').textContent = game.player.vehicleId ? Math.round(Math.abs(game.current.speed || 0) * 3.6 / 20) + ' KM/H' : game.player.parachuting ? 'PARACHUTE' : fallen ? (fallen.phase === 'recover' ? 'GETTING UP' : 'WHOOPS!') : 'ON FOOT';
+    $('speed-value').textContent = game.player.vehicleId || train ? Math.round(Math.abs((train || game.current).speed || 0) * 3.6 / 20) + ' KM/H' : game.player.parachuting ? 'PARACHUTE' : fallen ? (fallen.phase === 'recover' ? 'GETTING UP' : 'WHOOPS!') : 'ON FOOT';
     $('speed-caption').textContent = flying ? (helicopter ? `${controlKey('climb')} climb · ${controlKey('descend')} descend` : `${controlKey(controlSettings.plane.preset === 'legacy' ? 'up' : 'throttleUp')} throttle up · ${controlKey(controlSettings.plane.preset === 'legacy' ? 'down' : 'throttleDown')} down`) : tank ? `${controlKey('up')} drive · MOUSE turret` : game.player.vehicleId ? (game.current.upright === false ? `${controlKey('recover')} · RIGHT THIS RIDE` : `${controlKey('boost')} boost · ${controlKey('brake')} drift`) : game.player.parachuting ? `${controlKey('up')} / ${controlKey('left')} / ${controlKey('down')} / ${controlKey('right')} steer` : fallen ? `${controlKey('recover')} · SKIP THE DRAMA` : `${controlKey('jump')} jump · ${controlKey('flop')} flop`;
+    if (train) $('speed-caption').textContent = `${controlKey('interact')} hop off · ${controlKey('recover')} recover`;
     $('flight-panel').hidden = !flying;
     $('game-shell').classList.toggle('flying', flying);
     if (flying) {
@@ -972,11 +975,12 @@
     $('composure-meter')?.setAttribute('aria-valuenow', Math.round(game.player.composure));
     const car = game.player.vehicleId ? game.current : null;
     const condition = car ? (flying ? aircraftCondition(car) : VehicleStats.condition(car)) * 100 : 100;
-    const rideName = car ? vehicleName(car) : 'Fresh sneakers';
+    const rideName = train ? trainService.name : car ? vehicleName(car) : 'Fresh sneakers';
     $('ride-name').textContent = rideName; $('ride-name').title = rideName;
-    $('ride-stats').hidden = !car;
+    $('ride-stats').hidden = !car && !train;
     $('ride-health').hidden = !car;
-    $('ride-status').textContent = car ? flying ? aircraftStatus(car) : VehicleStats.status(car) + (tank ? ' · ' + tankGunStatus : '') : game.player.parachuting ? 'Parachute · steer to a clear landing' : 'Ready for a stroll';
+    $('ride-status').textContent = train ? 'Holding on · scheduled train' : car ? flying ? aircraftStatus(car) : VehicleStats.status(car) + (tank ? ' · ' + tankGunStatus : '') : game.player.parachuting ? 'Parachute · steer to a clear landing' : 'Ready for a stroll';
+    if (train) $('ride-stats').textContent = trainService.leg === 'outbound' ? 'TO NORTHPORT · hop off before the map edge' : 'TO ' + trainService.destination.toUpperCase();
     $('ride-status').dataset.danger = Boolean(car?.burning);
     if (car) {
       const stats = flying ? aircraftModel(car) : VehicleStats.performance(car);
@@ -1020,6 +1024,8 @@
     else if (!flying && car?.upright === false) hint = `${controlKey('recover')} · right your ride and return to the road`;
     else if (!flying && car?.grounded === false) hint = `AIRBORNE!   ${controlKey('recover')} · recover to the road`;
     if (game.player.parachuting) hint = `PARACHUTE · ${controlKey('up')} / ${controlKey('left')} / ${controlKey('down')} / ${controlKey('right')} steer · ${controlKey('recover')} recover`;
+    if (train) hint = `${controlKey('interact')} · hop off train   ${controlKey('recover')} · recover to road`;
+    else if (!car && !fallen && !game.player.parachuting && game.railTraffic.boardingTarget(game.player)) hint = `${controlKey('interact')} · hop onto train side or rear`;
     $('interaction-hint').textContent = hint;
     if (fallen) $('interaction-hint').textContent = fallen.phase === 'recover' ? `Just finding my feet…  ${controlKey('recover')} · recover now` : `Oh, crumbs! Getting up shortly…  ${controlKey('recover')} · recover now`;
     $('interaction-hint').hidden = !started;

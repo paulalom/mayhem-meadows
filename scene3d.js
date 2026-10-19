@@ -2037,7 +2037,7 @@
       const movement = Math.hypot(player.x - this._lastPlayerX, player.y - this._lastPlayerY) / UNIT;
       this._lastPlayerX = player.x; this._lastPlayerY = player.y;
       this._walkPhase += Math.min(0.7, movement * 1.9);
-      const stride = !this.reducedMotion && movement > 0.002 ? Math.sin(this._walkPhase) * 0.65 : 0;
+      const stride = !player.trainRide && !this.reducedMotion && movement > 0.002 ? Math.sin(this._walkPhase) * 0.65 : 0;
       model.leftLeg.rotation.z = stride; model.rightLeg.rotation.z = -stride;
       model.leftArm.rotation.z = -stride * 0.65; model.rightArm.rotation.z = stride * 0.65;
       const equipped = model.toys[game.inventory?.equipped] ? game.inventory.equipped : 'popper';
@@ -2056,7 +2056,12 @@
         model.rightArm.rotation.z = Math.PI / 2 + pitch;
         model.rightArm.rotation.y = -0.1;
       }
-      for (const [id, toy] of Object.entries(model.toys)) toy.visible = !player.parachuting && id === equipped;
+      for (const [id, toy] of Object.entries(model.toys)) toy.visible = !player.parachuting && !player.trainRide && id === equipped;
+      if (player.trainRide) {
+        model.leftLeg.rotation.z = .25; model.rightLeg.rotation.z = -.15;
+        model.leftArm.rotation.z = 2.05; model.rightArm.rotation.z = 2.05;
+        model.rightArm.rotation.y = 0;
+      }
       if (player.parachuting) {
         model.leftLeg.rotation.z = .12; model.rightLeg.rotation.z = -.12;
         model.leftArm.rotation.z = 2.4; model.rightArm.rotation.z = 2.4;

@@ -46,7 +46,7 @@ Hosting serves each player their own game; it does not add multiplayer. Saves st
 | Left-click | Use the equipped toy on foot; hold for aircraft machine guns or a borrowed tank's cannon |
 | C | Recenter the camera behind you |
 | M | Open / close the illustrated city map; Escape also closes it |
-| E | Borrow/exit a nearby car or stopped tank; enter aircraft; use the car wash |
+| E | Borrow/exit a nearby car or stopped tank; enter aircraft; hop onto/off a train side or rear; use the car wash |
 | Space | Jump on foot; handbrake/drift while driving |
 | Hold Tab | Open the toy wheel; hover, use arrows, or press 1–3; release Tab to equip |
 | I | Open pockets to use supplies or shop for supplies and toys |
@@ -122,6 +122,8 @@ The [police balance design](POLICE.md) separates the implemented four-star air, 
 ## Railway timetable
 
 The timetable runs on elapsed, unpaused gameplay time. The first local leaves the north map edge at 0:08; the next leaves at 5:08. Locals alternate between the two platforms every five minutes. Freight alternates between Docklands and the container siding every ten minutes. The spacing accommodates the longer northern approach. Each service has one persistent consist; delays hold it safely rather than spawning another train into occupied track.
+
+Walk up to either side of a passenger or freight car, or the rear of the train, and press **E** (your on-foot interact key) to grab on, even while it is moving. Your character rides visibly on the outside as the train follows its timetable. Press the same key to hop off onto clear ground; a blocked exit keeps you aboard until there is room. **R** recovers you to a road, and reaching the map edge automatically drops you off safely.
 
 | Service / destination | First departure | Repeat | Station dwell |
 | --- | --- | --- | --- |
