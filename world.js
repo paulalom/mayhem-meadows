@@ -330,8 +330,8 @@
     const driveCentre={x:repairApproach.x-Math.sin(repairAngle)*146,y:repairApproach.y+Math.cos(repairAngle)*146};
     const repairDriveway={x:driveCentre.x-100,y:driveCentre.y-108,w:200,h:216,angle:repairAngle};
     const repairGarage={kind:'garage',serviceId:'repair',...repairPoint,angle:repairAngle,district:'works',lot:repairLot,driveway:repairDriveway,parts:[
-      {shape:'box',offset:[-4.8,2.5,0],half:[.2,2.5,6],color:'#71aaa5'},
-      {shape:'box',offset:[4.8,2.5,0],half:[.2,2.5,6],color:'#71aaa5'},
+      {shape:'box',offset:[-4.8,2.5,0],half:[.2,2.5,5.6],color:'#71aaa5'},
+      {shape:'box',offset:[4.8,2.5,0],half:[.2,2.5,5.6],color:'#71aaa5'},
       {shape:'box',offset:[0,2.5,5.8],half:[5,2.5,.2],color:'#71aaa5'},
       {shape:'box',offset:[-4,2,-5.8],half:[1,2,.2],color:'#e8dfc9'},
       {shape:'box',offset:[4,2,-5.8],half:[1,2,.2],color:'#e8dfc9'},

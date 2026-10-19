@@ -5,6 +5,7 @@
   const SIZE = World.SIZE;
   const MAX_HEAT = 4;
   const MAX_POLICE_HEAT = 3;
+  const GARAGE_SERVICE_TIMING = Object.freeze({ close: .9, blackAt: 1.5, revealAt: 2.15, openAt: 2.75, duration: 3.65 });
   const Tanks = root.MayhemTanks || (typeof require === 'function' ? require('./tanks.js') : null);
   const Soldiers = root.MayhemSoldiers || (typeof require === 'function' ? require('./soldiers.js') : null);
   const MilitaryTransport = root.MayhemMilitaryTransport || (typeof require === 'function' ? require('./military-transport.js') : null);
@@ -140,6 +141,7 @@
       this.projectiles = [];
       this.skidMarks = [];
       this.services = [];
+      this.garageService = null;
       this._troubleCooldown = 0;
       this._impactCooldown = 0;
       this._actionCooldown = 0;
@@ -197,6 +199,7 @@
     get escapeGoal() { return this.heat > 0 ? 8 + this.heat * 6 : 0; }
     get maxHealth() { return 100 + this.upgrades.armor * 25; }
     get garageAvailable() {
+      if (this.garageService) return false;
       if(Aircraft.isAircraft(this.current)) return false;
       const garage = this.services.find(service => service.id === 'garage');
       return Boolean(garage && distance(this.current, garage) < 115 &&
@@ -216,7 +219,18 @@
     }
 
     get repairAvailable() {
-      return this.insideRepairBay() && Math.abs(this.current.speed) <= 20 && this.current.upright !== false && this._onGround(this.current);
+      return !this.garageService && this.insideRepairBay() && Math.abs(this.current.speed) <= 20 && this.current.upright !== false && this._onGround(this.current);
+    }
+
+    get garageTransition() {
+      if (!this.garageService) return null;
+      const t = this.garageService.elapsed, timing = GARAGE_SERVICE_TIMING;
+      const smooth = value => { const v = clamp(value, 0, 1); return v * v * (3 - 2 * v); };
+      const phase = t < timing.close ? 'closing' : t < timing.blackAt ? 'fade-out' : t < timing.revealAt ? 'repairing' : t < timing.openAt ? 'fade-in' : 'opening';
+      const door = t < timing.close ? smooth(t / timing.close) : 1 - smooth((t - timing.openAt) / (timing.duration - timing.openAt));
+      const opacity = t < timing.blackAt ? smooth((t - timing.close) / (timing.blackAt - timing.close)) :
+        1 - smooth((t - timing.revealAt) / (timing.openAt - timing.revealAt));
+      return { phase, door, opacity };
     }
 
     _random() { this._seed = (Math.imul(this._seed, 1664525) + 1013904223) >>> 0; return this._seed / 4294967296; }
@@ -825,6 +839,7 @@
     }
 
     interact() {
+      if (this.garageService) return false;
       if (this.ragdolls.get(this.player.id)) return false;
       if (this.player.parachuting) { this._toast('Land your parachute before boarding a ride.'); return false; }
       if (this.player.trainRide) return this._exitTrain();
@@ -914,15 +929,40 @@
     }
 
     _useService(service) {
+      if (this.garageService) return false;
       if(Aircraft.isAircraft(this.current)) { this._toast('Aircraft are serviced at the airport hangar.'); return false; }
       if (service.id === 'garage') { this._toast('Sprinkle Garage: press G for your car collection, or I for toys and pocket supplies.'); return true; }
       if (!this.repairAvailable) { this._toast('Drive into Cool-Down Garage and stop inside the marked repair bay.'); return false; }
       if (this.heat === 0 && !this._witnessReports.length && !VehicleStats.isDamaged(this.current)) { this._toast('Your ride is already fully serviced.'); return false; }
       if (this.money < 75) { this._toast('Garage service costs $75. Finish a gig for cash.', 'warning'); return false; }
-      this.money -= 75; this._clearHeat(); this.player.composure = 100;
-      if (this.player.vehicleId) VehicleStats.repair(this.current, finite(this.current.maxHealth,this.maxHealth));
-      this._confetti(this.current.x, this.current.y, 36); this._toast('Back on the road: car repaired and heat cleared!', 'success'); this._sound('repair', { x: service.x, y: service.y });
+      this.money -= 75;
+      const car = this.current;
+      car.speed = car.vx = car.vy = car.verticalVelocity = 0;
+      this.vehiclePhysics.reset(car);
+      this.garageService = { vehicleId: car.id, serviceId: service.id, elapsed: 0, serviced: false };
+      this._toast('Cool-Down Garage · service underway.');
       return true;
+    }
+
+    _updateGarageService(dt) {
+      const state = this.garageService, car = this.cars.find(value => value.id === state.vehicleId);
+      if (!car || this.player.vehicleId !== state.vehicleId) {
+        if (!state.serviced) this.money += 75;
+        this.garageService = null;
+        return;
+      }
+      state.elapsed = Math.min(GARAGE_SERVICE_TIMING.duration, state.elapsed + dt);
+      if (!state.serviced && state.elapsed + 1e-8 >= GARAGE_SERVICE_TIMING.blackAt) {
+        VehicleStats.repair(car, finite(car.maxHealth, this.maxHealth));
+        this._clearHeat(); this.player.composure = 100;
+        state.serviced = true;
+        this._sound('repair', { x: car.x, y: car.y });
+      }
+      if (state.elapsed + 1e-8 >= GARAGE_SERVICE_TIMING.duration) {
+        this.garageService = null;
+        this._confetti(car.x, car.y, 36);
+        this._toast('Back on the road: car repaired and heat cleared!', 'success');
+      }
     }
 
     action(angle = this.player.angle, options) {
@@ -1079,6 +1119,7 @@
     }
 
     recover() {
+      if (this.garageService) return false;
       if (this.player.trainRide) this._exitTrain(true);
       this.ragdolls.clear(this.player.id);
       this.player.parachuting = false;
@@ -1247,6 +1288,7 @@
     }
 
     usePocket(id) {
+      if (this.garageService) return false;
       if (!owns(POCKET_ITEMS, id) || this.ragdolls.get(this.player.id)) return false;
       if (this.inventory.pockets[id] <= 0) { this._toast('No ' + POCKET_ITEMS[id].name + ' left. Restock at Sprinkle Garage.'); return false; }
       if (id === 'biscuits') {
@@ -1488,6 +1530,7 @@
     }
 
     _step(dt, input) {
+      if (this.garageService) { this._updateGarageService(dt); return; }
       this.time += dt;
       for (const key of ['_troubleCooldown', '_impactCooldown', '_actionCooldown', '_hornCooldown', '_styleCooldown', 'graceTimer']) this[key] = Math.max(0, this[key] - dt);
       this.player.ragdollGrace = Math.max(0, (this.player.ragdollGrace || 0) - dt);
@@ -1918,8 +1961,10 @@
     exportSave() {
       this._syncGarage();
       this._syncHangar();
+      // A reload before the blackout must not charge for unfinished work.
+      const savedMoney = this.money + (this.garageService && !this.garageService.serviced ? 75 : 0);
       return {
-        version: 2, money: this.money, score: this.score, bestScore: this.bestScore, completed: this.completed, upgrades: { ...this.upgrades },
+        version: 2, money: savedMoney, score: this.score, bestScore: this.bestScore, completed: this.completed, upgrades: { ...this.upgrades },
         inventory: { equipped: this.inventory.equipped, unlocked: this.inventory.unlocked.slice(), pockets: { ...this.inventory.pockets }, ammo: { ...this.inventory.ammo } },
         garage: { cars: this.garage.cars.map(car => ({ ...car })) },
         hangar: { aircraft: this.hangar.aircraft.map(craft => ({ ...craft })) }
@@ -1928,6 +1973,7 @@
 
     loadSave(data) {
       if (!data || typeof data !== 'object' || Array.isArray(data) || ![undefined, 1, 2].includes(data.version)) return false;
+      this.garageService = null;
       const upgrades = data.upgrades && typeof data.upgrades === 'object' ? data.upgrades : {};
       this.money = numeric(data.money, 150, 0, 999999);
       this.score = numeric(data.score, 0, 0, 999999);
@@ -1999,7 +2045,7 @@
 
   Game.SIZE = SIZE;
   Game.MAX_HEAT = MAX_HEAT;
-  const api = { Game, SIZE, MAX_HEAT, ROAD_CENTERS, ROAD_WIDTH, SIDEWALK_WIDTH, BUILDING_SETBACK, DISTRICTS, districtAt, CAR_TYPES, CAR_MODELS, VehicleStats, GADGETS, POCKET_ITEMS, PAINT_COLORS: Object.freeze(COLORS.slice()) };
+  const api = { Game, SIZE, MAX_HEAT, GARAGE_SERVICE_TIMING, ROAD_CENTERS, ROAD_WIDTH, SIDEWALK_WIDTH, BUILDING_SETBACK, DISTRICTS, districtAt, CAR_TYPES, CAR_MODELS, VehicleStats, GADGETS, POCKET_ITEMS, PAINT_COLORS: Object.freeze(COLORS.slice()) };
   root.MayhemCore = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(globalThis);

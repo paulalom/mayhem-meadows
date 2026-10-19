@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { Game } = require('../core.js');
+const { Game, GARAGE_SERVICE_TIMING } = require('../core.js');
 
 function fixture({ personnel = false } = {}) {
   const game = new Game({ seed: 42 });
@@ -193,7 +193,7 @@ test('a base hit mobilises on foot without waiting a minute, while garage servic
   const car = quiet.cars[0], workshop = quiet.services.find(service => service.id === 'repair');
   Object.assign(car, { x: workshop.x, y: workshop.y, elevation: quiet._ground(workshop), speed: 0, vx: 0, vy: 0 });
   quiet.player.vehicleId = car.id; quiet.money = 1000;
-  assert.equal(quiet._useService(workshop), true); assert.equal(quiet.heat, 0);
+  assert.equal(quiet._useService(workshop), true); advance(quiet, GARAGE_SERVICE_TIMING.blackAt + .01); assert.equal(quiet.heat, 0);
   assert.equal(quiet.tankTraffic.warning, 0); assert.equal(quiet.tankTraffic.baseAlarmTime, 0); assert.equal(quiet.tankTraffic.fourStarTime, 0);
   for (let tick = 0; tick < 10 * 60; tick++) quiet.tankTraffic.step(1 / 60);
   assert.equal(quiet.tankTraffic.tanks.length, 0);
@@ -239,7 +239,7 @@ test('tank repairs retain the 600-point hull, upgrades do not shrink it, and civ
   const workshop = game.services.find(service => service.id === 'repair');
   Object.assign(tank, { x: workshop.x, y: workshop.y, elevation: game._ground(workshop), health: 350, speed: 0, vx: 0, vy: 0 });
   game.heat = 4; game.tankTraffic.fourStarTime = 65;
-  assert.equal(game._useService(workshop), true); assert.equal(game.heat, 0);
+  assert.equal(game._useService(workshop), true); advance(game, GARAGE_SERVICE_TIMING.blackAt + .01); assert.equal(game.heat, 0);
   assert.equal(tank.health, 600); assert.equal(tank.maxHealth, 600); assert.equal(game.tankTraffic.fourStarTime, 0);
   const hostileSave = game.exportSave(); hostileSave.garage.cars = [{ id: 'ride-1', kind: 'tank', modelId: 'northwatch-warden', color: '#ffd15b', health: 600 }];
   assert.equal(game.loadSave(hostileSave), true); assert.equal(game.garage.cars.length, 0, 'save loading cannot smuggle an army tank into civilian storage');

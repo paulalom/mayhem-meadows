@@ -62,6 +62,26 @@ test('fixed world transforms stay cached while lights and subsequently added act
   assert.equal(scene._sun.target.matrixWorld.elements[12], 4);
 });
 
+test('the repair shutter still moves after static world transforms are frozen', () => {
+  const scene = fixture(), garage = { serviceId: 'repair', x: 800, y: 600, elevation: 2, angle: .5 };
+  scene._makeGarageDoor(garage); scene._freezeStaticWorld();
+  const door = scene._garageDoors.get('repair');
+  assert.equal(door.group.visible, false);
+  scene.game.garageService = { serviceId: 'repair' };
+  for (const closed of [.35, 1, .1]) {
+    scene.game.garageTransition = { door: closed }; scene._garageDoorStep(); scene.scene.updateMatrixWorld(true);
+    assert.equal(door.group.visible, true); assert.equal(door.group.userData.closed, closed);
+    const bounds = new T.Box3();
+    for (const panel of door.panels) if (panel.visible) bounds.union(new T.Box3().setFromObject(panel));
+    const raisedBottom = garage.elevation + 4 * (1 - closed);
+    assert.ok(bounds.min.y >= raisedBottom - .001 && bounds.min.y <= raisedBottom + .03,
+      'rendered shutter bottom follows its raised height after static transforms freeze');
+    assert.ok(Math.abs(bounds.max.y - (garage.elevation + 4)) < .03);
+  }
+  scene.game.garageService = null; scene.game.garageTransition = null;
+  scene._garageDoorStep(); assert.equal(door.group.visible, false); assert.equal(door.group.userData.closed, 0);
+});
+
 test('crossing stripes share one mesh per arm while hinge motion, paint and warning lights stay intact', () => {
   const scene = fixture(), gate = { width: 104, progress: .25, state: 'closing', stopLines: [{ x: 4000, y: 4000, angle: 0 }] };
   scene._sphere = scene._geometry(new T.IcosahedronGeometry(1, 1));

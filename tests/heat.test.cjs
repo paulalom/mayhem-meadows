@@ -1,6 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { GARAGE_SERVICE_TIMING } = require('../core.js');
 const { makeFlatGame } = require('./helpers/flat-game.cjs');
 const World = require('../world.js');
 const advance = (game, seconds) => { for (let t = 0; t < seconds - .000001; t += 1 / 60) game.update(1 / 60); };
@@ -142,6 +143,7 @@ test('garage service, capture and escape clear pending calls so they cannot rest
       const service = game.services.find(value => value.id === 'repair');
       Object.assign(game.current, { x: service.x, y: service.y });
       game.money = 100; assert.equal(game._useService(service), true);
+      advance(game, GARAGE_SERVICE_TIMING.blackAt + .01);
     }
     if (ending === 'capture') game._caught();
     if (ending === 'escape') {

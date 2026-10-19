@@ -40,8 +40,8 @@
   const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   const menuBusy = () => settingsOpen || mapOpen || wheelOpen || inventoryView !== null;
   const mouseLocked = () => document.pointerLockElement === canvas;
-  const playActive = () => started && !paused && !menuBusy() && !graphicsFailed && $('help-screen').hidden && !document.hidden;
-  const uiAudioActive = () => started && !paused && menuBusy() && !graphicsFailed && $('help-screen').hidden && !document.hidden;
+  const playActive = () => started && !paused && !menuBusy() && !graphicsFailed && !game.garageService && $('help-screen').hidden && !document.hidden;
+  const uiAudioActive = () => started && !paused && (menuBusy() || Boolean(game.garageService)) && !graphicsFailed && $('help-screen').hidden && !document.hidden;
 
   function toast(text, kind = '') {
     $('toast').hidden = false;
@@ -321,6 +321,7 @@
     if (wheelOpen) document.querySelector('.wheel-option[data-gadget="' + toyIds[wheelIndex] + '"]').focus({ preventScroll: true });
   }
   function openWheel() {
+    if (game.garageService) return;
     if (!started || paused || mapOpen || graphicsFailed || !$('help-screen').hidden || inventoryView) return;
     if (game.physics?.get('player')) { toast('Find your feet before changing toys. R skips the drama.'); return; }
     wheelOpen = true; keys.clear(); releaseMouse();
@@ -354,6 +355,7 @@
     if (wasOpen && focus && playActive()) sound('menu-close');
   }
   function openInventory(view) {
+    if (game.garageService) return;
     if (!started) start();
     if (paused || mapOpen || graphicsFailed || !$('help-screen').hidden || !started) return;
     const previousView = inventoryView;
@@ -659,6 +661,7 @@
       event.preventDefault(); if (!event.repeat) setPause(!paused); return;
     }
     if (paused || graphicsFailed || document.activeElement !== canvas) return;
+    if (game.garageService) { event.preventDefault(); return; }
     if (event.code === 'KeyM') {
       event.preventDefault();
       if (!event.repeat) openMap();
@@ -836,8 +839,14 @@
     mini.restore();
   }
   function render(dt) {
+    const transition = game.garageTransition, fade = $('garage-fade');
+    fade.hidden = !transition;
+    fade.style.opacity = String(transition?.opacity || 0);
+    fade.dataset.phase = transition?.phase || 'idle';
+    $('game-shell').classList.toggle('garage-servicing', Boolean(transition));
+    canvas.dataset.garagePhase = transition?.phase || 'idle';
     if (aiming && (!playActive() || !mouseLocked() || game.player.vehicleId || game.player.trainRide || game.physics?.get('player'))) setAim(false);
-    if (scene && !graphicsFailed) { scene.update(dt, { reducedMotion, paused: paused || menuBusy() || !started }); renderedFrames++; }
+    if (scene && !graphicsFailed) { scene.update(dt, { reducedMotion, paused: paused || menuBusy() || !started || Boolean(game.garageService) }); renderedFrames++; }
   }
   function hud() {
     radioUI();
@@ -1005,7 +1014,7 @@
     document.querySelectorAll('.contract-button').forEach(button => buttonState(button, mission ? 'Finish or abandon your current gig before starting another.' : ''));
     const nearest = game.services.find(s => dist(s, game.current) < (s.id === 'repair' ? 360 : 115));
     const insideRepairBay = game.insideRepairBay();
-    $('garage-status').textContent = nearest ? (nearest.id === 'repair' ? (game.repairAvailable ? 'In the repair bay · E repairs and clears heat for $75.' : 'Cool-Down Garage · drive inside and stop for repairs.') : 'At the garage · G saves rides. I buys supplies.') : 'Sprinkle Garage: rides & supplies. Cool-Down Garage: repairs & heat relief.';
+    $('garage-status').textContent = game.garageService ? 'Cool-Down Garage · servicing your ride…' : nearest ? (nearest.id === 'repair' ? (game.repairAvailable ? 'In the repair bay · E repairs and clears heat for $75.' : 'Cool-Down Garage · drive inside and stop for repairs.') : 'At the garage · G saves rides. I buys supplies.') : 'Sprinkle Garage: rides & supplies. Cool-Down Garage: repairs & heat relief.';
     $('boost-price').textContent = game.upgrades.boost >= 3 ? 'MAXED' : money(200 + game.upgrades.boost * 150);
     $('armor-price').textContent = game.upgrades.armor >= 3 ? 'MAXED' : money(150 + game.upgrades.armor * 125);
     document.querySelectorAll('.purchase-button').forEach(button => {

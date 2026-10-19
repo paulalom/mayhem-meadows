@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { Game, MAX_HEAT } = require('../core.js');
+const { Game, MAX_HEAT, GARAGE_SERVICE_TIMING } = require('../core.js');
 const { makeFlatGame } = require('./helpers/flat-game.cjs');
 
 function fixture() {
@@ -72,6 +72,7 @@ test('garage service and capture clear fourth-star heat, pending calls and stale
       const service = game.services.find(value => value.id === 'repair');
       const car = game._addCar(service.x, service.y, 0, 'compact', '#ffd15b'); game.player.vehicleId = car.id;
       assert.equal(game._useService(service), true);
+      for (let tick = 0; tick < Math.ceil((GARAGE_SERVICE_TIMING.blackAt + .01) * 60); tick++) game.update(1 / 60);
     }
     else game._caught();
     assert.equal(game.heat, 0); assert.equal(game.airPoliceSeen, false); assert.equal(game.policeSeen, false);

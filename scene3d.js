@@ -941,6 +941,7 @@
           this._static(this._sphere, this._material('#a3e5eb'), x, elevation + 1.70, z, 0.18, 0.55, 0.18, null, false);
         }
         if (object.serviceId === 'repair') {
+          this._makeGarageDoor(object);
           sign('COOL-DOWN GARAGE', -6.03, 4.5, Math.PI, '#fff1c8', '#385e65', 7.8, .68);
           sign('REPAIRS $75  /  STOP + PRESS E', 5.57, 2.9, Math.PI, '#dcfff1', '#385e65', 6.2, .62);
           sign('DRIVE IN', -6.05, 3.85, Math.PI, '#385e65', '#fff1c8', 3.2, .38);
@@ -960,6 +961,42 @@
         }
       }
       this._activePropObject = null;
+    }
+
+    _makeGarageDoor(garage) {
+      if (!this._cube) return;
+      this._garageDoors ??= new Map();
+      const group = new this.T.Group();
+      group.name = 'Repair garage door';
+      group.position.set(garage.x / UNIT, garage.elevation, garage.y / UNIT);
+      group.rotation.y = -garage.angle;
+      group.userData.closed = 0;
+      const panels = [];
+      for (let i = 0; i < 8; i++) panels.push(this._box(group, i % 2 ? '#9aa9a9' : '#b7c5c0', 0, 4 - i * .5 - .25, -5.85, 6, .48, .16));
+      const handle = this._box(group, '#435d65', 0, .28, -5.96, .7, .08, .07);
+      group.visible = false;
+      this.scene.add(group);
+      this._garageDoors.set(garage.serviceId, { group, panels, handle });
+    }
+
+    _garageDoorStep() {
+      const state = this.game.garageService, transition = this.game.garageTransition;
+      for (const [id, door] of this._garageDoors || []) {
+        const closed = state?.serviceId === id ? transition.door : 0, bottom = 4 * (1 - closed);
+        if (door.group.userData.closed === closed) continue;
+        door.group.visible = closed > .001;
+        door.group.userData.closed = closed;
+        for (let i = 0; i < door.panels.length; i++) {
+          const panel = door.panels[i], top = 4 - i * .5, height = clamp(top - bottom, 0, .5);
+          panel.visible = height > .001;
+          panel.position.y = top - height / 2;
+          panel.scale.y = Math.max(.001, height - .02);
+          panel.updateMatrix();
+        }
+        door.handle.position.y = bottom + .28;
+        door.handle.visible = closed > .15;
+        door.handle.updateMatrix();
+      }
     }
 
     _services() {
@@ -1892,7 +1929,35 @@
       });
     }
 
+    _garageCameraStep() {
+      const state = this.game.garageService;
+      const garage = state && this.game.services.find(service => service.id === state.serviceId);
+      if (!garage || state.elapsed >= root.MayhemCore.GARAGE_SERVICE_TIMING.blackAt) {
+        if (this._garageCamera) { this._garageCamera = null; this._hasCamera = false; }
+        return false;
+      }
+      const T = this.T;
+      if (!this._garageCamera) this._garageCamera = { position: this.camera.position.clone(), quaternion: this.camera.quaternion.clone(),
+        end: new T.Vector3(), target: new T.Vector3(), facing: new T.Quaternion(), look: new T.Matrix4() };
+      const shot = this._garageCamera, c = Math.cos(garage.angle), s = Math.sin(garage.angle), x = garage.x / UNIT, z = garage.y / UNIT;
+      shot.end.set(x + c * 8 + s * 14, garage.elevation + 4.4, z + s * 8 - c * 14);
+      shot.target.set(x + s * 3, garage.elevation + 2, z - c * 3);
+      shot.look.lookAt(shot.end, shot.target, this.camera.up); shot.facing.setFromRotationMatrix(shot.look);
+      const t = clamp(state.elapsed / .45, 0, 1), blend = this.reducedMotion ? 1 : t * t * (3 - 2 * t);
+      this.camera.position.lerpVectors(shot.position, shot.end, blend);
+      this.camera.quaternion.slerpQuaternions(shot.quaternion, shot.facing, blend);
+      this.camera.updateMatrixWorld(true);
+      this.camera.getWorldDirection(this._viewDirection);
+      Object.assign(this._cameraInfo, { x: this.camera.position.x, y: this.camera.position.y, z: this.camera.position.z,
+        targetX: shot.target.x, targetY: shot.target.y, targetZ: shot.target.z, mode: 'garage',
+        distance: this.camera.position.distanceTo(shot.target), obstructed: false,
+        viewYaw: Math.atan2(this._viewDirection.z, this._viewDirection.x),
+        viewPitch: Math.atan2(this._viewDirection.y, Math.hypot(this._viewDirection.x, this._viewDirection.z)), aiming: false });
+      return true;
+    }
+
     _cameraStep(dt) {
+      if (this._garageCameraStep()) return;
       const current = this.game.current, driving = Boolean(this.game.player.vehicleId);
       const flying = driving && (current.kind === 'aircraft' || Boolean(current.aircraftType));
       const workshop = this.game.services?.find(service => service.id === 'repair');
@@ -2319,6 +2384,7 @@
       root.MayhemTroopRender?.step?.(this);
       this._effects();
       this._landscapeStep(this.game.time);
+      this._garageDoorStep();
       this._cameraStep(step);
       this.renderer.render(this.scene, this.camera);
     }

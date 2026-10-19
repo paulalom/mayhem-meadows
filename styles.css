@@ -50,6 +50,9 @@ button:active:not(:disabled){transform:translateY(1px)}
 .meter>span{display:block;width:100%;height:100%;background:var(--aqua);transition:width .18s linear}
 .game-shell{position:relative;height:min(68vh,780px);min-height:510px;overflow:hidden;border:1px solid var(--line);background:#81986c;isolation:isolate;touch-action:none}
 #game-canvas{display:block;width:100%;height:100%;outline-offset:-4px}
+.garage-fade{position:absolute;inset:0;background:#000;opacity:0;pointer-events:none;z-index:20}
+.garage-servicing>.screen-overlay{z-index:22}
+.garage-servicing>:not(#game-canvas):not(#garage-fade):not(.screen-overlay){visibility:hidden}
 .viewport-topline{position:absolute;top:14px;left:17px;right:17px;display:flex;justify-content:space-between;align-items:center;pointer-events:none;z-index:1;gap:10px;font-family:"Courier New",monospace;font-size:8px;font-weight:700;letter-spacing:1.1px}
 .district-label{background:rgba(20,29,39,.88);color:var(--cream);border-radius:3px;display:flex;align-items:center;gap:8px;padding:6px 8px}
 .game-version{position:absolute;top:14px;right:17px;z-index:16;color:var(--cream);background:rgba(20,29,39,.9);padding:6px 8px;border-radius:3px;font:700 8px "Courier New",monospace;letter-spacing:.4px;white-space:nowrap;pointer-events:none}

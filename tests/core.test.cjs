@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { Game, SIZE } = require('../core.js');
+const { Game, SIZE, GARAGE_SERVICE_TIMING } = require('../core.js');
 const { PLAYER_RADIUS, NPC_RADIUS } = require('../physics.js');
 const { makeFlatGame: makeGame } = require('./helpers/flat-game.cjs');
 const advance = (game, seconds, input = {}) => { for (let t = 0; t < seconds - 0.0001; t += 1 / 60) game.update(1 / 60, input); };
@@ -195,7 +195,9 @@ test('garage purchases require proximity and use the displayed prices', () => {
 test('a stopped driver can get garage repairs without exiting; serviced rides can exit freely', () => {
   const game = makeGame(); game.interact(); const car = game.current;
   const garage = game.services.find(service=>service.id==='repair'); car.x = garage.x; car.y = garage.y; car.elevation = garage.elevation; car.speed = 0; car.health = 40; game.heat = 2;
-  assert.equal(game.interact(), true); assert.equal(game.money, 75); assert.equal(game.heat, 0); assert.equal(car.health, game.maxHealth); assert.equal(game.player.vehicleId, car.id);
+  assert.equal(game.interact(), true); assert.equal(game.money, 75); assert.equal(game.heat, 2); assert.equal(car.health, 40); assert.equal(game.player.vehicleId, car.id);
+  assert.equal(game.interact(), false); advance(game, GARAGE_SERVICE_TIMING.duration + .01);
+  assert.equal(game.heat, 0); assert.equal(car.health, game.maxHealth);
   assert.equal(game.interact(), true); assert.equal(game.player.vehicleId, null); assert.equal(game.money, 75);
 });
 

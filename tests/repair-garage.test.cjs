@@ -1,9 +1,24 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { Game } = require('../core.js');
+const { Game, GARAGE_SERVICE_TIMING } = require('../core.js');
 const World = require('../world.js');
 const Railway = require('../railway.js');
+const { makeFlatGame } = require('./helpers/flat-game.cjs');
+
+function advance(game, seconds, input = {}) {
+  for (let remaining = seconds; remaining > .000001; remaining -= .1) game.update(Math.min(.1, remaining), input);
+}
+
+function transitionFixture() {
+  const game = makeFlatGame(), service = game.services.find(value => value.id === 'repair'), car = game.cars[0];
+  Object.assign(car, { x: service.x, y: service.y, angle: service.angle + Math.PI / 2,
+    elevation: service.elevation, speed: 0, vx: 0, vy: 0, health: 40, engineHealth: 35, handlingHealth: 25 });
+  game.player.vehicleId = car.id;
+  Object.assign(game.player, { x: car.x, y: car.y, elevation: car.elevation });
+  game.money = 200; game.heat = 2; game.vehiclePhysics.reset(car); game.vehiclePhysics.sync(); game.drainEvents();
+  return { game, service, car };
+}
 
 function fixture(kind = 'compact') {
   const game = new Game({ seed: 42 }), service = game.services.find(value => value.id === 'repair');
@@ -70,15 +85,97 @@ test('service requires a stopped, grounded ride fully inside the bay and never s
   ]) {
     Object.assign(car, state); assert.equal(game._useService(service), false);
     assert.equal(game.money, 200); assert.equal(car.health, 40); assert.equal(game.heat, 2);
+    assert.equal(game.garageService, null); assert.equal(game.garageTransition, null);
   }
   Object.assign(car, point(0, 0), { elevation: service.elevation, speed: 0 });
   game.player.vehicleId = null; assert.equal(game._useService(service), false); assert.equal(game.money, 200);
   game.player.vehicleId = car.id; game.money = 74;
   assert.equal(game._useService(service), false); assert.equal(game.money, 74);
+  assert.equal(game.garageService, null); assert.equal(game.garageTransition, null);
   game.money = 200; assert.equal(game.interact(), true);
-  assert.equal(game.money, 125); assert.equal(game.heat, 0);
+  assert.equal(game.money, 125); assert.equal(game.heat, 2); assert.equal(car.health, 40);
+  assert.equal(game.interact(), false); assert.equal(game.player.vehicleId, car.id);
+  advance(game, GARAGE_SERVICE_TIMING.duration + .01);
+  assert.equal(game.heat, 0);
   assert.equal(car.health, game.maxHealth); assert.equal(car.engineHealth, 100); assert.equal(car.handlingHealth, 100);
   assert.equal(game.player.vehicleId, car.id);
   assert.equal(game._useService(service), false); assert.equal(game.money, 125);
+  assert.equal(game.garageService, null); assert.equal(game.garageTransition, null);
   assert.equal(game.interact(), true); assert.equal(game.player.vehicleId, null);
+});
+
+test('repair cinematic closes the shutter, repairs under black, then fades in and opens before returning control', () => {
+  const { game, service, car } = transitionFixture();
+  assert.deepEqual(GARAGE_SERVICE_TIMING, { close: .9, blackAt: 1.5, revealAt: 2.15, openAt: 2.75, duration: 3.65 });
+  assert.equal(game.garageTransition, null); assert.equal(game.interact(), true);
+  assert.equal(game.money, 125); assert.equal(game.garageService.vehicleId, car.id);
+  assert.equal(game.garageService.serviceId, service.id); assert.equal(game.garageService.serviced, false);
+  assert.equal(game.garageTransition.phase, 'closing'); assert.equal(game.garageTransition.door, 0);
+  assert.equal(game.garageTransition.opacity, 0);
+  advance(game, .45);
+  assert.equal(game.garageTransition.phase, 'closing'); assert.ok(game.garageTransition.door > 0 && game.garageTransition.door < 1);
+  assert.equal(game.garageTransition.opacity, 0); assert.equal(car.health, 40);
+  advance(game, .75);
+  assert.equal(game.garageTransition.phase, 'fade-out'); assert.equal(game.garageTransition.door, 1);
+  assert.ok(game.garageTransition.opacity > 0 && game.garageTransition.opacity < 1);
+  assert.equal(car.health, 40); assert.equal(game.heat, 2);
+  advance(game, .29); assert.equal(car.health, 40); assert.equal(game.garageService.serviced, false);
+  advance(game, .02);
+  assert.equal(game.garageTransition.phase, 'repairing'); assert.equal(game.garageTransition.opacity, 1);
+  assert.equal(game.garageTransition.door, 1); assert.equal(game.garageService.serviced, true);
+  assert.equal(car.health, game.maxHealth); assert.equal(car.engineHealth, 100); assert.equal(car.handlingHealth, 100); assert.equal(game.heat, 0);
+  assert.equal(game.particles.length, 0);
+  const midpointEvents = game.drainEvents();
+  assert.equal(midpointEvents.filter(event => event.type === 'sound' && event.name === 'repair').length, 1);
+  assert.equal(midpointEvents.some(event => event.type === 'toast' && /Back on the road/.test(event.text)), false);
+  advance(game, .94);
+  assert.equal(game.garageTransition.phase, 'fade-in'); assert.equal(game.garageTransition.door, 1);
+  assert.ok(game.garageTransition.opacity > 0 && game.garageTransition.opacity < 1);
+  advance(game, .75);
+  assert.equal(game.garageTransition.phase, 'opening'); assert.equal(game.garageTransition.opacity, 0);
+  assert.ok(game.garageTransition.door > 0 && game.garageTransition.door < 1);
+  assert.equal(game.interact(), false); assert.equal(game.player.vehicleId, car.id);
+  advance(game, .46);
+  assert.equal(game.garageService, null); assert.equal(game.garageTransition, null); assert.equal(game.money, 125);
+  assert.ok(game.particles.length > 0);
+  const completeEvents = game.drainEvents();
+  assert.equal(completeEvents.filter(event => event.type === 'toast' && /Back on the road/.test(event.text)).length, 1);
+  assert.equal(completeEvents.filter(event => event.type === 'sound' && event.name === 'repair').length, 0);
+  assert.equal(game.interact(), true); assert.equal(game.player.vehicleId, null);
+});
+
+test('repair service charges once and freezes driving, world timers and other actions until the doors reopen', () => {
+  const { game, service, car } = transitionFixture(); game.acceptMission('delivery'); game.score = 80;
+  game.player.composure = 40; game.inventory.unlocked.push('cannon');
+  game.projectiles.push({ id: 'frozen-projectile', x: 400, y: 400, vx: 100, vy: 0, life: 1, maxLife: 1 });
+  assert.equal(game._useService(service), true);
+  const snapshot = () => JSON.parse(JSON.stringify({ time: game.time, mission: game.mission,
+    cars: game.cars, peds: game.peds, police: game.police, player: game.player, projectiles: game.projectiles,
+    score: game.score, pockets: game.inventory.pockets, cooldown: game._actionCooldown, grace: game.graceTimer }));
+  const before = snapshot();
+  assert.equal(game._useService(service), false); assert.equal(game.interact(), false); assert.equal(game.recover(), false);
+  for (const pocket of ['biscuits', 'repairTape', 'refill']) assert.equal(game.usePocket(pocket), false, pocket);
+  advance(game, .8, { up: true, right: true, boost: true, brake: true });
+  assert.equal(game.garageTransition.phase, 'closing'); assert.deepEqual(snapshot(), before); assert.equal(game.money, 125);
+  game.update(NaN, { up: true }); game.update(-1, { up: true });
+  assert.deepEqual(snapshot(), before); assert.ok(Math.abs(game.garageService.elapsed - .8) < 1e-9);
+  advance(game, GARAGE_SERVICE_TIMING.duration - .8);
+  assert.equal(game.garageService, null); assert.equal(game.time, before.time);
+  assert.equal(game.mission.timeLeft, before.mission.timeLeft);
+  assert.equal(game.player.vehicleId, car.id); assert.equal(game.money, 125);
+  advance(game, .2, { up: true }); assert.ok(game.time > before.time); assert.ok(car.speed > 0);
+});
+
+test('garage service is transient and loading progress always starts with an open, visible garage', () => {
+  const { game, service } = transitionFixture();
+  assert.equal(game._useService(service), true); advance(game, .7);
+  assert.equal(game.exportSave().money, 200, 'reload cannot charge for an unfinished repair');
+  assert.equal(game.money, 125, 'the active game still reserves the payment exactly once');
+  advance(game, 1);
+  const saved = game.exportSave();
+  assert.equal(saved.money, 125, 'a completed repair remains paid in saved progress');
+  assert.equal(saved.garageService, undefined); assert.equal(saved.garageTransition, undefined);
+  const loaded = makeFlatGame(); assert.equal(loaded.loadSave({ ...saved, garageService: game.garageService }), true);
+  assert.equal(loaded.garageService, null); assert.equal(loaded.garageTransition, null);
+  assert.equal(game.loadSave(saved), true); assert.equal(game.garageService, null); assert.equal(game.garageTransition, null);
 });

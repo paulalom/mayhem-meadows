@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { PAINT_COLORS } = require('../core.js');
+const { PAINT_COLORS, GARAGE_SERVICE_TIMING } = require('../core.js');
 const { makeFlatGame } = require('./helpers/flat-game.cjs');
 
 const empty = () => {
@@ -76,6 +76,8 @@ test('workshop service, collection repairs and paint have dedicated cues and fai
   const garage = game.services.find(service => service.id === 'repair');
   Object.assign(car, { x: garage.x, y: garage.y });
   assert.equal(game._useService(garage), true);
+  assert.deepEqual(sounds(game), []);
+  advance(game, GARAGE_SERVICE_TIMING.blackAt + .01);
   assert.deepEqual(sounds(game), [{ type: 'sound', name: 'repair', details: { x: garage.x, y: garage.y } }]);
   assert.equal(game._useService(garage), false); assert.deepEqual(sounds(game), []);
 });
@@ -202,7 +204,8 @@ test('police search cues occur only on entry and reset after sight, escape, gara
   game.heat = 1; game._updatePolice(.02); assert.equal(sounds(game).filter(event => event.name === 'search').length, 1);
   const service = game.services.find(value => value.id === 'repair');
   const car = game._addCar(service.x, service.y, 0, 'compact', PAINT_COLORS[0]); game.player.vehicleId = car.id;
-  assert.equal(game._useService(service), true); game.player.vehicleId = null; game.drainEvents();
+  assert.equal(game._useService(service), true); advance(game, GARAGE_SERVICE_TIMING.duration + .01);
+  game.player.vehicleId = null; game.drainEvents();
   game.heat = 1; game._updatePolice(.02); assert.equal(sounds(game).filter(event => event.name === 'search').length, 1);
   game._caught(); game.drainEvents(); game.heat = 1; game._updatePolice(.02);
   assert.equal(sounds(game).filter(event => event.name === 'search').length, 1);

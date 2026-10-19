@@ -64,14 +64,59 @@ async function main() {
     await page.locator('.game-shell').screenshot({ path: path.join(evidence, 'repair-garage-interior.png') });
     await page.evaluate(() => { document.getElementById('pause-screen').style.visibility = ''; });
     await page.keyboard.press('p'); await page.keyboard.press('e');
-    await page.waitForFunction(() => checkGame.current.health === checkGame.maxHealth && checkGame.heat === 0);
+    await page.waitForFunction(() => checkGame.garageService !== null);
+    await page.keyboard.press('p'); await page.locator('#pause-screen').waitFor({ state: 'visible' });
+    const pausedElapsed = await page.evaluate(() => checkGame.garageService.elapsed);
+    await page.waitForTimeout(200);
+    assert.equal(await page.evaluate(() => checkGame.garageService.elapsed), pausedElapsed, 'P pauses the cinematic');
+    await page.evaluate(() => { document.getElementById('pause-screen').style.visibility = 'hidden'; });
+    const seek = async elapsed => {
+      await page.evaluate(target => {
+        const g = checkGame;
+        for (let remaining = target - g.garageService.elapsed; remaining > .000001; remaining -= .1) g.update(Math.min(.1, remaining));
+      }, elapsed);
+      await page.waitForFunction(() => {
+        const door = checkScene.scene.getObjectByName('Repair garage door');
+        return door && Math.abs(door.userData.closed - checkGame.garageTransition.door) < .001 &&
+          Math.abs(Number(getComputedStyle(document.getElementById('garage-fade')).opacity) - checkGame.garageTransition.opacity) < .001;
+      });
+    };
+    await seek(.45);
+    assert.equal(await page.evaluate(() => checkGame.garageTransition.phase), 'closing');
+    assert.equal(await page.evaluate(() => checkGame.current.health), 40);
+    assert.equal(await page.evaluate(() => checkGame.money), 425);
+    assert.ok(await page.evaluate(() => {
+      const door = checkScene.scene.getObjectByName('Repair garage door');
+      return door.userData.closed > 0 && door.userData.closed < 1;
+    }), 'the rendered shutter is halfway down');
+    await page.locator('.game-shell').screenshot({ path: path.join(evidence, 'repair-garage-door-closing.png') });
+    await seek(1.7);
+    assert.equal(await page.evaluate(() => checkGame.garageTransition.phase), 'repairing');
+    assert.equal(await page.evaluate(() => getComputedStyle(document.getElementById('garage-fade')).opacity), '1');
+    assert.equal(await page.evaluate(() => checkScene.scene.getObjectByName('Repair garage door').userData.closed), 1);
+    await page.locator('.game-shell').screenshot({ path: path.join(evidence, 'repair-garage-black.png') });
+    await seek(2.45);
+    assert.equal(await page.evaluate(() => checkGame.garageTransition.phase), 'fade-in');
+    assert.ok(await page.evaluate(() => {
+      const opacity = Number(getComputedStyle(document.getElementById('garage-fade')).opacity);
+      return opacity > 0 && opacity < 1;
+    }), 'the camera is fading back in');
+    await page.locator('.game-shell').screenshot({ path: path.join(evidence, 'repair-garage-fade-in.png') });
+    await seek(3.2);
+    assert.equal(await page.evaluate(() => checkGame.garageTransition.phase), 'opening');
+    await page.locator('.game-shell').screenshot({ path: path.join(evidence, 'repair-garage-door-opening.png') });
+    await page.evaluate(() => { document.getElementById('pause-screen').style.visibility = ''; });
+    await page.keyboard.press('p');
+    await page.waitForFunction(() => checkGame.garageService === null);
+    await page.waitForFunction(() => checkScene.scene.getObjectByName('Repair garage door').userData.closed === 0 &&
+      Number(getComputedStyle(document.getElementById('garage-fade')).opacity) === 0);
     assert.deepEqual(await page.evaluate(() => ({ money: checkGame.money, engine: checkGame.current.engineHealth,
       handling: checkGame.current.handlingHealth, driving: Boolean(checkGame.player.vehicleId) })), { money: 425, engine: 100, handling: 100, driving: true });
     await page.keyboard.press('p'); await page.locator('#pause-screen').waitFor({ state: 'visible' });
     await page.evaluate(() => { document.getElementById('pause-screen').style.visibility = 'hidden'; });
     await page.locator('.game-shell').screenshot({ path: path.join(evidence, 'repair-garage-serviced.png') });
     assert.deepEqual(errors, []);
-    console.log('Chrome garage check passed: open workshop, drive-in physics, bay hint, E repair, heat relief, and $75 payment.');
+    console.log('Chrome garage check passed: drive-in workshop, closing/opening shutter, fade out/black/in, pause/resume, delayed repair, and one $75 payment.');
   } finally { await browser.close(); }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
