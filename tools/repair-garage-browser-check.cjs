@@ -20,12 +20,35 @@ async function main() {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, serviceWorkers: 'block' });
     await context.addInitScript(installBrowserInputFixture);
     await context.addInitScript(() => {
-      let core, Scene;
+      let core, Scene, sound;
       Object.defineProperty(globalThis, 'MayhemCore', { configurable: true, get: () => core, set: value => {
         core = { ...value, Game: class extends value.Game { constructor(...args) { super(...args); globalThis.checkGame = this; } } };
       } });
       Object.defineProperty(globalThis, 'MayhemScene', { configurable: true, get: () => Scene, set: value => {
         Scene = class extends value { constructor(...args) { super(...args); globalThis.checkScene = this; } };
+      } });
+      globalThis.garageAudioFrames = [];
+      Object.defineProperty(globalThis, 'MayhemAudio', { configurable: true, get: () => sound, set: value => {
+        sound = { ...value, AudioDirector: class extends value.AudioDirector {
+          constructor(...args) { super(...args); globalThis.checkAudio = this; }
+          async unlock() {
+            const ready = await super.unlock();
+            if (ready && !this.checkAnalyser) {
+              this.checkAnalyser = this._context.createAnalyser(); this.checkAnalyser.fftSize = 2048;
+              this._outputGain.connect(this.checkAnalyser);
+            }
+            return ready;
+          }
+          update(game, options) {
+            super.update(game, options);
+            if (!game.garageService || !this.checkAnalyser) return;
+            const samples = new Float32Array(this.checkAnalyser.fftSize); this.checkAnalyser.getFloatTimeDomainData(samples);
+            garageAudioFrames.push({ phase: game.garageTransition.phase, allowed: options.allowUI,
+              rms: Math.sqrt(samples.reduce((sum, value) => sum + value * value, 0) / samples.length),
+              loops: [...this._voices].filter(voice => voice.ui && !Number.isFinite(voice.end)).length,
+              ...this.diagnostics });
+          }
+        } };
       } });
     });
     const page = await context.newPage(); page.on('pageerror', error => errors.push(error.message));
@@ -115,8 +138,27 @@ async function main() {
     await page.keyboard.press('p'); await page.locator('#pause-screen').waitFor({ state: 'visible' });
     await page.evaluate(() => { document.getElementById('pause-screen').style.visibility = 'hidden'; });
     await page.locator('.game-shell').screenshot({ path: path.join(evidence, 'repair-garage-serviced.png') });
+    assert.equal(await page.evaluate(() => checkAudio.diagnostics.voiceCount), 0, 'pause silences the workshop');
+    // Run a second service at real speed to measure the actual Web Audio output.
+    await page.evaluate(() => {
+      checkGame.current.health = 40; checkGame.money = 500;
+      garageAudioFrames.length = 0; document.getElementById('pause-screen').style.visibility = '';
+    });
+    await page.keyboard.press('p'); await page.keyboard.press('e');
+    await page.waitForFunction(() => checkGame.garageService !== null);
+    await page.waitForFunction(() => checkGame.garageService === null);
+    await page.keyboard.press('p'); await page.locator('#pause-screen').waitFor({ state: 'visible' });
+    const audioFrames = await page.evaluate(() => garageAudioFrames);
+    for (const phase of ['closing', 'repairing', 'opening']) {
+      const frames = audioFrames.filter(frame => frame.allowed && frame.phase === phase);
+      assert.ok(frames.some(frame => frame.rms > 0.000001), `${phase} produces audible output`);
+      assert.ok(frames.every(frame => frame.engineCount === 0 && frame.musicVoiceCount === 0 && !frame.error), `${phase} keeps ordinary driving audio silent`);
+      assert.ok(frames.every(frame => frame.loops === (phase === 'repairing' ? 0 : 1)), `${phase} has the expected shutter motor state`);
+    }
+    assert.equal(await page.evaluate(() => checkAudio.diagnostics.voiceCount), 0, 'no workshop voices survive pause');
+    fs.writeFileSync(path.join(evidence, 'repair-garage-audio.json'), JSON.stringify(audioFrames, null, 2));
     assert.deepEqual(errors, []);
-    console.log('Chrome garage check passed: drive-in workshop, closing/opening shutter, fade out/black/in, pause/resume, delayed repair, and one $75 payment.');
+    console.log('Chrome garage check passed: drive-in workshop, shutter motor/rattle, blackout tools, fade out/black/in, pause/resume, delayed repair, and one $75 payment per service.');
   } finally { await browser.close(); }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

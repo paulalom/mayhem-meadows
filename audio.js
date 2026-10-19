@@ -136,6 +136,7 @@
       this._viewYaw = 0; this._variation = 0; this._lastSpeech = -20; this._stationLast = new Map(); this._stationAt = Infinity;
       this._musicGenerated = false; this._nextMusicAt = 0; this._lastPlayedSample = null; this._lastPlayedEvent = null;
       this._uiAllowed = false; this._uiPlaying = false;
+      this._garageSound = null;
       this._boosting = false; this._boostAt = -10; this._speechLast = new Map(); this._pendingSearch = null;
       this._failed = false; this._ready = false; this._pendingNodes = new Set(); this._lastFootPosition = null;
       this._sampleData = options.sampleData === undefined ? root.MayhemAudioSamples || {} : options.sampleData || {};
@@ -197,7 +198,14 @@
         const running = this._context && this._context.state === 'running';
         this._state = this._disposed ? 'disposed' : this._context ? this._context.state : this._state;
         const active = options.active !== false && running && !this.settings.muted && this.settings.masterVolume > 0 && !this._disposed;
-        if (!active) { this._silence(options.allowUI === true && running && !this.settings.muted && this.settings.masterVolume > 0 && this.settings.effectsVolume > 0 && !this._disposed); return; }
+        if (!active) {
+          const allowUI = options.allowUI === true && running && !this.settings.muted && this.settings.masterVolume > 0 && this.settings.effectsVolume > 0 && !this._disposed;
+          this._silence(allowUI);
+          this._syncGarage(allowUI ? game : null);
+          this._applyVolumes(); if (this._context) this._prune();
+          return;
+        }
+        this._syncGarage(null);
         this._uiAllowed = false;
         this._active = true;
         const frame = deriveAudioFrame(game, options); this._mode = frame.mode; this._viewYaw = finite(options.viewYaw, finite(game?.current?.angle));
@@ -393,6 +401,7 @@
     }
     _stopEffects(preserveUI = false) {
       for (const record of this._voices) if (record.bus === 'effects' && !(preserveUI && record.ui)) this._stop(record);
+      if (!preserveUI) this._garageSound = null;
       this._engines.clear(); this._sirens.clear(); this._noiseLoops.clear();
       this._environment.clear(); this._warningId = null; this._warningAt = 0;
       // A held boost after resume establishes state without another attack.
@@ -568,6 +577,61 @@
       const panner = this._output(gain, pan, this._effects);
       const record = this._record([source], [source, filter, gain, ...(panner ? [panner] : [])], gain, 'effects');
       record.filter = filter; record.pan = panner; source.start(); return record;
+    }
+
+    _garageDoor(opening) {
+      if (!this._hasRoom('effects')) return null;
+      const motor = this._node('createOscillator'); motor.type = 'sawtooth'; motor.frequency.value = opening ? 108 : 87;
+      const motorFilter = this._node('createBiquadFilter'); motorFilter.type = 'lowpass'; motorFilter.frequency.value = 420; motorFilter.Q.value = 0.7;
+      const rollers = this._node('createBufferSource'); rollers.buffer = this._noise; rollers.loop = true;
+      const rollerFilter = this._node('createBiquadFilter'); rollerFilter.type = 'bandpass'; rollerFilter.frequency.value = 1350; rollerFilter.Q.value = 1.5;
+      const rollerGain = this._node('createGain'); rollerGain.gain.value = 0.65;
+      const gain = this._node('createGain'); gain.gain.value = 0;
+      motor.connect(motorFilter); motorFilter.connect(gain);
+      rollers.connect(rollerFilter); rollerFilter.connect(rollerGain); rollerGain.connect(gain);
+      const pan = this._output(gain, 0, this._effects);
+      const record = this._record([motor, rollers], [motor, motorFilter, rollers, rollerFilter, rollerGain, gain, ...(pan ? [pan] : [])], gain, 'effects');
+      motor.start(); rollers.start(); return record;
+    }
+
+    _syncGarage(game) {
+      const service = game?.garageService, transition = game?.garageTransition;
+      if (!service || !transition) {
+        if (this._garageSound?.motor) this._stop(this._garageSound.motor);
+        this._garageSound = null; return;
+      }
+      if (this._garageSound?.service !== service) {
+        if (this._garageSound?.motor) this._stop(this._garageSound.motor);
+        this._garageSound = { service, phase: null, beat: -1, motor: null };
+      }
+      const state = this._garageSound, { phase } = transition, now = this._context.currentTime;
+      const moving = phase === 'closing' || phase === 'opening';
+      const previousUI = this._uiPlaying; this._uiPlaying = true;
+      try {
+        if (phase !== state.phase) {
+          if (state.motor) { this._stop(state.motor); state.motor = null; }
+          if (state.phase === 'closing' && phase === 'fade-out') {
+            this._noiseHit(now, 0.12, 0.12, 240, 'lowpass', 'effects');
+            this._tone(83, now, 0.12, 0.08, 'sine', 'effects', { slide: 45 });
+          }
+          state.phase = phase; state.beat = -1;
+        }
+        if (moving) {
+          if (!state.motor) state.motor = this._garageDoor(phase === 'opening');
+          if (state.motor) this._ramp(state.motor.gain.gain, 0.075 + Math.sin(finite(service.elapsed) * 65) * 0.012, 0.025);
+        }
+        // Use cinematic time so pause/resume cannot drift or queue a burst of old tools.
+        const beat = Math.floor(finite(service.elapsed) / 0.14);
+        if (beat === state.beat) return;
+        state.beat = beat;
+        if (moving) {
+          this._noiseHit(now, 0.045, 0.075, 1850, 'bandpass', 'effects');
+        } else if (phase === 'repairing' && transition.opacity >= 0.99) {
+          [0, 0.025, 0.05].forEach(offset => this._noiseHit(now + offset, 0.022, 0.11, 1650 + beat % 3 * 350, 'bandpass', 'effects'));
+          this._tone(95, now, 0.085, 0.055, 'sawtooth', 'effects', { cutoff: 650, slide: 65 });
+          if (beat % 2 === 0) this._tone(920, now + 0.065, 0.065, 0.025, 'triangle', 'effects', { slide: 720 });
+        }
+      } finally { this._uiPlaying = previousUI; }
     }
 
     _syncEnvironment(frame) {

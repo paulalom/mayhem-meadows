@@ -484,6 +484,99 @@ test('deliberate inventory feedback survives menu frames while pause, background
   audio.setSettings({ muted: false, effectsVolume: 0 }); assert.equal(audio.playUI('refill', world), false); audio.dispose();
 });
 
+test('garage shutters keep bounded UI effect loops through closing and opening while fades and cancellation stay quiet', async () => {
+  const { audio, context } = await director(), world = game();
+  world.cars = [car('ride')]; world.player.vehicleId = 'ride';
+  world.garageService = { vehicleId: 'ride', serviceId: 'repair', elapsed: .2, serviced: false };
+  world.garageTransition = { phase: 'closing', door: .25, opacity: 0 };
+  const options = { active: false, allowUI: true };
+  tick(audio, context, world, options);
+  assert.ok(audio.getStatus().voiceCount > 0, 'the moving shutter is audible while world audio is suspended');
+  assert.equal(audio.getStatus().active, false); assert.equal(audio.getStatus().musicVoiceCount, 0); assert.equal(audio.getStatus().engineCount, 0);
+  assert.ok([...audio._voices].every(voice => voice.ui && voice.bus === 'effects'));
+  const motors = [...audio._voices].filter(voice => !Number.isFinite(voice.end));
+  assert.ok(motors.length > 0, 'shutter motion has a continuous motor layer');
+  const initialSources = context.sources.length;
+  for (let frame = 0; frame < 120; frame++) {
+    world.garageService.elapsed += 1 / 60;
+    tick(audio, context, world, options);
+    assert.ok(audio.getStatus().voiceCount <= 12, 'render frames cannot accumulate garage voices');
+  }
+  assert.ok(motors.some(voice => audio._voices.has(voice) && !voice.stopped), 'the motor survives repeated UI-only updates');
+  assert.ok(context.sources.length - initialSources < 30, 'a held shutter phase does not restart its graph every frame');
+  world.garageTransition = { phase: 'fade-out', door: 1, opacity: .5 };
+  tick(audio, context, world, options); context.advance(.5); tick(audio, context, world, options);
+  assert.equal(audio.getStatus().voiceCount, 0); assert.ok(motors.every(voice => voice.stopped));
+  world.garageTransition = { phase: 'fade-in', door: 1, opacity: .5 };
+  tick(audio, context, world, options); assert.equal(audio.getStatus().voiceCount, 0);
+  world.garageTransition = { phase: 'opening', door: .75, opacity: 0 };
+  tick(audio, context, world, options); assert.ok(audio.getStatus().voiceCount > 0);
+  assert.equal(audio.getStatus().engineCount, 0); assert.equal(audio.getStatus().musicVoiceCount, 0);
+  world.garageService = null; world.garageTransition = null;
+  tick(audio, context, world, options); context.advance(.5); tick(audio, context, world, options);
+  assert.equal(audio.getStatus().voiceCount, 0);
+  world.garageService = { vehicleId: 'ride', serviceId: 'repair', elapsed: .1, serviced: false };
+  world.garageTransition = { phase: 'closing', door: .1, opacity: 0 };
+  tick(audio, context, world, options); assert.ok(audio.getStatus().voiceCount > 0, 'a later visit starts a fresh shutter sound');
+  audio.dispose(); context.advance(.05); assert.ok(context.sources.every(source => source.ended && source.disconnected));
+});
+
+test('garage mechanical tool hits repeat at a bounded cadence only during the fully black repair phase', async () => {
+  const { audio, context } = await director(), world = game(), options = { active: false, allowUI: true };
+  world.garageService = { vehicleId: 'ride', serviceId: 'repair', elapsed: 1.6, serviced: true };
+  world.garageTransition = { phase: 'repairing', door: 1, opacity: .8 };
+  for (let frame = 0; frame < 30; frame++) tick(audio, context, world, options);
+  assert.equal(audio.getStatus().voiceCount, 0); assert.equal(context.sources.length, 0, 'tools wait until the camera is completely black');
+  world.garageTransition.opacity = 1; world.garageService.elapsed += .15; tick(audio, context, world, options);
+  const initialSources = context.sources.length;
+  assert.ok(initialSources > 0, 'blackout starts mechanical repair hits');
+  assert.ok([...audio._voices].every(voice => voice.ui && voice.bus === 'effects' && Number.isFinite(voice.end)), 'tools use short effect envelopes');
+  for (let frame = 0; frame < 100; frame++) audio.update(world, { ...options, dt: 0 });
+  assert.equal(context.sources.length, initialSources, 'repeated UI refreshes without audio time cannot duplicate a tool hit');
+  context.advance(.5); audio.update(world, options);
+  assert.equal(context.sources.length, initialSources, 'audio time alone cannot replay tools when cinematic time is frozen');
+  world.garageService = { ...world.garageService };
+  audio.update(world, options);
+  assert.ok(context.sources.length > initialSources, 'a fresh service object starts its own repair sound sequence');
+  for (let frame = 0; frame < 120; frame++) {
+    world.garageService.elapsed += 1 / 60;
+    tick(audio, context, world, options); assert.ok(audio.getStatus().voiceCount <= 16);
+    assert.equal(audio.getStatus().musicVoiceCount, 0); assert.equal(audio.getStatus().engineCount, 0);
+  }
+  assert.ok(context.sources.length > initialSources, 'mechanical repair hits repeat during blackout');
+  assert.ok(context.sources.length - initialSources < 90, 'tool cadence stays bounded independently of frame rate');
+  world.garageTransition = { phase: 'fade-in', door: 1, opacity: .8 };
+  tick(audio, context, world, options); const finalSources = context.sources.length;
+  for (let frame = 0; frame < 60; frame++) tick(audio, context, world, options);
+  assert.equal(context.sources.length, finalSources); assert.equal(audio.getStatus().voiceCount, 0);
+  audio.dispose(); context.advance(.05); assert.ok(context.sources.every(source => source.ended && source.disconnected));
+});
+
+test('garage motion audio stops on pause, mute and zero effects, resumes with motion, and disposes every source', async () => {
+  const { audio, context } = await director(), world = game(), options = { active: false, allowUI: true };
+  world.garageService = { vehicleId: 'ride', serviceId: 'repair', elapsed: .3, serviced: false };
+  world.garageTransition = { phase: 'closing', door: .3, opacity: 0 };
+  tick(audio, context, world, options); assert.ok(audio.getStatus().voiceCount > 0);
+  audio.update(world, { active: false }); context.advance(.05);
+  assert.equal(audio.getStatus().voiceCount, 0); assert.ok(context.sources.every(source => source.ended && source.disconnected));
+  tick(audio, context, world, options); assert.ok(audio.getStatus().voiceCount > 0, 'resuming during shutter motion restarts the motor');
+  for (const setting of ['muted', 'effectsVolume']) {
+    audio.setSettings({ [setting]: setting === 'muted' ? true : 0 }); context.advance(.05);
+    assert.equal(audio.getStatus().voiceCount, 0); const sourceCount = context.sources.length;
+    for (let frame = 0; frame < 20; frame++) tick(audio, context, world, options);
+    assert.equal(context.sources.length, sourceCount, setting + ' suppresses new garage sources');
+    audio.setSettings({ [setting]: setting === 'muted' ? false : .8 });
+    tick(audio, context, world, options); assert.ok(audio.getStatus().voiceCount > 0, setting + ' restores the moving shutter sound');
+  }
+  world.garageTransition = { phase: 'opening', door: .3, opacity: 0 };
+  tick(audio, context, world, options); assert.ok(audio.getStatus().voiceCount > 0);
+  audio.dispose(); context.advance(.05);
+  assert.equal(audio.getStatus().voiceCount, 0); assert.equal(audio.getStatus().state, 'disposed');
+  assert.ok(context.sources.every(source => source.ended && source.disconnected));
+  const disposedSources = context.sources.length;
+  tick(audio, context, world, options); assert.equal(context.sources.length, disposedSources);
+});
+
 test('generated music crossfades finite voices and station IDs do not repeat at every loop', async () => {
   const context = new Context(), audio = new AudioDirector({ contextFactory: () => context,
     sampleData: samples('music-biscuit', 'voice-radio-biscuit') });
