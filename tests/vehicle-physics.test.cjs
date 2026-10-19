@@ -259,10 +259,49 @@ function terrainTown(terrain, roads = []) {
   return town;
 }
 
-function terrainCar(town, x, y, elevation = town.terrain.surfaceHeight(x, y)) {
-  const ride = { id: 'terrain-car-' + town.cars.length, x, y, angle: 0, kind: 'compact', elevation, speed: 0, vx: 0, vy: 0, verticalVelocity: 0 };
+function terrainCar(town, x, y, elevation = town.terrain.surfaceHeight(x, y), kind = 'compact') {
+  const ride = { id: 'terrain-car-' + town.cars.length, x, y, angle: 0, kind, elevation, speed: 0, vx: 0, vy: 0, verticalVelocity: 0 };
   town.cars.push(ride); town.vehiclePhysics.sync(); return ride;
 }
+
+test('fast cars absorb small rough-ground undulations without pitching into a flip', () => {
+  for (const [amplitude, wavelength] of [[0.1, 10], [0.2, 24], [0.4, 6], [0.6, 10]]) {
+    // Gentle undulations cover standard and fully upgraded boost. Larger
+    // waves at full boost become ramps, where airborne rotation remains free.
+    const multipliers = amplitude <= 0.2 ? [1, 1.2, 1.425] : [1];
+    for (const kind of ['compact', 'sports', 'van']) for (const reverse of [false, true]) for (const multiplier of multipliers) {
+      const terrain = sampledTerrain(129, 31.25, x => 2 + amplitude * Math.sin(2 * Math.PI * x / wavelength));
+      const town = terrainTown(terrain), physics = town.vehiclePhysics;
+      const ride = terrainCar(town, reverse ? 3200 : 800, 2000, undefined, kind);
+      ride.angle = reverse ? Math.PI : 0; physics.reset(ride);
+      const body = physics.get(ride.id), baseSpeed = VehicleStats.getModel(ride).maxSpeed, speed = baseSpeed * multiplier;
+      body.velocity.set((reverse ? -1 : 1) * speed / 20, 0, 0);
+      let distance = 0;
+      for (let frame = 0; frame < 300; frame++) {
+        const x = ride.x, y = ride.y;
+        physics.control(ride, { up: true, boost: multiplier > 1, maxSpeed: speed }); physics.step(1 / 60);
+        distance += Math.hypot(ride.x - x, ride.y - y);
+        const up = body.quaternion.vmult(new C.Vec3(0, 1, 0));
+        assert.ok(up.y > 0.6, `${kind} ${reverse ? 'westbound' : 'eastbound'} at ${multiplier}x speed stays upright over ${amplitude}m undulations (frame ${frame}, up ${up.y})`);
+      }
+      assert.ok(distance > baseSpeed * (amplitude <= 0.2 ? 3 : 2), `${kind} retains useful driving speed over ${amplitude}m undulations (${distance} units)`);
+    }
+  }
+});
+
+test('ground suspension preserves yaw and leaves airborne and blast rotations free', () => {
+  for (const mode of ['ground', 'airborne', 'blast']) {
+    const { world, ride } = controlledWorld(mode === 'airborne' ? { elevation: 5 } : {});
+    const body = world.get(ride.id);
+    body.angularVelocity.set(0, 2.5, 6); body.wakeUp();
+    if (mode === 'blast') world.impulse(ride, { x: 0, y: 3, z: 0 });
+    world.step(1 / 60);
+    assert.ok(body.angularVelocity.y > 2.4, `${mode} retains its yaw spin`);
+    if (mode === 'ground') assert.ok(Math.abs(body.angularVelocity.z) <= 1.5, 'terrain contact absorbs excessive pitch');
+    else if (mode === 'airborne') assert.ok(body.angularVelocity.z > 5.8, 'airborne tumbling momentum remains free');
+    else assert.ok(body.angularVelocity.z > 3, 'blast rotation exceeds the suspension limit despite starting in ground contact');
+  }
+});
 
 test('cars traverse both real river bridges and their ground approaches in either direction', () => {
   const world = require('../world.js').createWorld();

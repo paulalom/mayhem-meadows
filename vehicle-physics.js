@@ -459,6 +459,29 @@
       normal.normalize(); return normal;
     }
 
+    _stabilizeGroundContact(entry) {
+      const body = entry.body, maxRate = 1.5;
+      if (body.angularVelocity.lengthSquared() <= maxRate * maxRate || this.world.time < (body.freeRollUntil || 0)) return;
+      const up = body.quaternion.vmult(new C.Vec3(0, 1, 0));
+      if (up.y <= 0.55) return;
+      const normal = new C.Vec3();
+      for (const contact of this.world.contacts) {
+        const direction = contact.bi === body && (contact.bj === this.floor || contact.bj.kind === 'bridge') ? -1 :
+          contact.bj === body && (contact.bi === this.floor || contact.bi.kind === 'bridge') ? 1 : 0;
+        if (!direction || contact.ni.y * direction <= 0.65) continue;
+        normal.x += contact.ni.x * direction; normal.y += contact.ni.y * direction; normal.z += contact.ni.z * direction;
+      }
+      if (normal.lengthSquared() < 0.01) return;
+      normal.normalize();
+      const spin = body.angularVelocity.dot(normal), tilt = body.angularVelocity.vsub(normal.scale(spin));
+      const rate = tilt.length();
+      // The flat chassis has no wheel suspension to absorb a terrain-corner
+      // impulse. Limit that impulse's pitch/roll immediately after solving,
+      // before a small bump can launch the car with a full-flip rotation.
+      // Surface yaw, airborne motion and recent crashes/blasts remain free.
+      if (rate > maxRate) body.angularVelocity.vsub(tilt.scale(1 - maxRate / rate), body.angularVelocity);
+    }
+
     _drive(entry, dt) {
       const body = entry.body, entity = body.entity, command = entry.control, base = VehicleStats.getModel(entity), type = VehicleStats.performance(entity);
       const up = body.quaternion.vmult(new C.Vec3(0, 1, 0)), forward = body.quaternion.vmult(new C.Vec3(1, 0, 0));
@@ -547,6 +570,7 @@
       for (let substep = 0; substep < 2; substep++) {
         for (const entry of this.bodies.values()) this._drive(entry, dt / 2);
         this.world.step(dt / 2);
+        for (const entry of this.bodies.values()) this._stabilizeGroundContact(entry);
         // Apply the extra lift after contact solving so the road constraint
         // cannot erase it during the same instant the bumper hits the wall.
         for (const { body, other, lift } of this._pendingLaunches.splice(0)) {
