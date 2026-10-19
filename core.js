@@ -1249,7 +1249,7 @@
     _syncHangar() {
       for(const record of this.hangar.aircraft) {
         const craft=this.aircraft.find(value=>value.hangarId===record.id);
-        if(craft) for(const key of ['color','health','maxHealth','engineHealth','handlingHealth','burning','fireTime','exploded']) record[key]=craft[key];
+        if(craft) for(const key of ['color','health','maxHealth','engineHealth','handlingHealth','burning','fireTime','exploded','secondaryAmmo']) record[key]=craft[key];
       }
     }
 
@@ -1919,7 +1919,8 @@
         const maxHealth=clamp(finite(record.maxHealth,100),1,500);
         aircraft.push({id:record.id,kind:'aircraft',aircraftType:record.aircraftType,color:typeof record.color==='string' && /^#[0-9a-f]{6}$/i.test(record.color)?record.color:'#ffd15b',
           maxHealth,health:clamp(finite(record.health,maxHealth),0,maxHealth),engineHealth:clamp(finite(record.engineHealth,100),0,100),handlingHealth:clamp(finite(record.handlingHealth,100),0,100),
-          burning:record.burning===true && record.exploded!==true,fireTime:clamp(finite(record.fireTime,0),0,8),exploded:record.exploded===true});
+          burning:record.burning===true && record.exploded!==true,fireTime:clamp(finite(record.fireTime,0),0,8),exploded:record.exploded===true,
+          secondaryAmmo:Math.floor(clamp(finite(record.secondaryAmmo,Aircraft.weaponsFor(record)?.capacity || 0),0,Aircraft.weaponsFor(record)?.capacity || 0))});
       }
       this.hangar={aircraft};
       const deployedAircraft=new Set();

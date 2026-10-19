@@ -17,7 +17,7 @@
   let muted = false, reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
   let audioSettings = normalizeSettings(), saveBlocked = false, toastUntil = 0, hudElapsed = 0, saveElapsed = 0;
   let width = 960, height = 650, scene = null, renderedFrames = 0, graphicsFailed = false;
-  let cameraSensitivity = 1, cameraInvertY = false, aiming = false, firing = false;
+  let cameraSensitivity = 1, cameraInvertY = false, aiming = false, firing = false, altFiring = false;
   let mouseLockPending = false, intentionalUnlock = false;
   let mapOpen = false, wheelOpen = false, wheelIndex = 0, inventoryView = null, garageSignature = '', hangarSignature = '', navigationTarget = null;
   const toyIds = ['popper', 'hammer', 'cannon'];
@@ -80,7 +80,9 @@
     else audio.play(name, game, details);
   }
   function movementInput() {
-    return { ...controls.readInput(controlSettings, activeControlGroup(), keys), fire: firing, aimAngle: scene?.viewYaw ?? game.current.angle, aimPitch: scene?.viewPitch ?? 0 };
+    const direction = isAircraft(game.current) && MayhemAircraft.weaponsFor(game.current) && (firing || altFiring) ? scene?.aimDirection() : null;
+    return { ...controls.readInput(controlSettings, activeControlGroup(), keys), fire: firing, altFire: altFiring,
+      aimAngle: direction?.angle ?? scene?.viewYaw ?? game.current.angle, aimPitch: direction?.pitch ?? scene?.viewPitch ?? 0 };
   }
   function updateAudio(dt = 0) {
     audio.update(game, { active: playActive(), allowUI: uiAudioActive(), viewYaw: scene?.viewYaw ?? game.current.angle, input: movementInput(), dt });
@@ -100,7 +102,7 @@
   function radioUI() {
     const driving = Boolean(game.player.vehicleId);
     $('radio-panel').hidden = !started || !driving || graphicsFailed;
-    $('equipped-panel').hidden = driving;
+    $('equipped-panel').hidden = driving && !(isAircraft(game.current) && MayhemAircraft.weaponsFor(game.current));
     const station = STATIONS.find(item => item.id === audioSettings.radioStation);
     const name = station?.name || 'Radio off';
     const status = muted || audioSettings.masterVolume === 0 ? 'Sound muted' : audioSettings.musicVolume === 0 ? 'Music volume 0' : audio.getStatus().state === 'unavailable' ? 'Audio unavailable' : station?.genre || 'Enjoy the engine';
@@ -226,7 +228,7 @@
     scene?.setAiming(aiming);
   }
   function releaseMouse() {
-    setAim(false); keys.clear(); firing = false;
+    setAim(false); keys.clear(); firing = altFiring = false;
     if (mouseLocked()) { intentionalUnlock = true; document.exitPointerLock(); }
   }
   function lockMouse() {
@@ -278,7 +280,7 @@
       keys.clear();
       if (!playActive()) releaseMouse();
     } else {
-      setAim(false); keys.clear(); firing = false;
+      setAim(false); keys.clear(); firing = altFiring = false;
       if (!intentionalUnlock && playActive()) setPause(true);
       intentionalUnlock = false;
     }
@@ -602,14 +604,14 @@
     canvas.focus({ preventScroll: true }); audioStart();
     event.preventDefault();
     if (!mouseLocked()) { lockMouse(); return; }
-    if (event.button === 2) setAim(true);
+    if (event.button === 2) { if (isAircraft(game.current)) altFiring = true; else setAim(true); }
     if (event.button === 0) { firing = isAircraft(game.current) || isTank(game.current); useToy(); }
   });
   canvas.addEventListener('pointermove', event => {
     if (mouseLocked() && playActive()) scene?.orbit(event.movementX, event.movementY, { sensitivity: cameraSensitivity * (aiming ? 0.55 : 1), invertY: cameraInvertY });
   });
-  window.addEventListener('mouseup', event => { if (event.button === 2) setAim(false); if (event.button === 0) firing = false; });
-  canvas.addEventListener('pointercancel', () => { setAim(false); firing = false; });
+  window.addEventListener('mouseup', event => { if (event.button === 2) { setAim(false); altFiring = false; } if (event.button === 0) firing = false; });
+  canvas.addEventListener('pointercancel', () => { setAim(false); firing = altFiring = false; });
   window.addEventListener('keydown', event => {
     if (settingsOpen) { settingsKeydown(event); return; }
     if (event.metaKey || event.altKey || event.ctrlKey && !event.code.startsWith('Control') && !keys.has('ControlLeft') && !keys.has('ControlRight')) return;
@@ -670,11 +672,11 @@
     if (!event.repeat) {
       audioStart();
       if (action === 'jump' && !game.player.vehicleId) game.jump();
-      if (action === 'interact') { game.interact(); keys.clear(); firing = false; setAim(false); }
+      if (action === 'interact') { game.interact(); keys.clear(); firing = altFiring = false; setAim(false); }
       if (action === 'horn') game.horn();
-      if (action === 'recover') { game.recover(); keys.clear(); firing = false; setAim(false); scene?.recenter(); }
+      if (action === 'recover') { game.recover(); keys.clear(); firing = altFiring = false; setAim(false); scene?.recenter(); }
       if (action === 'recenter') scene?.recenter();
-      if (action === 'bail' || action === 'flop') { if (isAircraft(game.current) ? game.bailOut() : game.flop()) { keys.clear(); firing = false; setAim(false); } }
+      if (action === 'bail' || action === 'flop') { if (isAircraft(game.current) ? game.bailOut() : game.flop()) { keys.clear(); firing = altFiring = false; setAim(false); } }
       if (action === 'radioPrevious') cycleRadio(-1);
       if (action === 'radioNext') cycleRadio(1);
       updateAudio(); radioUI();
@@ -873,11 +875,25 @@
     canvas.dataset.verticalVelocity = Number(game.current.verticalVelocity || 0).toFixed(3);
     canvas.dataset.grounded = String(game.current.grounded !== false);
     canvas.dataset.frames = String(renderedFrames);
-    const armedAircraft = flying && game.current.aircraftType === 'policeheli';
+    const airWeapons = flying && MayhemAircraft.weaponsFor(game.current), armedAircraft = Boolean(airWeapons);
     $('aim-reticle').hidden = !playActive() || !mouseLocked() || (!!game.player.vehicleId && !armedAircraft && !tank) || !!fallen;
     $('aim-reticle').classList.toggle('aiming', aiming);
-    $('aim-reticle').dataset.weapon = tank ? 'tank' : armedAircraft ? 'side-gun' : 'toy';
+    $('aim-reticle').dataset.weapon = tank ? 'tank' : armedAircraft ? 'aircraft' : 'toy';
     $('aim-reticle').dataset.reloading = String(tank && tankReload > 0);
+    const weaponLock = armedAircraft && game.current.weaponLock;
+    const lockTarget = weaponLock && [...game.aircraft, ...game.cars].find(entity => entity.id === weaponLock.targetId);
+    const lockPoint = lockTarget && scene?.weaponTargetScreenPoint(lockTarget);
+    const lockMarker = $('weapon-lock-marker');
+    lockMarker.hidden = !lockPoint || !playActive() || !mouseLocked();
+    if (lockPoint) { lockMarker.style.left = lockPoint.x + '%'; lockMarker.style.top = lockPoint.y + '%'; }
+    if (armedAircraft) {
+      const craft = game.current, reload = craft.secondaryCooldown || 0;
+      const status = craft.health <= 0 || craft.exploded ? 'WEAPONS DISABLED' : craft.weaponServiceTime > 0 ? `REARMING ${Math.max(0, 3 - craft.weaponServiceTime).toFixed(1)}s` : craft.secondaryAmmo <= 0 ? 'EMPTY · stop at an airfield to rearm' : reload > 0 ? `RELOAD ${reload.toFixed(1)}s` : weaponLock ? `LOCK ${Math.floor(weaponLock.progress * 100)}% · ${lockTarget?.kind === 'tank' ? 'TANK' : 'AIR'}` : airWeapons.secondary === 'missile' ? 'HOLD RIGHT · LOCK & FIRE' : 'HOLD RIGHT · STRAIGHT ROCKETS';
+      $('equipped-label').textContent = 'Aircraft weapons'; $('equipped-shortcut').hidden = true;
+      $('equipped-toy').textContent = `LEFT · MACHINE GUN · ${craft.secondaryAmmo}/${airWeapons.capacity} ${airWeapons.secondary === 'missile' ? 'MISSILES' : 'ROCKETS'} · ${status}`;
+      canvas.dataset.secondaryAmmo = String(craft.secondaryAmmo); canvas.dataset.weaponLock = weaponLock ? weaponLock.progress.toFixed(2) : 'none';
+      lockMarker.textContent = weaponLock ? Math.floor(weaponLock.progress * 100) + '%' : '';
+    } else { delete canvas.dataset.secondaryAmmo; delete canvas.dataset.weaponLock; }
     if (tank) {
       canvas.dataset.tankReload = tankReload.toFixed(2);
       canvas.dataset.tankTurretAngle = Number(game.current.tankGun?.turretAngle ?? game.current.turretAngle ?? game.current.angle).toFixed(3);
@@ -997,7 +1013,7 @@
     else if (!car && game.cars.some(ride => isTank(ride) && ride.health > 0 && !ride.exploded && dist(ride, game.player) < 65)) hint = `${controlKey('interact')} · borrow tank · MOUSE turret · HOLD LEFT MOUSE cannon`;
     else if (!car && (game.aircraft || []).some(aircraft => aircraft.active !== false && aircraft.visible !== false && aircraft.health > 0 && aircraft.grounded && MayhemAircraft.boardingDistance(aircraft,game.player)<65)) hint = `${controlKey('interact')} · borrow aircraft · Settings shows your flight controls`;
     if (game.hangarAvailable) hint += '   G · hangar';
-    if (armedAircraft) hint += '   LEFT MOUSE · side gun (aim right of cabin)';
+    if (armedAircraft) hint = `LEFT · machine gun · HOLD RIGHT · ${airWeapons.secondary === 'missile' ? 'lock aircraft / tank & launch' : 'straight rockets (aim ahead)'} · stop at airfield to rearm`;
     if (flying && car.burning) hint = `ENGINE FIRE · ${controlKey('bail')} PARACHUTE · ${controlKey('recover')} airport recovery`;
     else if (!flying && car?.burning) hint = `ENGINE FIRE · ${Math.max(0, Math.ceil(8 - car.fireTime))}s · ${controlKey('interact')} BAIL OUT · stop + I for repair tape`;
     else if (car && car.engineHealth <= 0) hint = flying ? `ENGINE LOST · glide to land · ${controlKey('bail')} parachute · ${controlKey('recover')} airport recovery` : `ENGINE STALLED · stop + I for repair tape · ${controlKey('interact')} hop out`;

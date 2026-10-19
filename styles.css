@@ -256,6 +256,9 @@ kbd{font:700 10px "Courier New",monospace;padding:4px 5px;background:var(--panel
 .aim-reticle[data-weapon="tank"]{width:22px;height:22px;border-color:var(--yellow)}
 .aim-reticle[data-weapon="tank"]:before,.aim-reticle[data-weapon="tank"]:after{background:var(--yellow)}
 .aim-reticle[data-weapon="tank"][data-reloading="true"]{opacity:.5;border-style:dashed}
+.aim-reticle[data-weapon="aircraft"]{border-color:var(--yellow);width:21px;height:21px}
+.weapon-lock-marker{position:absolute;width:46px;height:46px;transform:translate(-50%,-50%);border:2px solid var(--yellow);border-radius:7px;color:var(--yellow);font-size:11px;font-weight:800;display:grid;place-items:center;text-shadow:0 1px 3px #141d27;box-shadow:0 0 0 1px #141d2755;z-index:3;pointer-events:none}
+.weapon-lock-marker[hidden]{display:none}
 .aim-reticle.aiming,.game-shell.aiming .aim-reticle,.game-shell[data-aiming="true"] .aim-reticle{width:19px;height:19px;border-color:var(--lime);filter:drop-shadow(0 1px 3px #141d27)}
 .aim-reticle.aiming:before,.aim-reticle.aiming:after,.game-shell.aiming .aim-reticle:before,.game-shell.aiming .aim-reticle:after,.game-shell[data-aiming="true"] .aim-reticle:before,.game-shell[data-aiming="true"] .aim-reticle:after{background:var(--lime)}
 .mouse-hint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);max-width:calc(100% - 36px);width:max-content;padding:11px 15px;background:rgba(20,29,39,.94);border:1px solid var(--lime);border-radius:4px;color:var(--cream);font-size:12px;font-weight:700;line-height:1.6;text-align:center;box-shadow:3px 3px 0 #141d2750;pointer-events:none;z-index:3}
@@ -279,6 +282,7 @@ kbd{font:700 10px "Courier New",monospace;padding:4px 5px;background:var(--panel
 .inventory-trigger{display:flex;align-items:center;gap:7px;color:var(--lime);border-color:#586445;background:#253028}
 .inventory-trigger kbd{font-size:8px;padding:1px 4px;background:#141d27;border-color:#586445}
 .equipped-panel{position:absolute;left:17px;bottom:136px;z-index:1;display:flex;flex-direction:column;gap:5px;max-width:255px;padding:8px 11px;background:rgba(20,29,39,.88);border-radius:3px;pointer-events:none}
+.game-shell.flying .equipped-panel{bottom:205px}
 .equipped-panel .stat-label{font-size:7px;color:var(--muted);display:flex;align-items:center;gap:7px;letter-spacing:.7px}
 .equipped-panel kbd{font-size:6px;padding:1px 3px;background:transparent;border-color:#596552}
 #equipped-toy{font-size:10px;line-height:1.35;color:var(--lime)}

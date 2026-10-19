@@ -112,8 +112,33 @@ test('aerial rounds without a ground-weapon angle render at their simulated alti
   assert.deepEqual(Array.from(new T.Vector3().setFromMatrixPosition(matrix).toArray()), [10, 44, 15]);
   const mesh = scene._toyShots, geometries = scene._geometries.length;
   scene.game.aircraftProjectiles = Array.from({ length: 100 }, (_, index) => ({ ...scene.game.aircraftProjectiles[0], id: 'round-' + index }));
-  scene._projectileEffects(); assert.equal(mesh.count, 32); assert.equal(scene._toyShots, mesh);
+  scene._projectileEffects(); assert.equal(mesh.count, 64); assert.equal(scene._toyShots, mesh);
+  scene.game.projectiles = Array.from({ length: 40 }, (_, index) => ({ id: 'toy-' + index, x: 0, y: 0, height: 2, angle: 0, life: 1 }));
+  scene._projectileEffects(); assert.equal(mesh.count, 96, 'ground shots and aircraft each retain their own visual budget');
   assert.equal(scene._geometries.length, geometries);
+});
+
+test('missiles and rockets render larger along their 3D flight direction and lock markers project target height', () => {
+  const scene = makeScene([]);
+  scene.game.aircraftProjectiles = ['machine-gun', 'missile', 'rocket'].map((weapon, index) => ({
+    id: 'weapon-' + index, ownerId: 'jet', weapon, x: 200, y: 300, elevation: 44,
+    vx: 2400, vy: 0, vz: 60, life: 1
+  }));
+  scene._projectileEffects();
+  const matrix = new T.Matrix4(), rotation = new T.Quaternion(), position = new T.Vector3(), scale = new T.Vector3();
+  scene._toyShots.getMatrixAt(0, matrix); matrix.decompose(position, rotation, scale);
+  const bulletLength = scale.x;
+  for (const index of [1, 2]) {
+    scene._toyShots.getMatrixAt(index, matrix); matrix.decompose(position, rotation, scale);
+    assert.ok(scale.x > bulletLength * 2);
+    const direction = new T.Vector3(1, 0, 0).applyQuaternion(rotation);
+    assert.ok(Math.abs(direction.y / direction.x - .5) < 1e-6, 'metres per second set projectile pitch');
+  }
+  scene.camera = new T.PerspectiveCamera(60, 1, .1, 1000);
+  scene.camera.position.set(0, 10, 0); scene.camera.lookAt(0, 10, -100); scene.camera.updateMatrixWorld();
+  const point = scene.weaponTargetScreenPoint({ kind: 'tank', x: 0, y: -2000, elevation: 8.8 });
+  assert.ok(Math.abs(point.x - 50) < 1e-7 && Math.abs(point.y - 50) < 1e-7);
+  assert.equal(scene.weaponTargetScreenPoint({ kind: 'tank', x: 0, y: 2000, elevation: 8.8 }), null);
 });
 
 test('bailout shows a reusable canopy and suspension lines, then hides on landing', () => {

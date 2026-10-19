@@ -1152,6 +1152,14 @@
     }
 
     _aircraftArmament(model,entity) {
+      const playerArmed = entity.id === this.game.player.vehicleId && Boolean(root.MayhemAircraft?.weaponsFor(entity));
+      if (playerArmed && !model.playerMuzzle) {
+        model.playerMuzzle = this._mesh(this._sphere, this._material('#ffe9a2', { unlit: true }), model.group,
+          root.MayhemAircraft.getModel(entity).length * .52 / UNIT, 1.5, 0, .48, .13, .13, false);
+        model.playerMuzzle.raycast = () => {};
+      }
+      if (model.playerMuzzle) model.playerMuzzle.visible = playerArmed && model.group.visible && !entity.exploded && Boolean(entity.gunFiring) &&
+        (this.reducedMotion || Math.sin((this.game.time || 0) * 38) > 0);
       const armed=Boolean(entity.militaryResponse&&['interceptor','gunship'].includes(entity.militaryRole));
       if(armed&&!model.militaryArmament) {
         const T=this.T,group=new T.Group(),source=root.MayhemAircraftModels?.policeheli;
@@ -1178,7 +1186,7 @@
       }
       if(model.militaryArmament) {
         model.militaryArmament.group.visible=armed;
-        model.militaryArmament.muzzle.visible=armed&&model.group.visible&&!entity.exploded&&Boolean(entity.gunFiring)&&
+        model.militaryArmament.muzzle.visible=armed&&!playerArmed&&model.group.visible&&!entity.exploded&&Boolean(entity.gunFiring)&&
           (this.reducedMotion||Math.sin((this.game.time||0)*38)>0);
       }
     }
@@ -1227,7 +1235,7 @@
         }
         this._vehicleEffects(model, { ...entity, engineHealth: entity.engineHealth ?? condition * 100 });
         model.effects.group.visible &&= model.group.visible;
-        if (model.muzzle) model.muzzle.visible = model.group.visible && Boolean(entity.gunFiring) && (this.reducedMotion || Math.sin((this.game.time || 0) * 38) > 0);
+        if (model.muzzle) model.muzzle.visible = entity.id !== this.game.player.vehicleId && model.group.visible && Boolean(entity.gunFiring) && (this.reducedMotion || Math.sin((this.game.time || 0) * 38) > 0);
         if (model.searchlight) {
           const beam = model.searchlight;
           beam.group.visible = model.group.visible && Boolean(entity.searchlight) && !entity.exploded;
@@ -1644,6 +1652,14 @@
     get viewYaw() { return this._cameraInfo.viewYaw; }
     get viewPitch() { return this._cameraInfo.viewPitch; }
     get cameraInfo() { return { ...this._cameraInfo }; }
+
+    weaponTargetScreenPoint(target) {
+      this._weaponTargetPoint ||= new this.T.Vector3();
+      const height = target.kind === 'aircraft' ? root.MayhemAircraft?.getModel(target).height * .5 : 1.2;
+      const point = this._weaponTargetPoint.set(target.x / UNIT, (target.elevation || 0) + (height || 1.2), target.y / UNIT).project(this.camera);
+      if (point.z < -1 || point.z > 1 || Math.abs(point.x) > 1 || Math.abs(point.y) > 1) return null;
+      return { x: (point.x + 1) * 50, y: (1 - point.y) * 50 };
+    }
     get worldInfo() { return { ...this._worldInfo, districts: { ...this._worldInfo?.districts }, landscape: { ...this._worldInfo?.landscape } }; }
     get ragdollCount() { return this._ragdollRenderedCount; }
 
@@ -2135,22 +2151,23 @@
 
     _projectileEffects() {
       if (!this._toyShots) {
-        this._toyShots = new this.T.InstancedMesh(this._sphere, this._material('#ffffff', { unlit: true }), 32);
+        this._toyShots = new this.T.InstancedMesh(this._sphere, this._material('#ffffff', { unlit: true }), 96);
         this._toyShots.instanceMatrix.setUsage(this.T.DynamicDrawUsage);
         this._toyShots.frustumCulled = false;
         this.scene.add(this._toyShots);
       }
-      const shots = (this.game.projectiles || []).concat(this.game.aircraftProjectiles || []);
+      const shots = (this.game.projectiles || []).slice(0, 32).concat((this.game.aircraftProjectiles || []).slice(0, 64));
       let count = 0;
       for (const shot of shots) {
-        if (count === 32) break;
+        if (count === 96) break;
         const height = shot.height ?? shot.elevation;
         const heading = Number.isFinite(shot.angle) ? shot.angle : Math.atan2(shot.vy || 0, shot.vx || 0);
         if (shot.life <= 0 || !Number.isFinite(shot.x + shot.y + height + heading)) continue;
         this._dummy.position.set(shot.x / UNIT, height, shot.y / UNIT);
-        this._dummy.rotation.set(this.game.time * 8, -heading, this.game.time * 5);
+        const explosive = shot.weapon === 'missile' || shot.weapon === 'rocket';
         const aerial = Boolean(shot.ownerId);
-        this._dummy.scale.set(aerial ? .30 : .19, aerial ? .16 : .19, aerial ? .16 : .19);
+        this._dummy.rotation.set(aerial ? 0 : this.game.time * 8, -heading, explosive ? Math.atan2(shot.vz || 0, Math.hypot(shot.vx || 0, shot.vy || 0) / UNIT) : aerial ? 0 : this.game.time * 5);
+        this._dummy.scale.set(explosive ? .85 : aerial ? .30 : .19, explosive ? .17 : aerial ? .16 : .19, explosive ? .17 : aerial ? .16 : .19);
         this._dummy.updateMatrix();
         this._toyShots.setMatrixAt(count, this._dummy.matrix);
         let hue = 0;

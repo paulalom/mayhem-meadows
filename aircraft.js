@@ -31,6 +31,13 @@
   });
   const isAircraft = entity => Boolean(entity && entity.kind === 'aircraft' && Object.hasOwn(AIRCRAFT_TYPES, entity.aircraftType));
   const getModel = entity => AIRCRAFT_TYPES[typeof entity === 'string' ? entity : entity?.aircraftType] || AIRCRAFT_TYPES.trainer;
+  const WEAPONS = Object.freeze({
+    fighter: Object.freeze({ secondary: 'missile', capacity: 6, cooldown: 2, damage: 150, speed: 3600, life: 3.2 }),
+    policeheli: Object.freeze({ secondary: 'rocket', capacity: 24, cooldown: .3, damage: 65, speed: 2400, life: 1.8 }),
+    transportheli: Object.freeze({ secondary: 'rocket', capacity: 24, cooldown: .3, damage: 65, speed: 2400, life: 1.8 })
+  });
+  const LOCK_TIME = 1, LOCK_RANGE = 4200, MAX_AIR_PROJECTILES = 64;
+  const weaponsFor = entity => WEAPONS[typeof entity === 'string' ? entity : entity?.aircraftType] || null;
   const roadModel = entity => {
     const model = VehicleStats?.getModel(entity);
     return model ? { ...model, height: model.height ?? (entity.kind === 'van' ? 1.7 : 1.3) } : { length: 48, width: 32, height: 1.7 };
@@ -193,6 +200,7 @@
         standId: options.standId || position.id, airportId, home: { ...position }, phase: 'parked', flightPhase: 'parked',
         phaseTime: 0, departureDelay: finite(options.departureDelay, 20), passengers: 0,
         altitudeAGL: 0, agl: 0, stalled: false, stallWarning: false, gunCooldown: 0,
+        secondaryAmmo: weaponsFor(type)?.capacity || 0, secondaryCooldown: 0, weaponLock: null,
         ...options
       };
       entity.grounded = entity.elevation <= this._support(entity, entity.elevation + .1) + .05;
@@ -366,6 +374,7 @@
       const current = this.current;
       for (const entity of this.aircraft) {
         entity.phaseTime += dt; entity.gunFiring = false; entity.gunCooldown = Math.max(0, entity.gunCooldown - dt);
+        entity.secondaryCooldown = Math.max(0, finite(entity.secondaryCooldown) - dt);
         if (entity.visible === false) { this._npc(entity, dt); continue; }
         if (entity.burning && !entity.exploded) {
           entity.fireTime += dt; this.damage(entity, dt * 3);
@@ -386,8 +395,10 @@
         const powered = entity.engineHealth > 0 && entity.health > 0 && !entity.exploded;
         const rotorSpeed = powered && running ? 22 + entity.throttle * 25 : entity.grounded ? 0 : 4;
         entity.rotorAngle = wrap(entity.rotorAngle + dt * rotorSpeed);
-        if (entity.militaryRole === 'interceptor' && entity.militaryResponse && command.fire) this._fireForward(entity, command.target);
+        if (entity === current && this.current === entity) this._playerWeapons(entity, command, dt);
+        else if (entity.militaryRole === 'interceptor' && entity.militaryResponse && command.fire) this._fireForward(entity, command.target);
         else if ((getModel(entity).sideGun || entity.militaryResponse) && command.fire) this._fire(entity, command.aimAngle, command.target, command.aimPitch);
+        if (entity !== this.current) entity.weaponLock = null;
         if (entity === current && this.current === entity) this._syncPlayer(entity);
       }
       this._projectiles(dt);
@@ -1035,6 +1046,108 @@
       return command;
     }
 
+    rearm(entity) {
+      const weapons = weaponsFor(entity);
+      if (!weapons) return false;
+      entity.secondaryAmmo = weapons.capacity; entity.secondaryCooldown = 0; entity.weaponLock = null;
+      return true;
+    }
+
+    _weaponMuzzle(entity, secondary = false) {
+      const offset = getModel(entity).length * .52, angle = finite(entity.angle);
+      const side = secondary ? (finite(entity.secondaryAmmo) % 2 ? -1 : 1) * getModel(entity).width * .28 : 0;
+      return { x: entity.x + Math.cos(angle) * offset - Math.sin(angle) * side,
+        y: entity.y + Math.sin(angle) * offset + Math.cos(angle) * side, elevation: entity.elevation + 1.5 };
+    }
+
+    _weaponDirection(entity, input) {
+      // Jets fire along their nose. Helicopter guns/pods have a limited forward
+      // aiming arc; looking behind the cabin never fires through the fuselage.
+      const jet = entity.aircraftType === 'fighter';
+      const angle = jet ? finite(entity.angle) : finite(input.aimAngle, entity.angle);
+      const pitch = jet ? finite(entity.pitch) : clamp(finite(input.aimPitch), -1.15, .65);
+      if (!jet && Math.abs(wrap(angle - entity.angle)) > .8) return null;
+      return { x: Math.cos(angle) * Math.cos(pitch), y: Math.sin(angle) * Math.cos(pitch), z: Math.sin(pitch) };
+    }
+
+    _lockCandidate(entity, input) {
+      const from = this._weaponMuzzle(entity), angle = finite(input.aimAngle, entity.angle), pitch = finite(input.aimPitch, entity.pitch);
+      const view = { x: Math.cos(angle) * Math.cos(pitch), y: Math.sin(angle) * Math.cos(pitch), z: Math.sin(pitch) };
+      let best = null, score = Infinity;
+      for (const target of this.aircraft.concat(this.game.cars || [])) {
+        if (target === entity || target.health <= 0 || target.exploded || target.visible === false || target.active === false ||
+          !(target.kind === 'tank' || isAircraft(target) && !target.grounded)) continue;
+        const height = target.kind === 'tank' ? 1.2 : getModel(target).height * .5;
+        const to = { x: target.x, y: target.y, elevation: finite(target.elevation) + height };
+        const dx = to.x - from.x, dy = to.y - from.y, dz = (to.elevation - from.elevation) * SCALE, range = Math.hypot(dx, dy, dz);
+        const alignment = (dx * view.x + dy * view.y + dz * view.z) / (range || 1);
+        if (range < 200 || range > LOCK_RANGE || alignment < Math.cos(.32) ||
+          Math.abs(wrap(Math.atan2(dy, dx) - entity.angle)) > .8 ||
+          this._obstructionFraction(from, to) !== null || this.game._blockedLine?.(from, to, from.elevation, to.elevation)) continue;
+        const candidateScore = 1 - alignment + range / LOCK_RANGE * .025;
+        if (candidateScore < score) { score = candidateScore; best = target; }
+      }
+      return best;
+    }
+
+    _playerWeapons(entity, input, dt) {
+      const weapons = weaponsFor(entity);
+      if (!weapons || entity.health <= 0 || entity.exploded) { entity.weaponLock = null; return; }
+      const servicing = entity.secondaryAmmo < weapons.capacity && entity.grounded && Math.abs(entity.speed) < 20 &&
+        !input.fire && !input.altFire && this.airportAt(entity);
+      entity.weaponServiceTime = servicing ? finite(entity.weaponServiceTime) + dt : 0;
+      if (entity.weaponServiceTime >= 3) { this.rearm(entity); entity.weaponServiceTime = 0; this._toast('Aircraft weapons rearmed.', 'success'); }
+      const direction = this._weaponDirection(entity, input);
+      if (input.fire && direction && entity.gunCooldown <= 0 && this.aircraftProjectiles.length < MAX_AIR_PROJECTILES) {
+        const muzzle = this._weaponMuzzle(entity), speed = 3200;
+        this.aircraftProjectiles.push({ ...muzzle, height: muzzle.elevation, id: 'air-round-' + this._nextId++,
+          vx: direction.x * speed, vy: direction.y * speed, vz: direction.z * speed / SCALE,
+          life: .75, ownerId: entity.id, npc: false, damage: 5, radius: 2, color: '#ffe58c', weapon: 'machine-gun' });
+        entity.gunCooldown = .1; entity.gunFiring = true;
+        this.game._sound?.('pop', { ...muzzle, intensity: .4 });
+        this.game._raiseHeat?.(.12, 'Aircraft machine gun', { position: entity, noise: 400 });
+      }
+      if (!input.altFire || entity.secondaryAmmo <= 0) { entity.weaponLock = null; return; }
+      let target = null;
+      if (weapons.secondary === 'missile') {
+        target = this._lockCandidate(entity, input);
+        if (!target) { entity.weaponLock = null; return; }
+        const previous = entity.weaponLock;
+        entity.weaponLock = { targetId: target.id, progress: Math.min(1, (previous?.targetId === target.id ? previous.progress : 0) + dt / LOCK_TIME) };
+        if (entity.weaponLock.progress < 1) return;
+      } else entity.weaponLock = null;
+      if (!direction || entity.secondaryCooldown > 0 || this.aircraftProjectiles.length >= MAX_AIR_PROJECTILES) return;
+      const muzzle = this._weaponMuzzle(entity, true);
+      this.aircraftProjectiles.push({ ...muzzle, height: muzzle.elevation, id: 'air-' + weapons.secondary + '-' + this._nextId++,
+        vx: direction.x * weapons.speed, vy: direction.y * weapons.speed, vz: direction.z * weapons.speed / SCALE,
+        life: weapons.life, ownerId: entity.id, npc: false, damage: weapons.damage, radius: 5,
+        color: weapons.secondary === 'missile' ? '#a4f7ed' : '#ff915e', weapon: weapons.secondary,
+        targetId: target?.id, speed: weapons.speed });
+      entity.secondaryAmmo--; entity.secondaryCooldown = weapons.cooldown; entity.weaponLock = null;
+      this.game._sound?.('cannon', { ...muzzle, intensity: .7 });
+      this.game._raiseHeat?.(.5, weapons.secondary === 'missile' ? 'Guided missile launch' : 'Aircraft rocket launch', { position: entity, noise: 650 });
+    }
+
+    _guideMissile(round, dt) {
+      if (round.weapon !== 'missile' || !round.targetId) return;
+      const target = this.aircraft.concat(this.game.cars || []).find(entity => entity.id === round.targetId);
+      if (!target || target.health <= 0 || target.exploded || target.visible === false || target.active === false) { round.targetId = null; return; }
+      const height = target.kind === 'tank' ? 1.2 : getModel(target).height * .5;
+      const aim = { x: target.x, y: target.y, elevation: finite(target.elevation) + height };
+      if (this._obstructionFraction(round, aim) !== null || this.game._blockedLine?.(round, aim, round.elevation, aim.elevation)) { round.targetId = null; return; }
+      const dx = aim.x - round.x, dy = aim.y - round.y, dz = (aim.elevation - round.elevation) * SCALE;
+      const length = Math.hypot(dx, dy, dz) || 1, speed = round.speed;
+      const current = [round.vx / speed, round.vy / speed, round.vz * SCALE / speed], desired = [dx / length, dy / length, dz / length];
+      const angle = Math.acos(clamp(current.reduce((sum, v, i) => sum + v * desired[i], 0), -1, 1));
+      // Spherical interpolation caps turning at 1.8 radians/second in real 3D units.
+      const turn = Math.min(angle, 1.8 * dt), sin = Math.sin(angle);
+      if (angle > Math.PI - .001) { round.targetId = null; return; }
+      const a = angle < .0001 ? 0 : Math.sin(angle - turn) / sin, b = angle < .0001 ? 1 : Math.sin(turn) / sin;
+      round.vx = (current[0] * a + desired[0] * b) * speed;
+      round.vy = (current[1] * a + desired[1] * b) * speed;
+      round.vz = (current[2] * a + desired[2] * b) * speed / SCALE;
+    }
+
     _fire(entity, aimAngle, target, aimPitch = 0) {
       if (entity.gunCooldown > 0 || entity.health <= 0 || entity.exploded || !Number.isFinite(aimAngle)) return false;
       const side = entity.angle + Math.PI / 2;
@@ -1110,6 +1223,7 @@
     _projectiles(dt) {
       for (const round of this.aircraftProjectiles) {
         const travelTime = Math.min(dt, Math.max(0, round.life)); round.life -= dt;
+        this._guideMissile(round, travelTime);
         const before = { x: round.x, y: round.y, elevation: round.elevation };
         round.x += round.vx * travelTime; round.y += round.vy * travelTime; round.elevation += round.vz * travelTime; round.height = round.elevation;
         let fraction = this._obstructionFraction(before, round), targetHit = null;
@@ -1158,7 +1272,8 @@
             if ((this.game.police || []).includes(targetHit)) { targetHit.distracted = 1.5; officers.push(targetHit); }
           }
         }
-        round.life = 0; this.game._confetti?.(round.x, round.y, 6, round.elevation);
+        round.life = 0; this.game._confetti?.(round.x, round.y, round.weapon === 'missile' || round.weapon === 'rocket' ? 32 : 6, round.elevation);
+        if (round.weapon === 'missile' || round.weapon === 'rocket') this.game._sound?.('explosion', { x: round.x, y: round.y, intensity: .65 });
         if(!round.npc) {
           this.game._reportBaseAttackSegment?.(before,round,round.ownerId);
           if(targetHit)this.game._reportBaseHit?.(targetHit,round,{playerCaused:true,ownerId:round.ownerId});
@@ -1171,7 +1286,7 @@
 
   }
 
-  const api = { AircraftSystem, AIRCRAFT_TYPES, isAircraft, getModel, boardingDistance, SCALE };
+  const api = { AircraftSystem, AIRCRAFT_TYPES, isAircraft, getModel, boardingDistance, SCALE, WEAPONS, weaponsFor, LOCK_TIME, LOCK_RANGE, MAX_AIR_PROJECTILES };
   root.MayhemAircraft = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(globalThis);
