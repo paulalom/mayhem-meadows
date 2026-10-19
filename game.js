@@ -7,6 +7,12 @@
   const { AudioDirector, STATIONS, normalizeSettings } = MayhemAudio;
   const SAVE_KEY = 'mayhem-meadows.v1';
   const keys = new Set();
+  const controls = MayhemControls;
+  let controlSettings = controls.normalizeSettings();
+  let settingsOpen = false, settingsWasPaused = false, settingsReturnFocus = null, bindingCapture = null;
+  let controlGroup = 'plane';
+  const activeControlGroup = () => game.player.vehicleId ? (isHelicopter(game.current) ? 'helicopter' : controls.groupFor(game.current)) : 'foot';
+  const controlKey = (id, group = activeControlGroup()) => controls.keyLabel(controlSettings[group].bindings[id]?.[0] || '');
   let started = false, paused = false, helpWasPaused = false;
   let muted = false, reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
   let audioSettings = normalizeSettings(), saveBlocked = false, toastUntil = 0, hudElapsed = 0, saveElapsed = 0;
@@ -29,10 +35,10 @@
   const isHelicopter = vehicle => isAircraft(vehicle) && aircraftModel(vehicle).class === 'helicopter';
   const vehicleName = vehicle => { const model = isAircraft(vehicle) ? aircraftModel(vehicle) : VehicleStats.getModel(vehicle); return model.name || model.make + ' ' + model.model; };
   const aircraftCondition = vehicle => clamp((vehicle.health ?? 100) / (vehicle.maxHealth || aircraftModel(vehicle).maxHealth || 100), 0, 1);
-  const aircraftStatus = vehicle => vehicle.exploded || vehicle.health <= 0 ? 'Needs hangar recovery' : vehicle.burning ? 'ENGINE FIRE · F to parachute' : vehicle.stalled ? 'STALL · lower nose / add throttle' : vehicle.stallWarning ? 'LOW AIRSPEED · add throttle' : (vehicle.flightPhase || vehicle.phase || (vehicle.grounded ? 'parked' : 'cruise')).replaceAll('-', ' ').toUpperCase();
+  const aircraftStatus = vehicle => vehicle.exploded || vehicle.health <= 0 ? 'Needs hangar recovery' : vehicle.burning ? `ENGINE FIRE · ${controlKey('bail', controls.groupFor(vehicle))} to parachute` : vehicle.stalled ? 'STALL · lower nose / add throttle' : vehicle.stallWarning ? 'LOW AIRSPEED · add throttle' : (vehicle.flightPhase || vehicle.phase || (vehicle.grounded ? 'parked' : 'cruise')).replaceAll('-', ' ').toUpperCase();
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-  const menuBusy = () => mapOpen || wheelOpen || inventoryView !== null;
+  const menuBusy = () => settingsOpen || mapOpen || wheelOpen || inventoryView !== null;
   const mouseLocked = () => document.pointerLockElement === canvas;
   const playActive = () => started && !paused && !menuBusy() && !graphicsFailed && $('help-screen').hidden && !document.hidden;
   const uiAudioActive = () => started && !paused && menuBusy() && !graphicsFailed && $('help-screen').hidden && !document.hidden;
@@ -54,12 +60,13 @@
       const savedSensitivity = saved.settings?.cameraSensitivity;
       if (typeof savedSensitivity === 'number' && Number.isFinite(savedSensitivity)) cameraSensitivity = clamp(savedSensitivity, 0.25, 2);
       cameraInvertY = saved.settings?.cameraInvertY === true;
+      controlSettings = controls.normalizeSettings(saved.settings?.controls);
     }
   } catch (_) { saveBlocked = true; }
   const audio = new AudioDirector({ settings: { ...audioSettings, muted } });
   function save() {
     try {
-      localStorage.setItem(SAVE_KEY, JSON.stringify({ version: 1, progress: game.exportSave(), settings: { muted, audio: audioSettings, reducedMotion, cameraSensitivity, cameraInvertY } }));
+      localStorage.setItem(SAVE_KEY, JSON.stringify({ version: 1, progress: game.exportSave(), settings: { muted, audio: audioSettings, reducedMotion, cameraSensitivity, cameraInvertY, controls: controlSettings } }));
     } catch (_) {
       if (!saveBlocked) toast('Local saving is unavailable. You can still play this session.');
       saveBlocked = true;
@@ -73,8 +80,7 @@
     else audio.play(name, game, details);
   }
   function movementInput() {
-    const climb = keys.has('Space'), descend = keys.has('ControlLeft') || keys.has('ControlRight'), shift = keys.has('ShiftLeft') || keys.has('ShiftRight');
-    return { up: keys.has('KeyW') || keys.has('ArrowUp'), down: keys.has('KeyS') || keys.has('ArrowDown'), left: keys.has('KeyA') || keys.has('ArrowLeft'), right: keys.has('KeyD') || keys.has('ArrowRight'), boost: shift, brake: climb, climb, ascend: climb, jump: climb, descend, crouch: descend, hover: shift, fire: firing, aimAngle: scene?.viewYaw ?? game.current.angle, aimPitch: scene?.viewPitch ?? 0 };
+    return { ...controls.readInput(controlSettings, activeControlGroup(), keys), fire: firing, aimAngle: scene?.viewYaw ?? game.current.angle, aimPitch: scene?.viewPitch ?? 0 };
   }
   function updateAudio(dt = 0) {
     audio.update(game, { active: playActive(), allowUI: uiAudioActive(), viewYaw: scene?.viewYaw ?? game.current.angle, input: movementInput(), dt });
@@ -123,6 +129,8 @@
     $('camera-sensitivity').value = cameraSensitivity;
     $('camera-sensitivity-value').textContent = cameraSensitivity.toFixed(2) + '×';
     $('camera-invert-y').checked = cameraInvertY;
+    $('settings-motion').checked = reducedMotion;
+    $('settings-muted').checked = muted;
     for (const category of ['master', 'music', 'effects']) {
       const value = audioSettings[category + 'Volume'];
       $('audio-' + category).value = value;
@@ -130,6 +138,88 @@
     }
     $('radio-station').value = audioSettings.radioStation;
     radioUI();
+  }
+  function renderControlSettings(message = '') {
+    bindingCapture = null;
+    const config = controlSettings[controlGroup];
+    $('control-type').value = controlGroup;
+    $('control-preset').replaceChildren(...controls.presets(controlGroup).map(preset => new Option(preset.name, preset.id)));
+    $('control-preset').value = config.preset;
+    const customized = JSON.stringify(config.bindings) !== JSON.stringify(controls.defaults(controlGroup, config.preset));
+    $('control-customized').textContent = customized ? 'Custom keys · based on selected preset' : 'Preset keys';
+    $('control-bindings').replaceChildren(...controls.actions(controlGroup, config.preset).map(item => {
+      const row = document.createElement('div'), label = document.createElement('span'), button = document.createElement('button');
+      label.textContent = item.label;
+      button.type = 'button'; button.className = 'key-binding'; button.dataset.action = item.id;
+      button.textContent = controls.bindingLabel(controlSettings, controlGroup, item.id);
+      button.setAttribute('aria-label', item.label + ': ' + button.textContent + '. Change key');
+      row.append(label, button); return row;
+    }));
+    $('control-message').textContent = message || (controlGroup === 'plane' && config.preset !== 'legacy' ? `${controlKey('pitchDown', 'plane')} lowers the nose; ${controlKey('pitchUp', 'plane')} raises it. ${controlKey('interact', 'plane')} exits after landing. Throttle holds when released.` : 'Choose a key to change it. Each vehicle type keeps its own layout.');
+    updateControlHints();
+  }
+  function flightControlsHint(group) {
+    const key = id => controlKey(id, group);
+    if (group === 'helicopter') return `${key('up')} / ${key('down')} forward / back · ${key('left')} / ${key('right')} turn · ${key('climb')} / ${key('descend')} altitude · ${key('hover')} hover · ${key('bail')} parachute`;
+    if (controlSettings.plane.preset === 'legacy') return `${key('up')} / ${key('down')} throttle · ${key('left')} / ${key('right')} bank · ${key('climb')} / ${key('descend')} pitch · ${key('boost')} boost · ${key('interact')} exit`;
+    return `${key('pitchDown')} / ${key('pitchUp')} pitch · ${key('rollLeft')} / ${key('rollRight')} roll · ${key('yawLeft')} / ${key('yawRight')} yaw · ${key('throttleUp')} / ${key('throttleDown')} throttle · ${key('interact')} exit · ${key('bail')} parachute`;
+  }
+  function updateControlHints() {
+    for (const element of document.querySelectorAll('[data-controls-hint]')) element.textContent = flightControlsHint(element.dataset.controlsHint);
+    $('play-control-hint').textContent = 'Mouse look · Right aim · Left fire · Tab toys · I pockets · G garage · M map · Esc pause · Settings changes keys';
+  }
+  function openSettings() {
+    if (settingsOpen) return;
+    settingsReturnFocus = document.activeElement;
+    settingsWasPaused = !$('help-screen').hidden ? helpWasPaused : paused;
+    $('help-screen').hidden = true;
+    closeMap(false); closeWheel(false, false); closeInventory(false);
+    settingsOpen = true; if (started) paused = true;
+    releaseMouse(); $('pause-screen').hidden = true;
+    $('settings-screen').hidden = false;
+    controlGroup = game.player.vehicleId ? activeControlGroup() : 'plane';
+    settingsUI(); renderControlSettings(); $('close-settings').focus({ preventScroll: true }); updateAudio();
+  }
+  function closeSettings() {
+    if (!settingsOpen) return;
+    bindingCapture = null; settingsOpen = false; $('settings-screen').hidden = true;
+    keys.clear(); if (started) setPause(settingsWasPaused);
+    if (!started || paused) (settingsReturnFocus?.getClientRects().length ? settingsReturnFocus : $('settings-toggle')).focus({ preventScroll: true });
+  }
+  for (const id of ['settings-toggle', 'pause-settings', 'help-settings']) $(id).addEventListener('click', openSettings);
+  $('close-settings').addEventListener('click', closeSettings);
+  $('control-type').addEventListener('change', event => { controlGroup = event.target.value; keys.clear(); renderControlSettings(); });
+  $('control-preset').addEventListener('change', event => { controls.setPreset(controlSettings, controlGroup, event.target.value); keys.clear(); renderControlSettings('Preset applied and saved.'); save(); });
+  $('reset-controls').addEventListener('click', () => { controls.setPreset(controlSettings, controlGroup, controlSettings[controlGroup].preset); keys.clear(); renderControlSettings('Keys restored to the selected preset.'); save(); });
+  $('control-bindings').addEventListener('click', event => {
+    const button = event.target.closest('[data-action]'); if (!button) return;
+    renderControlSettings(); bindingCapture = button.dataset.action;
+    const active = $('control-bindings').querySelector('[data-action="' + bindingCapture + '"]');
+    active.textContent = 'Press a key…'; active.setAttribute('aria-pressed', 'true'); active.focus();
+    $('control-message').textContent = 'Press a new key. Esc cancels. Menu keys Esc, Tab, P, M, I and G are reserved.';
+  });
+  $('settings-motion').addEventListener('change', event => { reducedMotion = event.target.checked; settingsUI(); save(); });
+  $('settings-muted').addEventListener('change', event => { muted = event.target.checked; audioStart(); applyAudioSettings(); });
+  function settingsKeydown(event) {
+    if (bindingCapture) {
+      event.preventDefault();
+      if (event.repeat) return;
+      const id = bindingCapture;
+      if (event.code === 'Escape') renderControlSettings('Key change cancelled.');
+      else if (event.metaKey || event.altKey || event.ctrlKey && !event.code.startsWith('Control')) { $('control-message').textContent = 'Choose a single key, without a shortcut combination.'; return; }
+      else {
+        const result = controls.rebind(controlSettings, controlGroup, id, event.code);
+        if (result.error) { $('control-message').textContent = result.error; return; }
+        keys.clear(); renderControlSettings('Key saved.'); save();
+      }
+      $('control-bindings').querySelector('[data-action="' + id + '"]').focus();
+    } else if (event.code === 'Escape') { event.preventDefault(); closeSettings(); }
+    else if (event.code === 'Tab') {
+      const focusable = [...$('settings-screen').querySelectorAll('button, select, input')].filter(element => !element.disabled && element.getClientRects().length);
+      const index = focusable.indexOf(document.activeElement);
+      if (event.shiftKey && index <= 0) { event.preventDefault(); focusable.at(-1)?.focus(); }
+      else if (!event.shiftKey && (index < 0 || index === focusable.length - 1)) { event.preventDefault(); focusable[0]?.focus(); }
+    }
   }
   function setAim(value) {
     aiming = Boolean(value && playActive() && mouseLocked() && !game.player.vehicleId && !game.physics?.get('player'));
@@ -467,6 +557,7 @@
   $('sound-toggle').addEventListener('click', () => { muted = !muted; audioStart(); applyAudioSettings(); if (started && !paused && !menuBusy() && $('help-screen').hidden) canvas.focus(); });
   $('motion-toggle').addEventListener('click', () => { reducedMotion = !reducedMotion; settingsUI(); save(); if (started && !paused && !menuBusy() && $('help-screen').hidden) canvas.focus(); });
   $('help-toggle').addEventListener('click', () => {
+    if (settingsOpen) return;
     closeMap(false); closeWheel(false, false); closeInventory(false);
     helpWasPaused = paused;
     if (started) { paused = true; keys.clear(); releaseMouse(); }
@@ -520,7 +611,8 @@
   window.addEventListener('mouseup', event => { if (event.button === 2) setAim(false); if (event.button === 0) firing = false; });
   canvas.addEventListener('pointercancel', () => { setAim(false); firing = false; });
   window.addEventListener('keydown', event => {
-    if (event.metaKey || event.altKey || (event.ctrlKey && !isAircraft(game.current))) return;
+    if (settingsOpen) { settingsKeydown(event); return; }
+    if (event.metaKey || event.altKey || event.ctrlKey && !event.code.startsWith('Control') && !keys.has('ControlLeft') && !keys.has('ControlRight')) return;
     if (event.code === 'Escape' && !$('help-screen').hidden) { event.preventDefault(); closeHelp(); return; }
     if (!started || !$('help-screen').hidden) return;
     if (mapOpen) {
@@ -572,19 +664,19 @@
     }
     if (event.code === 'Tab') { event.preventDefault(); if (!event.repeat) openWheel(); return; }
     if (event.code === 'KeyI' || event.code === 'KeyG') { event.preventDefault(); if (!event.repeat) openInventory(event.code === 'KeyI' ? 'pockets' : game.hangarAvailable ? 'hangar' : 'garage'); return; }
-    const controlled = ['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight','ControlLeft','ControlRight','Space','KeyE','KeyH','KeyR','KeyC','KeyF','KeyB','KeyN'];
-    if (!controlled.includes(event.code)) return;
+    const action = controls.actionForKey(controlSettings, activeControlGroup(), event.code);
+    if (!action) return;
     event.preventDefault(); keys.add(event.code);
     if (!event.repeat) {
       audioStart();
-      if (event.code === 'Space' && !game.player.vehicleId) game.jump();
-      if (event.code === 'KeyE') { game.interact(); setAim(false); }
-      if (event.code === 'KeyH') game.horn();
-      if (event.code === 'KeyR') { game.recover(); setAim(false); scene?.recenter(); }
-      if (event.code === 'KeyC') scene?.recenter();
-      if (event.code === 'KeyF') { if (isAircraft(game.current) ? game.bailOut() : game.flop()) { keys.clear(); firing = false; setAim(false); } }
-      if (event.code === 'KeyB') cycleRadio(-1);
-      if (event.code === 'KeyN') cycleRadio(1);
+      if (action === 'jump' && !game.player.vehicleId) game.jump();
+      if (action === 'interact') { game.interact(); keys.clear(); firing = false; setAim(false); }
+      if (action === 'horn') game.horn();
+      if (action === 'recover') { game.recover(); keys.clear(); firing = false; setAim(false); scene?.recenter(); }
+      if (action === 'recenter') scene?.recenter();
+      if (action === 'bail' || action === 'flop') { if (isAircraft(game.current) ? game.bailOut() : game.flop()) { keys.clear(); firing = false; setAim(false); } }
+      if (action === 'radioPrevious') cycleRadio(-1);
+      if (action === 'radioNext') cycleRadio(1);
       updateAudio(); radioUI();
       events();
     }
@@ -794,7 +886,7 @@
     $('mouse-hint').hidden = !playActive() || mouseLocked();
     $('game-shell').classList.toggle('aiming', aiming);
     $('speed-value').textContent = game.player.vehicleId ? Math.round(Math.abs(game.current.speed || 0) * 3.6 / 20) + ' KM/H' : game.player.parachuting ? 'PARACHUTE' : fallen ? (fallen.phase === 'recover' ? 'GETTING UP' : 'WHOOPS!') : 'ON FOOT';
-    $('speed-caption').textContent = flying ? (helicopter ? 'SPACE CLIMB · CTRL DESCEND · SHIFT HOVER' : 'W/S THROTTLE · SPACE CLIMB · CTRL DESCEND') : tank ? 'WASD DRIVE · MOUSE TURRET · HOLD LEFT TO FIRE' : game.player.vehicleId ? (game.current.upright === false ? 'R · RIGHT THIS RIDE' : 'SHIFT BOOST · SPACE DRIFT') : game.player.parachuting ? 'WASD · STEER TO A CLEAR LANDING' : fallen ? 'R · SKIP THE DRAMA' : 'SPACE · JUMP   F · FLOP';
+    $('speed-caption').textContent = flying ? (helicopter ? `${controlKey('climb')} climb · ${controlKey('descend')} descend` : `${controlKey(controlSettings.plane.preset === 'legacy' ? 'up' : 'throttleUp')} throttle up · ${controlKey(controlSettings.plane.preset === 'legacy' ? 'down' : 'throttleDown')} down`) : tank ? `${controlKey('up')} drive · MOUSE turret` : game.player.vehicleId ? (game.current.upright === false ? `${controlKey('recover')} · RIGHT THIS RIDE` : `${controlKey('boost')} boost · ${controlKey('brake')} drift`) : game.player.parachuting ? `${controlKey('up')} / ${controlKey('left')} / ${controlKey('down')} / ${controlKey('right')} steer` : fallen ? `${controlKey('recover')} · SKIP THE DRAMA` : `${controlKey('jump')} jump · ${controlKey('flop')} flop`;
     $('flight-panel').hidden = !flying;
     $('game-shell').classList.toggle('flying', flying);
     if (flying) {
@@ -804,7 +896,8 @@
       $('flight-throttle').textContent = Math.round(throttle * 100) + '%';
       $('flight-throttle-bar').style.width = throttle * 100 + '%';
       $('flight-phase').textContent = aircraftStatus(aircraft);
-      const warning = aircraft.stalled ? 'STALL · W throttle, CTRL lower nose' : aircraft.stallWarning ? 'LOW AIRSPEED · increase throttle' : helicopter ? (altitude < 12 ? 'Land gently · stop before pressing E' : 'SHIFT steadies your hover') : aircraft.grounded ? 'W throttle → SPACE lift off' : altitude < 15 ? 'APPROACH · align runway, ease throttle' : 'A/D bank · F parachute · R recover';
+      const legacy = controlSettings.plane.preset === 'legacy';
+      const warning = aircraft.stalled ? `STALL · ${controlKey(legacy ? 'up' : 'throttleUp')} throttle · ${controlKey(legacy ? 'descend' : 'pitchDown')} lower nose` : aircraft.stallWarning ? 'LOW AIRSPEED · increase throttle' : helicopter ? (altitude < 12 ? `Land gently · stop before pressing ${controlKey('interact')}` : `${controlKey('hover')} steadies your hover`) : aircraft.grounded ? `${controlKey(legacy ? 'up' : 'throttleUp')} throttle → ${controlKey(legacy ? 'climb' : 'pitchUp')} lift off` : altitude < 15 ? 'APPROACH · align runway, ease throttle' : `${controlKey(legacy ? 'left' : 'rollLeft')} / ${controlKey(legacy ? 'right' : 'rollRight')} bank · ${controlKey('bail')} parachute`;
       $('flight-warning').textContent = warning; $('flight-warning').dataset.danger = String(!!(aircraft.stalled || aircraft.stallWarning || aircraft.burning));
       canvas.dataset.aircraftType = aircraft.aircraftType; canvas.dataset.altitudeAgl = altitude.toFixed(2); canvas.dataset.throttle = throttle.toFixed(3); canvas.dataset.flightPhase = aircraft.flightPhase || aircraft.phase || '';
     } else { delete canvas.dataset.aircraftType; delete canvas.dataset.altitudeAgl; delete canvas.dataset.throttle; delete canvas.dataset.flightPhase; }
@@ -897,21 +990,22 @@
       const reason = item !== 'repair' && level >= 3 ? 'This upgrade is already maxed out.' : !started ? 'Start playing, then visit Sprinkle Garage to buy tune-ups.' : !playActive() ? 'Resume playing and close any menus to buy tune-ups.' : !game.garageAvailable ? garageHint : item === 'repair' && !game.player.vehicleId ? 'Hop in a damaged car before buying a repair.' : item === 'repair' && !VehicleStats.isDamaged(game.current) ? 'This ride is already in perfect condition.' : game.money < price ? cashHint(price) : '';
       buttonState(button, reason);
     });
-    let hint = nearest ? (nearest.id === 'wash' ? 'E · wash & cool off ($75)' : 'G · garage collection   I · supplies & toys') : car ? (Math.abs(car.speed) < 45 ? 'E · hop out   H · honk   SPACE · drift' : 'SPACE · drift   SHIFT · boost   H · honk') : game.cars.some(c => dist(c, game.player) < 65) ? 'E · borrow this ride' : 'RIGHT MOUSE · aim   LEFT MOUSE · ' + GADGETS[game.inventory.equipped].name + '   TAB · toys';
-    if (flying) hint = helicopter ? 'W/S forward / back · A/D turn · SPACE / CTRL altitude · SHIFT hover · F parachute' : 'W/S throttle · A/D bank · SPACE / CTRL pitch · SHIFT boost · F parachute';
-    else if (tank) hint = 'WASD drive · MOUSE turret · HOLD LEFT MOUSE cannon · R recover · E exit';
-    else if (!car && game.cars.some(ride => isTank(ride) && ride.health > 0 && !ride.exploded && dist(ride, game.player) < 65)) hint = 'E · borrow tank · MOUSE turret · HOLD LEFT MOUSE cannon';
-    else if ((game.aircraft || []).some(aircraft => aircraft.active !== false && aircraft.visible !== false && aircraft.health > 0 && aircraft.grounded && MayhemAircraft.boardingDistance(aircraft,game.player)<65)) hint = 'E · borrow aircraft · SPACE climb · CTRL descend';
+    let hint = nearest ? (nearest.id === 'wash' ? `${controlKey('interact')} · wash & cool off ($75)` : 'G · garage collection   I · supplies & toys') : car ? `${controlKey('interact')} · hop out` : game.cars.some(c => dist(c, game.player) < 65) ? `${controlKey('interact')} · borrow this ride` : 'RIGHT MOUSE · aim   LEFT MOUSE · ' + GADGETS[game.inventory.equipped].name + '   TAB · toys';
+    if (flying) hint = flightControlsHint(helicopter ? 'helicopter' : 'plane');
+    else if (tank) hint = `${controlKey('up')} / ${controlKey('down')} drive · MOUSE turret · HOLD LEFT MOUSE cannon · ${controlKey('recover')} recover · ${controlKey('interact')} exit`;
+    else if (car && !nearest) hint = `${controlKey('up')} / ${controlKey('down')} drive · ${controlKey('left')} / ${controlKey('right')} steer · ${controlKey('brake')} drift · ${controlKey('boost')} boost · ${controlKey('interact')} exit`;
+    else if (!car && game.cars.some(ride => isTank(ride) && ride.health > 0 && !ride.exploded && dist(ride, game.player) < 65)) hint = `${controlKey('interact')} · borrow tank · MOUSE turret · HOLD LEFT MOUSE cannon`;
+    else if (!car && (game.aircraft || []).some(aircraft => aircraft.active !== false && aircraft.visible !== false && aircraft.health > 0 && aircraft.grounded && MayhemAircraft.boardingDistance(aircraft,game.player)<65)) hint = `${controlKey('interact')} · borrow aircraft · Settings shows your flight controls`;
     if (game.hangarAvailable) hint += '   G · hangar';
     if (armedAircraft) hint += '   LEFT MOUSE · side gun (aim right of cabin)';
-    if (flying && car.burning) hint = 'ENGINE FIRE · F PARACHUTE · R airport recovery';
-    else if (!flying && car?.burning) hint = 'ENGINE FIRE · ' + Math.max(0, Math.ceil(8 - car.fireTime)) + 's · E BAIL OUT · stop + I for repair tape';
-    else if (car && car.engineHealth <= 0) hint = flying ? 'ENGINE LOST · glide to land · F parachute · R airport recovery' : 'ENGINE STALLED · stop + I for repair tape · E hop out';
-    else if (!flying && car?.upright === false) hint = 'R · right your ride and return to the road';
-    else if (!flying && car?.grounded === false) hint = 'AIRBORNE!   R · recover to the road';
-    if (game.player.parachuting) hint = 'PARACHUTE · WASD steers toward a clear landing · R recover';
+    if (flying && car.burning) hint = `ENGINE FIRE · ${controlKey('bail')} PARACHUTE · ${controlKey('recover')} airport recovery`;
+    else if (!flying && car?.burning) hint = `ENGINE FIRE · ${Math.max(0, Math.ceil(8 - car.fireTime))}s · ${controlKey('interact')} BAIL OUT · stop + I for repair tape`;
+    else if (car && car.engineHealth <= 0) hint = flying ? `ENGINE LOST · glide to land · ${controlKey('bail')} parachute · ${controlKey('recover')} airport recovery` : `ENGINE STALLED · stop + I for repair tape · ${controlKey('interact')} hop out`;
+    else if (!flying && car?.upright === false) hint = `${controlKey('recover')} · right your ride and return to the road`;
+    else if (!flying && car?.grounded === false) hint = `AIRBORNE!   ${controlKey('recover')} · recover to the road`;
+    if (game.player.parachuting) hint = `PARACHUTE · ${controlKey('up')} / ${controlKey('left')} / ${controlKey('down')} / ${controlKey('right')} steer · ${controlKey('recover')} recover`;
     $('interaction-hint').textContent = hint;
-    if (fallen) $('interaction-hint').textContent = fallen.phase === 'recover' ? 'Just finding my feet…  R · recover now' : 'Oh, crumbs! Getting up shortly…  R · recover now';
+    if (fallen) $('interaction-hint').textContent = fallen.phase === 'recover' ? `Just finding my feet…  ${controlKey('recover')} · recover now` : `Oh, crumbs! Getting up shortly…  ${controlKey('recover')} · recover now`;
     $('interaction-hint').hidden = !started;
     if (game.heat > 0 && !fallen) {
       const chase = game.policeSeen ? (heatLevel === MAX_HEAT ? 'MILITARY & POLICE · CHASED' : 'FUN POLICE · CHASED') : `LAY LOW · ${Math.max(0, Math.ceil((game.escapeGoal || 8 + game.heat * 6) - game.escapeTimer))}s TO COOL`;

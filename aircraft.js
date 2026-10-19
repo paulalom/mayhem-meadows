@@ -276,14 +276,14 @@
       this._phase(nearest, 'player');
       this._releaseRunway(nearest);
       this._syncPlayer(nearest);
-      this._toast(getModel(nearest).name + ': Space climbs, Ctrl descends, F opens your parachute.');
+      this._toast(getModel(nearest).name + ': your flight controls are shown below. Choose presets or custom keys in Settings.');
       return true;
     }
 
     interact() {
       const entity = this.current;
       if (!entity) return this.enterNearest();
-      if (!entity.grounded || Math.abs(entity.speed) > 35) { this._toast('Land and slow down before leaving. F deploys a parachute in flight.'); return false; }
+      if (!entity.grounded || Math.abs(entity.speed) > 35) { this._toast('Land and slow down before leaving, or use your parachute bailout key in flight.'); return false; }
       const model = getModel(entity), player = this.game.player;
       for (const offset of [Math.PI / 2, -Math.PI / 2, Math.PI]) {
         const radius = (Math.abs(Math.sin(offset)) > .5 ? model.width : model.length) / 2 + 28;
@@ -411,16 +411,22 @@
       const model = getModel(entity), heli = model.class === 'helicopter';
       const engine = entity.health > 0 && !entity.exploded ? clamp(entity.engineHealth / 100, 0, 1) : 0;
       const steering = model.handling * (.4 + .6 * clamp(entity.handlingHealth / 100, 0, 1));
-      const turn = Number(Boolean(input.right)) - Number(Boolean(input.left));
-      const climb = Number(Boolean(input.climb || input.ascend || input.jump)) - Number(Boolean(input.descend || input.crouch));
-      const forward = Number(Boolean(input.up)) - Number(Boolean(input.down));
+      // Explicit player plane controls keep each flight axis separate. The
+      // legacy commands remain available to helicopter controls and NPC pilots.
+      const planeControls = !heli && Object.hasOwn(input, 'rollLeft');
+      const turn = planeControls ? Number(Boolean(input.rollRight)) - Number(Boolean(input.rollLeft)) : Number(Boolean(input.right)) - Number(Boolean(input.left));
+      const yaw = planeControls ? Number(Boolean(input.yawRight)) - Number(Boolean(input.yawLeft)) : 0;
+      const climb = planeControls ? Number(Boolean(input.pitchUp)) - Number(Boolean(input.pitchDown)) : Number(Boolean(input.climb || input.ascend || input.jump)) - Number(Boolean(input.descend || input.crouch));
+      const forward = planeControls ? Number(Boolean(input.throttleUp)) - Number(Boolean(input.throttleDown)) : Number(Boolean(input.up)) - Number(Boolean(input.down));
       const before = { x: entity.x, y: entity.y, elevation: entity.elevation };
       if (Number.isFinite(input.throttle)) entity.throttle = clamp(input.throttle, 0, 1);
       else if (heli) entity.throttle = engine > 0 && (!entity.grounded || climb > 0 || forward !== 0) ? .6 + .35 * Math.abs(forward) : 0;
       else entity.throttle = clamp(entity.throttle + forward * .6 * dt, 0, 1);
       if (!engine) entity.throttle = 0;
       const speedFactor = heli ? 1 : clamp(Math.abs(entity.speed) / Math.max(1, model.stallSpeed), .2, 1.5);
-      entity.angle = wrap(entity.angle + turn * steering * (heli ? 1.15 : entity.grounded ? 1.2 : .75 * speedFactor) * dt);
+      const bankTurn = planeControls && entity.grounded ? 0 : turn * (heli ? 1.15 : entity.grounded ? 1.2 : .75 * speedFactor);
+      const rudderTurn = yaw * (entity.grounded ? 1.2 : .45 * speedFactor);
+      entity.angle = wrap(entity.angle + (bankTurn + rudderTurn) * steering * dt);
       entity.roll = approach(entity.roll, entity.grounded ? 0 : turn * (heli ? .32 : .62), 1.6, dt);
       if (heli) {
         const desired = forward * model.maxSpeed * engine * (input.boost || input.hover ? .18 : 1);
@@ -431,7 +437,7 @@
         entity.pitch = approach(entity.pitch, clamp(entity.speed / model.maxSpeed, -.6, 1) * -.23, 1.1, dt);
         if (climb > 0 && engine > .1) entity.grounded = false;
       } else {
-        const maximum = model.maxSpeed * engine * (input.boost ? 1.15 : 1);
+        const maximum = model.maxSpeed * engine * (!planeControls && input.boost ? 1.15 : 1);
         const target = entity.throttle * maximum;
         entity.speed = approach(entity.speed, target, target > entity.speed ? model.acceleration * Math.max(.15, engine) : model.acceleration * .6, dt);
         const lift = clamp((entity.speed - model.stallSpeed * .65) / (model.stallSpeed * .55), 0, 1);

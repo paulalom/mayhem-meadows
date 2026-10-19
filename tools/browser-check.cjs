@@ -570,11 +570,11 @@ async function checkAudio(browser, externalRequests) {
     await waitForScene(page, 'foot');
     await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().mode === 'foot' && globalThis.__browserCheckAudioDirector.getStatus().station === 'foot');
 
-    await page.locator('#help-toggle').click();
-    await page.locator('#help-screen').waitFor({ state: 'visible' });
+    await page.locator('#settings-toggle').click();
+    await page.locator('#settings-screen').waitFor({ state: 'visible' });
     await setAudioRange(page, 'audio-music', 0);
     await setAudioRange(page, 'audio-effects', 1);
-    await page.locator('#close-help').click();
+    await page.locator('#close-settings').click();
     await page.waitForTimeout(450);
     assert.equal((await audioState(page)).musicVoiceCount, 0, 'Music level zero must release the music voices while town ambience remains available.');
     await page.locator('#game-canvas').focus();
@@ -587,15 +587,15 @@ async function checkAudio(browser, externalRequests) {
     const pop = await audioState(page), popOutput = await measureAudio(page, 140);
     assert.ok(popOutput.peakRms > 0.00001, 'The generated pop sample must reach native output through the real toy action.');
 
-    await page.locator('#help-toggle').click();
-    await page.locator('#help-screen').waitFor({ state: 'visible' });
+    await page.locator('#settings-toggle').click();
+    await page.locator('#settings-screen').waitFor({ state: 'visible' });
     await setAudioRange(page, 'audio-master', 0.75);
     await setAudioRange(page, 'audio-music', 0.45);
     await setAudioRange(page, 'audio-effects', 0.65);
     await page.locator('#radio-station').selectOption('meadow');
     for (const [id, level] of [['audio-master-value', 75], ['audio-music-value', 45], ['audio-effects-value', 65]])
       assert.match(await page.locator(`#${id}`).textContent(), new RegExp(String(level)));
-    await page.locator('#close-help').click();
+    await page.locator('#close-settings').click();
     await outputSlider.press('ArrowRight'); await outputSlider.press('ArrowRight');
     assert.equal(await outputSlider.inputValue(), '7'); assert.equal(await page.locator('#audio-output-value').textContent(), '7%');
     await page.waitForFunction(() => Math.abs(globalThis.__browserCheckAudioDirector._outputGain.gain.value - 0.07) < 0.000001);
@@ -610,8 +610,8 @@ async function checkAudio(browser, externalRequests) {
     assert.equal(await outputSlider.evaluate(input => { const rect = input.getBoundingClientRect(); return rect.left >= 0 && rect.right <= innerWidth; }), true);
     await page.screenshot({ path: path.join(evidence, 'audio-volume-mobile.png'), fullPage: true });
     await page.setViewportSize({ width: 1365, height: 900 });
-    await page.locator('#help-toggle').click();
-    await page.locator('#help-screen').waitFor({ state: 'visible' });
+    await page.locator('#settings-toggle').click();
+    await page.locator('#settings-screen').waitFor({ state: 'visible' });
     await page.locator('.audio-settings').scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(evidence, 'audio-settings.png'), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
@@ -658,11 +658,11 @@ async function checkUnavailableAudio(browser, externalRequests) {
     assert.match(await page.locator('#sound-toggle').textContent(), /unavailable/i);
     await page.keyboard.press('e');
     await waitForScene(page, 'drive');
-    await page.locator('#help-toggle').click();
-    await page.locator('#help-screen').waitFor({ state: 'visible' });
+    await page.locator('#settings-toggle').click();
+    await page.locator('#settings-screen').waitFor({ state: 'visible' });
     await setAudioRange(page, 'audio-master', 0.5);
     assert.equal(await page.locator('#audio-master').inputValue(), '0.5');
-    await page.locator('#close-help').click();
+    await page.locator('#close-settings').click();
     assert.equal(await page.locator('#game-canvas').evaluate(element => element === document.activeElement), true);
     assert.equal((await audioState(page)).voiceCount, 0, 'Unavailable audio must leave gameplay usable without audio voices.');
   } finally { await closeTestContext(context); }
@@ -697,9 +697,9 @@ async function checkThemedAudio(browser, externalRequests) {
       const audio = globalThis.__browserCheckAudioDirector.getStatus();
       return audio.active && audio.loadingSamples === 0 && audio.sampleCount === Object.keys(globalThis.MayhemAudioSamples).length;
     }, null, { timeout: 30000 });
-    await page.locator('#help-toggle').click();
+    await page.locator('#settings-toggle').click();
     await setAudioRange(page, 'audio-music', 0);
-    await page.locator('#close-help').click();
+    await page.locator('#close-settings').click();
     await page.waitForFunction(() => globalThis.__browserCheckAudioDirector.getStatus().musicVoiceCount === 0);
     const expectedAmbience = await page.evaluate(() => globalThis.MayhemAudio.deriveAudioFrame(globalThis.__browserCheckGame).ambience);
     assert.equal((await audioState(page)).ambienceCount, expectedAmbience ? 1 : 0, 'The live district must select one quiet ambient bed.');
@@ -1530,14 +1530,14 @@ async function main() {
       await captureMouse(page);
       assert.equal((await sceneState(page)).aiming, 'false', 'A held aiming button must not survive a menu.');
     });
-    await check('help sensitivity and invert-Y settings change free look and survive reload', async () => {
+    await check('settings sensitivity and invert-Y controls change free look and survive reload', async () => {
       await unlockToUI(page);
-      await page.locator('#help-toggle').click();
-      await page.locator('#help-screen').waitFor({ state: 'visible' });
+      await page.locator('#settings-toggle').click();
+      await page.locator('#settings-screen').waitFor({ state: 'visible' });
       await page.locator('#camera-sensitivity').fill('0.5');
       await page.locator('#camera-invert-y').check();
       assert.match(await page.locator('#camera-sensitivity-value').textContent(), /0\.50/);
-      await page.locator('#close-help').click();
+      await page.locator('#close-settings').click();
       await captureMouse(page);
       await page.keyboard.press('c');
       await page.waitForTimeout(250);
@@ -1547,11 +1547,11 @@ async function main() {
       const lowDelta = angleDifference(lowAfter.cameraYaw, lowBefore.cameraYaw);
       assert.ok(lowAfter.cameraPitch < lowBefore.cameraPitch - 0.01, 'Invert-Y should make upward mouse movement look down.');
       await unlockToUI(page);
-      await page.locator('#help-toggle').click();
-      await page.locator('#help-screen').waitFor({ state: 'visible' });
+      await page.locator('#settings-toggle').click();
+      await page.locator('#settings-screen').waitFor({ state: 'visible' });
       await page.locator('#camera-sensitivity').fill('1.5');
       await page.locator('#camera-invert-y').uncheck();
-      await page.locator('#close-help').click();
+      await page.locator('#close-settings').click();
       await captureMouse(page);
       await page.keyboard.press('c');
       await page.waitForTimeout(250);
@@ -1567,10 +1567,10 @@ async function main() {
       await page.locator('#play-button').click();
       await waitForScene(page, 'foot');
       // Restore defaults so later geometry checks use the standard view.
-      await page.locator('#help-toggle').click();
-      await page.locator('#help-screen').waitFor({ state: 'visible' });
+      await page.locator('#settings-toggle').click();
+      await page.locator('#settings-screen').waitFor({ state: 'visible' });
       await page.locator('#camera-sensitivity').fill('1');
-      await page.locator('#close-help').click();
+      await page.locator('#close-settings').click();
     });
     await check('W walks in the direction of an orbited camera', async () => {
       await lookCamera(page, 60);
@@ -1776,9 +1776,9 @@ async function main() {
       assert.equal(await page.locator('#game-canvas').isVisible(), true);
     });
     await page.screenshot({ path: path.join(evidence, 'mobile-play.png'), fullPage: true });
-    await check('camera settings remain reachable in the narrow help dialog', async () => {
-      await page.locator('#help-toggle').click();
-      await page.locator('#help-screen').waitFor({ state: 'visible' });
+    await check('camera controls remain reachable in the narrow settings dialog', async () => {
+      await page.locator('#settings-toggle').click();
+      await page.locator('#settings-screen').waitFor({ state: 'visible' });
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
       await page.locator('#camera-sensitivity').scrollIntoViewIfNeeded();
       await page.locator('#camera-sensitivity').fill('0.75');
@@ -1787,8 +1787,8 @@ async function main() {
       assert.equal(await page.locator('#camera-sensitivity').inputValue(), '0.75');
       assert.equal(await page.locator('#camera-invert-y').isChecked(), true);
       await page.screenshot({ path: path.join(evidence, 'mobile-camera-settings.png'), fullPage: true });
-      await page.locator('#close-help').click();
-      await page.locator('#help-screen').waitFor({ state: 'hidden' });
+      await page.locator('#close-settings').click();
+      await page.locator('#settings-screen').waitFor({ state: 'hidden' });
     });
     await check('blocked local storage still permits Play and car entry', async () => {
       const blockedContext = await createTestContext(browser, { viewport: { width: 1365, height: 900 }, serviceWorkers: 'block' });

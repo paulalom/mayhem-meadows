@@ -136,6 +136,25 @@ kbd{font:700 10px "Courier New",monospace;padding:4px 5px;background:var(--panel
 .secondary-button{width:100%;margin-top:10px;border:1px solid var(--line);background:var(--panel);padding:12px;font-size:11px;font-weight:700;border-radius:3px}
 .secondary-button:hover{background:var(--panel-light)}
 .help-card{max-width:480px}
+.settings-screen{z-index:25}
+.settings-card{max-width:610px}
+.settings-card h2{font-size:30px;margin-right:18px}
+.settings-card fieldset{min-width:0}
+.control-settings{border:0;border-top:1px solid var(--line);padding:16px 0 0;margin:0 0 24px}
+.control-settings legend{color:var(--lime);font-size:13px;font-weight:750;padding-right:8px}
+.control-selectors{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.control-selectors label{font-size:11px;color:var(--muted)}
+.control-selectors select{display:block;width:100%;margin-top:7px;padding:9px;background:var(--panel);color:var(--cream);border:1px solid var(--line);border-radius:3px;font:inherit}
+.control-settings-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:16px 0 7px;font-size:10px;color:var(--muted)}
+.control-bindings>div{display:flex;justify-content:space-between;align-items:center;gap:14px;border-bottom:1px solid var(--line);padding:7px 0;font-size:11px}
+.key-binding{min-width:106px;max-width:55%;min-height:34px;padding:7px 10px;border:1px solid #647061;border-radius:3px;color:var(--cream);background:var(--panel);font:700 11px "Courier New",monospace}
+.key-binding:hover,.key-binding[aria-pressed="true"]{border-color:var(--lime);color:var(--lime);background:var(--ink-deep)}
+.settings-card .control-message{min-height:38px;margin:12px 0 8px;color:var(--aqua);font-size:11px}
+.settings-card .settings-note,.settings-card #camera-settings-note{font-size:10px;color:var(--muted);margin:10px 0;line-height:1.6}
+.settings-card .audio-settings-note{font-size:10px;line-height:1.6;color:var(--muted);margin:10px 0 0}
+.flight-quick-controls p{font-size:10px;color:var(--muted);line-height:1.7}
+.settings-check{margin:0 0 24px}
+@media(max-width:680px){.settings-screen{padding:12px}.settings-card{padding:23px 17px}.settings-card h2{font-size:25px}.control-selectors{grid-template-columns:1fr}.key-binding{min-width:90px}.settings-card>p{font-size:11px}}
 .help-card h2{font-size:30px;margin-right:10px}
 .dialog-close{position:absolute;right:15px;top:12px;border:0;background:transparent;color:var(--muted);font-size:27px;padding:0 5px}
 .dialog-close:hover{color:var(--cream)}

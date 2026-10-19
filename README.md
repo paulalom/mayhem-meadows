@@ -46,7 +46,7 @@ Hosting serves each player their own game; it does not add multiplayer. Saves st
 | Left-click | Fire the equipped popper/cannon or swing the hammer on foot; hold to fire a borrowed tank's cannon |
 | C | Recenter the camera behind you |
 | M | Open / close the illustrated city map; Escape also closes it |
-| E | Borrow/exit a nearby car, stopped tank or landed aircraft; use the car wash |
+| E | Borrow/exit a nearby car or stopped tank; enter aircraft; use the car wash |
 | Space | Jump on foot; handbrake/drift while driving |
 | Hold Tab | Open the toy wheel; hover, use arrows, or press 1–3; release Tab to equip |
 | I | Open pockets to use supplies or shop for supplies and toys |
@@ -55,14 +55,22 @@ Hosting serves each player their own game; it does not add multiplayer. Saves st
 | H | Horn; start a party at a party mission ring |
 | B / N | Previous / next vehicle radio station, including radio off |
 | F | Dramatic ragdoll flop on foot; parachute bailout from an aircraft |
-| Space / Ctrl in aircraft | Climb / descend; W/S controls plane throttle or helicopter forward/back movement, A/D turns |
-| Shift in aircraft | Plane boost; helicopter braking/hover assist |
+| W / S in planes | Pitch nose down / up (arrow up / down also work) |
+| A / D in planes | Roll / bank left and right (arrow left / right also work); banking coordinates a turn |
+| Q / E in planes | Independent yaw / rudder; steer on the ground |
+| Shift / Space in planes | Increase / decrease throttle; the setting holds after release |
+| X in planes | Exit after landing and stopping; F remains parachute bailout |
+| W/S, A/D in helicopters | Forward/back, turn left/right; arrow keys also work |
+| Space / Ctrl in helicopters | Climb / descend |
+| Shift in helicopters | Braking / hover assist |
 | R | Recover to a safe road position; right a flipped car or tank |
 | P / Esc | Pause/resume; Esc also releases the mouse |
 
-Click the town to capture the mouse and start looking around. Your first click captures the mouse without firing a toy. Hold right mouse to aim toward the center crosshair; left-click uses the toy on foot, with or without aiming. Space jumps on foot and remains the driving handbrake. Release it before jumping again. Esc releases the mouse and pauses. Opening a menu also releases it and freezes the town; click the town again after closing the menu. Changing tabs or windows pauses the game. Sound, reduced motion, and full screen controls are in the header. Open help (?) to adjust look sensitivity or invert up/down; camera preferences stay in this browser.
+The table shows default keys. Open **Settings** from the header, pause menu, or Help to choose separate control sets for on foot, cars/trucks, tanks, helicopters, and planes. Choose a preset or click an action's key and press a replacement; Escape cancels capture. Conflicts within a set and reserved menu shortcuts are rejected. Reset this set restores the selected preset. Planes also offer **Classic arcade** for the previous throttle/climb layout. Custom keys, presets, camera sensitivity, audio, and reduced motion save in this browser. Flight and emergency prompts follow your active keys.
 
-Music starts after Play. On foot, a gentle town soundtrack follows you; in a vehicle, the radio replaces it with **Biscuit FM** (disco/funk), **Neon Drive** (synthwave), or **Meadow Waves** (mellow dub). Press B/N or use the radio arrows to switch stations and cycle through radio off. The header Volume slider adjusts all game sound from 1% to 10% of the original level, starting at 5%. Open help (?) for separate master, music/radio, and engines/effects volumes. The station and mix survive reloads, and old saves keep their existing mute preference. The original radio arrangements are synthesized locally with Web Audio.
+Click the town to capture the mouse and start looking around. Your first click captures the mouse without firing a toy. Hold right mouse to aim toward the center crosshair; left-click uses the toy on foot, with or without aiming. Space jumps on foot and remains the driving handbrake. Release it before jumping again. Esc releases the mouse and pauses. Opening a menu also releases it and freezes the town; click the town again after closing the menu. Changing tabs or windows pauses the game. Closing Settings restores whether the town was already paused. Sound, reduced motion, and full screen controls are also in the header.
+
+Music starts after Play. On foot, a gentle town soundtrack follows you; in a vehicle, the radio replaces it with **Biscuit FM** (disco/funk), **Neon Drive** (synthwave), or **Meadow Waves** (mellow dub). Press B/N or use the radio arrows to switch stations and cycle through radio off. The header Volume slider adjusts all game sound from 1% to 10% of the original level, starting at 5%. Open Settings for separate master, music/radio, and engines/effects volumes. The station and mix survive reloads, and old saves keep their existing mute preference. The original radio arrangements are synthesized locally with Web Audio.
 
 Compact, sports car, and van engines blend idle and loaded loops as you accelerate, with gear-change accents, damaged-engine texture, boost, and grounded tire skid. Nearby traffic, patrol sirens, impacts, and resident reactions fade with distance and pan with the view. The [local sound library](assets/audio/README.md) supplies 45 original effects and voice clips: distinct toys, material-specific destruction, collisions, explosions, footsteps, supplies, coastal-town ambience, resident fake curses, Fun Police announcements, and radio station IDs. A burning ride has a local fire loop and an accelerating warning before the explosion. Embedded MP3 bytes preserve offline and direct file-open play; synthesis covers loading or unavailable effects. Town audio stops in menus; deliberate inventory and toy-wheel actions retain brief tactile feedback. Pause, help, mute, and background tabs silence everything. Browsers without Web Audio can still play silently.
 
@@ -197,6 +205,7 @@ npm run vendor
 | assets/audio/ | Generated source sounds, provenance manifest, and embedded offline audio bundle |
 | tools/build-audio-assets.cjs | Rebuilds and verifies the audio bundle with `npm run audio-assets` |
 | game.js | Fixed-step game loop, input, audio controls, persistence, HUD, and minimap |
+| controls.js | Vehicle control presets, custom keyboard bindings, save validation, and action mapping |
 | vendor/three.min.js | Bundled Three.js renderer for offline and file-open play |
 | vendor/cannon.min.js / vendor/cannon.cjs | Bundled Cannon physics engine for browser play and Node checks |
 | index.html / styles.css | Responsive interface and controls |

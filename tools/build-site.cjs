@@ -38,6 +38,7 @@ const runtimeFiles = [
   'core.js',
   'scene3d.js',
   'audio.js',
+  'controls.js',
   'game.js',
   'vendor/three.min.js',
   'vendor/cannon.min.js',
