@@ -775,7 +775,7 @@
       this._riverFlow.instanceMatrix.needsUpdate = true;
     }
 
-    _sign(text, x, y, z, yaw, background = '#fff9df', ink = '#385160', width = 3, height = 0.8) {
+    _sign(text, x, y, z, yaw, background = '#fff9df', ink = '#385160', width = 3, height = 0.8, { doubleSided = false, depth = .04 } = {}) {
       const T = this.T, canvas = document.createElement('canvas');
       canvas.width = 512; canvas.height = 128;
       const ctx = canvas.getContext('2d');
@@ -787,9 +787,19 @@
       ctx.fillText(text, 256, 65);
       const texture = new T.CanvasTexture(canvas); texture.colorSpace = T.SRGBColorSpace;
       this._textures.push(texture);
-      const material = new T.MeshBasicMaterial({ map: texture, side: T.DoubleSide });
+      const material = new T.MeshBasicMaterial({ map: texture });
       this._materials.set('sign-' + this._textures.length, material);
-      const geometry = this._geometry(new T.PlaneGeometry(width, height));
+      const geometry = this._geometry(depth > 0 ? new T.BoxGeometry(width, height, depth) : new T.PlaneGeometry(width, height));
+      if (depth > 0) {
+        // Keep the printed front at the supplied position. Box UVs make the
+        // reverse lettering read normally; edges and unprinted backs sample
+        // a blank corner of the same canvas, keeping each sign one draw call.
+        geometry.translate(0, 0, -depth / 2);
+        const uv = geometry.attributes.uv, normals = geometry.attributes.normal;
+        for (let i = 0; i < uv.count; i++) {
+          if (normals.getZ(i) === 0 || (!doubleSided && normals.getZ(i) < 0)) uv.setXY(i, .01, .01);
+        }
+      }
       const sign = new T.Mesh(geometry, material);
       sign.position.set(x, y, z); sign.rotation.y = yaw;
       this.scene.add(sign);
@@ -824,7 +834,7 @@
         this._groundRect({ x: green.x, y: z * UNIT - 11, w: green.w, h: 22 }, '#e4d7b2', .038);
         const district = root.MayhemWorld?.DISTRICTS[green.district];
         const signZ = z - green.h / UNIT / 2 + .2;
-        this._sign(district?.name || 'VILLAGE GREEN', x, this._surfaceY(x, signZ) + 1.05, signZ, 0, '#f3e5ad', '#40785f', 2.4, .48);
+        this._sign(district?.name || 'VILLAGE GREEN', x, this._surfaceY(x, signZ) + 1.05, signZ, 0, '#f3e5ad', '#40785f', 2.4, .48, { doubleSided: true });
         for (let i = 0; i < 8; i++) {
           const px = x - 2.1 + i * .6, pz = z + green.h / UNIT / 2 - .7;
           this._static(this._sphere, this._material(palette[i % palette.length]), px, this._surfaceY(px, pz) + .12, pz, .12, .12, .12, null, false);
@@ -857,7 +867,7 @@
           if (stand.type === 'transportheli' || stand.aircraftType === 'transportheli') this._aviationPad(stand);
           for (const side of [-1, 1]) this._static(this._cube, this._material('#efd57b'), x, elevation + .07, z + side * 3,
             4.3, .012, .10, [0, -(stand.angle || 0), 0], false);
-          this._sign(stand.label || 'AIRCRAFT STAND', x - 3, elevation + .9, z - 3.3, -(stand.angle || 0), '#f1d776', '#3d555f', 2.3, .4);
+          this._sign(stand.label || 'AIRCRAFT STAND', x - 3, elevation + .9, z - 3.3, -(stand.angle || 0), '#f1d776', '#3d555f', 2.3, .4, { doubleSided: true });
         }
         if (this._worldInfo) this._worldInfo.airport = { runways: airport.runways?.length || 0, taxiways: airport.taxiways?.length || 0, aprons: airport.aprons?.length || 0,
           helipads: airport.helipads?.length || 0, stands: (airport.stands?.length || 0) + (airport.militaryStands?.length || 0) };
@@ -875,7 +885,7 @@
       for (const side of [-1, 1]) this._static(this._cube, this._material('#f4edc9'), x + c * side * radius * .25, elevation + .071, z - s * side * radius * .25,
         radius * .11, .012, radius, [0, yaw, 0], false);
       this._static(this._cube, this._material('#f4edc9'), x, elevation + .071, z, radius * .60, .012, radius * .11, [0, yaw, 0], false);
-      this._sign(pad.label || 'HELIPAD', x, elevation + 1, z - radius - .2, 0, '#e6deb6', '#415f67', 2.6, .42);
+      this._sign(pad.label || 'HELIPAD', x, elevation + 1, z - radius - .2, 0, '#e6deb6', '#415f67', 2.6, .42, { doubleSided: true });
     }
 
     _physicalProps() {
@@ -893,8 +903,8 @@
         if (this._activePropObject) this._propRenderState(object);
         const x = object.x / UNIT, z = object.y / UNIT, elevation = object.elevation ?? this._surfaceY(x, z);
         const yaw = -(object.angle || 0), cosine = Math.cos(yaw), sine = Math.sin(yaw);
-        const sign = (text, offset, height, facing, background, ink, width, signHeight) => {
-          this._sign(text, x + sine * offset, elevation + height, z + cosine * offset, yaw + facing, background, ink, width, signHeight);
+        const sign = (text, offset, height, facing, background, ink, width, signHeight, options) => {
+          this._sign(text, x + sine * offset, elevation + height, z + cosine * offset, yaw + facing, background, ink, width, signHeight, options);
         };
         for (let i = 0; i < (object.parts || []).length; i++) {
           const part = object.parts[i], offset = part.offset || [0, object.height / 2, 0];
@@ -942,8 +952,8 @@
           detail('#dfceb0', 0, 1.04, 5, 4.9, .08, 1.1);
           for (let i = 0; i < 4; i++) detail('#cbd3c9', i * 1.15 - 1.72, .55, 4.48, 1, .62, .03);
           for (let i = 0; i < 3; i++) detail('#f1d7ad', 3.9, .4 + i * .55, 4.28, .85, .035, .03);
-        } else if (object.kind === 'garage') sign('SPRINKLE GARAGE', -.68, 1.26, 0, '#fff1c8', '#775688', 1.75, .5);
-        if (object.kind === 'wayfinding') sign(object.label, -.045, 1.3, Math.PI, '#f1ddae', '#425e5c', .94, .37);
+        } else if (object.kind === 'garage') sign('SPRINKLE GARAGE', -.68, 1.26, Math.PI, '#fff1c8', '#775688', 1.75, .5);
+        if (object.kind === 'wayfinding') sign(object.label, -.07, 1.3, Math.PI, '#f1ddae', '#425e5c', .94, .37, { doubleSided: true, depth: .14 });
         if (object.kind === 'planter') {
           this._static(this._sphere, this._material('#7da676'), x, elevation + 0.62, z, 0.48, 0.23, 0.26);
           for (const side of [-1, 1]) this._static(this._sphere, this._material('#e8b393'), x + side * 0.27, elevation + 0.76, z, 0.08, 0.09, 0.08, null, false);

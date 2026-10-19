@@ -40,8 +40,8 @@
       }
       // Texture signs lie flat on the runway; headings refer to magnetic east/west.
       if(scene._sign){
-        const west=scene._sign('09',(runway.x+330)/UNIT,base.elevation+.085,mid/UNIT,0,'#4c595b','#e7ebd4',3,2);
-        const east=scene._sign('27',(runway.x+runway.w-330)/UNIT,base.elevation+.085,mid/UNIT,0,'#4c595b','#e7ebd4',3,2);
+        const west=scene._sign('09',(runway.x+330)/UNIT,base.elevation+.085,mid/UNIT,0,'#4c595b','#e7ebd4',3,2,{depth:0});
+        const east=scene._sign('27',(runway.x+runway.w-330)/UNIT,base.elevation+.085,mid/UNIT,0,'#4c595b','#e7ebd4',3,2,{depth:0});
         if(west?.rotation)west.rotation.set(-Math.PI/2,0,-Math.PI/2);
         if(east?.rotation)east.rotation.set(-Math.PI/2,0,Math.PI/2);
       }
@@ -86,7 +86,7 @@
     for(const side of [-1,1]){const x=(base.gate.x+side*(base.gate.width/2+10))/UNIT,z=base.gate.y/UNIT,g=terrain.heightAt(x*UNIT,z*UNIT);
       box('#d5d0a9',x,g+.65,z,.4,1.3,.4);
       box('#d5c477',x,g+2.05,z,.13,2.5,.13,[0,0,side*.15]);}
-    if(scene._sign)scene._sign('NORTHWATCH AIRBASE',base.gate.x/UNIT+6,base.elevation+3.3,base.gate.y/UNIT+1,0,'#e6dfbb','#4a6255',5.8,.65);
+    if(scene._sign)scene._sign('NORTHWATCH AIRBASE',base.gate.x/UNIT+6,base.elevation+3.3,base.gate.y/UNIT+1,0,'#e6dfbb','#4a6255',5.8,.65,{doubleSided:true});
     scene._worldInfo.military={buildings:s.buildings.length,runways:base.runways.length,helipads:base.helipads.length,fenceGap:base.gate.width/UNIT,models:s.models.size};
   }
   function decorateVehicle(scene,entity,model){

@@ -42,6 +42,69 @@ function matrixOf(slot) {
   return matrix;
 }
 
+function signHit(scene, sign, x, side) {
+  scene.scene.updateMatrixWorld(true);
+  const origin = sign.localToWorld(new T.Vector3(x, 0, side * 5));
+  const direction = new T.Vector3(0, 0, -side).transformDirection(sign.matrixWorld);
+  return new T.Raycaster(origin, direction).intersectObjects(scene.scene.children)[0];
+}
+
+test('sign fronts and printed backs read left to right while mounted backs and edges stay blank', () => {
+  const scene = makeScene({ staticObjects: [] });
+  for (const doubleSided of [false, true]) for (const yaw of [0, Math.PI / 3, Math.PI]) {
+    const sign = scene._sign('MEADOWS', 3, 2, 4, yaw, '#fff9df', '#385160', 4, 1, { doubleSided });
+    assert.equal(sign.material.side, T.FrontSide, 'solid outward faces hide lettering on the inside');
+    assert.equal(sign.material.transparent, false);
+    for (const side of [1, -1]) for (const horizontal of [-1, 1]) {
+      const hit = signHit(scene, sign, horizontal * side, side);
+      assert.equal(hit.object, sign);
+      const blank = side < 0 && !doubleSided;
+      assert.ok(Math.abs(hit.uv.x - (blank ? .01 : horizontal < 0 ? .25 : .75)) < 1e-6,
+        'each printed face maps viewer left to texture left, without mirrored letters');
+      assert.ok(Math.abs(hit.uv.y - (blank ? .01 : .5)) < 1e-6);
+    }
+    const hit = new T.Raycaster(sign.localToWorld(new T.Vector3(5, 0, -.02)),
+      new T.Vector3(-1, 0, 0).transformDirection(sign.matrixWorld)).intersectObject(sign)[0];
+    assert.ok(Math.abs(hit.uv.x - .01) < 1e-6, 'the solid edge samples only background');
+    assert.ok(Math.abs(hit.uv.y - .01) < 1e-6);
+    sign.removeFromParent();
+  }
+});
+
+test('both wayfinding faces sit outside the solid board and disappear together when destroyed', () => {
+  for (const angle of [0, Math.PI / 3, Math.PI]) {
+    const object = { kind: 'wayfinding', label: 'VILLAGE GREEN', x: 100, y: 200, elevation: 0, angle,
+      parts: [{ offset: [0, 1.3, 0], half: [.5, .2, .06] }] };
+    const scene = makeScene({ staticObjects: [object] });
+    scene._physicalProps(); scene._bakeStatics();
+    const signs = scene._propRenderStates.get(object).signs;
+    assert.equal(signs.length, 1, 'one owned mesh contains the front, rear and edges');
+    const sign = signs[0];
+    for (const side of [1, -1]) {
+      const hit = signHit(scene, sign, 0, side);
+      assert.equal(hit.object, sign, 'the physical board does not obscure either printed face');
+      assert.ok(Math.abs(hit.uv.x - .5) < 1e-6);
+      assert.ok(Math.abs(hit.uv.y - .5) < 1e-6);
+    }
+    object.destroyed = true; scene._syncDestructibleProps();
+    assert.equal(sign.visible, false);
+  }
+});
+
+test('kiosk lettering faces outward and runway paint remains a flat upward face', () => {
+  const scene = makeScene({ staticObjects: [{ kind: 'garage', x: 100, y: 200, elevation: 0, parts: [] }] });
+  scene._physicalProps();
+  const sign = scene.scene.children.find(mesh => mesh.material?.map);
+  sign.updateMatrixWorld(true);
+  const hit = new T.Raycaster(new T.Vector3(5, 1.26, 5), new T.Vector3(0, 0, 1)).intersectObject(sign)[0];
+  assert.ok(hit, 'the kiosk sign is printed on its street-facing side');
+  assert.ok(Math.abs(hit.uv.x - .5) < 1e-6);
+  const paint = scene._sign('09', 20, .085, 20, 0, '#4c595b', '#e7ebd4', 3, 2, { depth: 0 });
+  paint.rotation.set(-Math.PI / 2, 0, -Math.PI / 2); paint.updateMatrixWorld(true);
+  assert.ok(new T.Raycaster(new T.Vector3(20, 5, 20), new T.Vector3(0, -1, 0)).intersectObject(paint).length);
+  assert.equal(new T.Raycaster(new T.Vector3(20, -5, 20), new T.Vector3(0, 1, 0)).intersectObject(paint).length, 0);
+});
+
 test('custom military fence visuals retain shared aim and camera collision proxies',()=>{
   const fence={id:'base-fence',kind:'military-fence',militaryRendered:true,destructible:false,x:2000,y:-1000,elevation:14,angle:0,
     parts:[{shape:'box',offset:[0,1.1,0],half:[4,1.1,.06],color:'#788578'}]};
