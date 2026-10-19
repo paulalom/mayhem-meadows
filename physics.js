@@ -153,6 +153,25 @@
     });
   }
 
+  function aircraftParts(entity) {
+    const Aircraft = root.MayhemAircraft || (typeof require === 'function' ? require('./aircraft.js') : null);
+    return Aircraft?.AIRCRAFT_TYPES[entity.aircraftType]?.collisionParts || [];
+  }
+
+  function aircraftBoxes(craft) {
+    const orientation = aircraftOrientation(craft), basis = boxBasis(orientation, finite(craft.angle));
+    return aircraftParts(craft).map(part => {
+      const [ox, oy, oz] = part.offset;
+      return prepareBox({ part: part.name, shape: part.shape,
+        x: craft.x/UNIT+ox*basis[0]+oy*basis[1]+oz*basis[2],
+        y: finite(craft.elevation)+ox*basis[3]+oy*basis[4]+oz*basis[5],
+        z: craft.y/UNIT+ox*basis[6]+oy*basis[7]+oz*basis[8],
+        hx: part.half[0], hy: part.half[1], hz: part.half[2], orientation, dynamic: true,
+        vx: clamp(finite(craft.vx)/UNIT, -20, 20), vy: clamp(finite(craft.verticalVelocity, finite(craft.vz)), -20, 20),
+        vz: clamp(finite(craft.vy)/UNIT, -20, 20), angularVelocity: craft.angularVelocity });
+    });
+  }
+
   // Sphere against a full 3D oriented box, including flying/tipped roofs.
   // Inverse rotation maps the sphere into the box's local frame; normals are
   // then rotated back into the town frame.
@@ -379,6 +398,7 @@
         if(!craft||craft.visible===false||craft.active===false||!Number.isFinite(craft.x)||!Number.isFinite(craft.y)||seen.has(craft.id||craft))continue;
         const model=craft.railModel||Aircraft?.AIRCRAFT_TYPES[craft.aircraftType];if(!model)continue;
         seen.add(craft.id||craft);
+        if(craft.kind==='aircraft') { boxes.push(...aircraftBoxes(craft)); continue; }
         const length=Math.max(.1,finite(craft.colliderLength,model.length)/UNIT),width=Math.max(.1,finite(craft.colliderWidth,model.width)/UNIT);
         const height=Math.max(.1,finite(craft.colliderHeight,model.height)),orientation=aircraftOrientation(craft),basis=boxBasis(orientation,finite(craft.angle));
         // Airframe geometry rotates around the ground anchor, whereas chassis
@@ -504,7 +524,7 @@
     }
   }
 
-  const api = { RagdollWorld, BODYPARTS, JOINT_NAMES, STEP, FLOOR, CHARACTER_SCALE, PERSON_HEIGHT, MUZZLE_HEIGHT, PLAYER_RADIUS, NPC_RADIUS, aircraftOrientation, tankParts, tankBoxes };
+  const api = { RagdollWorld, BODYPARTS, JOINT_NAMES, STEP, FLOOR, CHARACTER_SCALE, PERSON_HEIGHT, MUZZLE_HEIGHT, PLAYER_RADIUS, NPC_RADIUS, aircraftOrientation, aircraftParts, aircraftBoxes, sphereBox, tankParts, tankBoxes };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.MayhemPhysics = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

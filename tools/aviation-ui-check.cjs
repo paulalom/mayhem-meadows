@@ -58,6 +58,29 @@ async function main() {
       await page.locator('#airport-route').click();
       await page.waitForFunction(() => !document.getElementById('target-compass').hidden && document.getElementById('target-altitude').textContent === 'Meadows Airport');
     });
+    await check('walking clears parked rotor overhangs and empty space beside a jet nose', async () => {
+      const walks=await page.evaluate(() => {
+        const game=globalThis.__browserCheckGame,results=[];
+        for(const type of ['helicopter','news','policeheli','transportheli','fighter']) {
+          const craft=game.aircraft.find(value=>value.aircraftType===type),c=Math.cos(craft.angle),s=Math.sin(craft.angle);
+          const jet=type==='fighter',forward=jet?5:-2.1,side=jet?2:type==='transportheli'?4.5:3;
+          const start={x:craft.x+(forward*c-side*s)*20,y:craft.y+(forward*s+side*c)*20};
+          Object.assign(game.player,{...start,elevation:game._ground(start),vehicleId:null,trainRide:null,
+            grounded:true,verticalVelocity:0,parachuting:false});
+          const angle=craft.angle+(jet?Math.PI/2:0),steps=32;
+          for(let tick=0;tick<steps;tick++)game._walk(1/60,{up:true,moveAngle:angle});
+          const travel=155/60*steps,expected={x:start.x+Math.cos(angle)*travel,y:start.y+Math.sin(angle)*travel};
+          results.push({type,error:Math.hypot(game.player.x-expected.x,game.player.y-expected.y),
+            height:game.player.elevation-game._ground(game.player),shapes:game.vehiclePhysics.get(craft.id).shapes.length});
+        }
+        return results;
+      });
+      for(const walk of walks) {
+        assert.ok(walk.error<.1,walk.type+' walk stays clear: '+JSON.stringify(walk));
+        assert.ok(Math.abs(walk.height)<.025,walk.type+' stays on the apron beneath the overhang');
+        assert.ok(walk.shapes>1,walk.type+' uses a compound aircraft body in Chrome');
+      }
+    });
     const poseAtHelicopter = async () => {
       await page.evaluate(() => {
         const game = globalThis.__browserCheckGame, aircraft = game.aircraft.find(value => value.aircraftType === 'helicopter');
@@ -73,7 +96,7 @@ async function main() {
       await poseAtHelicopter();
       await page.waitForFunction(() => !document.getElementById('flight-panel').hidden && document.getElementById('ride-name').textContent === MayhemAircraft.getModel('helicopter').name);
       assert.match(await page.locator('#flight-altitude').textContent(), /m AGL/);
-      assert.match(await page.locator('#speed-caption').textContent(), /CTRL DESCEND/);
+      assert.match(await page.locator('#speed-caption').textContent(), /Ctrl descend/i);
     });
     await check('airport hangar saves an aircraft, pauses flight and survives reload', async () => {
       await page.keyboard.press('KeyG');

@@ -2,6 +2,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { AircraftSystem, AIRCRAFT_TYPES, isAircraft, getModel } = require('../aircraft.js');
+const Physics = require('../physics.js');
+const { personContact } = require('../vehicle-physics.js');
 
 function fixture(options = {}) {
   const events = [];
@@ -54,13 +56,20 @@ test('all seven aircraft share a player/NPC flight contract and distinct flight 
 });
 
 test('ground interaction transfers ownership, preserves heat and parks with a safe exit', () => {
-  const { game, aviation } = fixture({ heat: 2 });
-  const entity = aviation.spawn('trainer', { x: 6000, y: 4000 }, { npc: true });
-  board(game, aviation, entity);
-  assert.equal(entity.npc, false); assert.equal(entity.borrowed, true);
-  assert.equal(aviation.interact(), true);
-  assert.equal(game.player.vehicleId, null); assert.equal(game.player.grounded, true);
-  assert.equal(game.heat, 2); assert.ok(Math.hypot(game.player.x - entity.x, game.player.y - entity.y) > 100);
+  for (const type of Object.keys(AIRCRAFT_TYPES)) {
+    const contact = (person, entity, radius = Physics.PLAYER_RADIUS) => personContact(person, entity, radius, getModel(entity));
+    const { game, aviation } = fixture({ heat: 2, _personVehicleContact: contact });
+    const entity = aviation.spawn(type, { x: 6000, y: 4000 }, { npc: true });
+    board(game, aviation, entity);
+    assert.equal(entity.npc, false); assert.equal(entity.borrowed, true);
+    assert.equal(aviation.interact(), true);
+    assert.equal(game.player.vehicleId, null); assert.equal(game.player.grounded, true);
+    assert.equal(game.heat, 2); assert.equal(contact(game.player, entity), null, type+' exit clears the real airframe');
+    const distance = Math.hypot(game.player.x-entity.x, game.player.y-entity.y);
+    if (type === 'fighter') assert.ok(distance > getModel(entity).width/2, 'low wings require an exit beyond the wing');
+    else assert.ok(distance < getModel(entity).width/2, 'high wings and rotors allow an exit near the cabin');
+    assert.equal(aviation.enterNearest(), true); assert.equal(game.player.vehicleId, entity.id);
+  }
 });
 
 test('airborne pedestrians cannot board and moving or airborne pilots cannot exit normally', () => {

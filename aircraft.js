@@ -12,12 +12,112 @@
   const wrap = angle => Math.atan2(Math.sin(angle), Math.cos(angle));
   const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   const approach = (value, target, rate, dt) => value + clamp(target - value, -rate * dt, rate * dt);
+  // Contact solids follow the Blender airframes in metres from the ground
+  // anchor. Overall spans still reserve safe parking/taxi space, but do not
+  // fill the empty space beside a fuselage or below an elevated wing/rotor.
+  const solid = (name, offset, half, shape) => Object.freeze({ name, offset, half, shape });
+  const lightHeliSolids = [
+    solid('cabin', [.1, 1.6, 0], [1.6, .8, .91]),
+    solid('nose', [2.2, 1.5, 0], [.6, .59, .66]),
+    solid('inner tail boom', [-2.55, 1.85, 0], [1.15, .38, .37]),
+    solid('outer tail boom', [-4.8, 2.08, 0], [1.3, .2, .18]),
+    solid('tail fin', [-5.75, 2.35, 0], [.5, .9, .075]),
+    solid('tailplane', [-4.875, 1.99, 0], [.475, .04, 1.25]),
+    solid('engine', [-.55, 2.5, 0], [.85, .32, .41]),
+    solid('rotor mast', [-.5, 2.82, 0], [.105, .36, .105]),
+    solid('main rotor', [-.5, 3.06, 0], [5.104, .04, 5.104], 'cylinder'),
+    solid('tail rotor', [-5.85, 2.25, .24], [.72, .72, .13]),
+    ...[-1, 1].flatMap(side => [
+      solid('skid', [.05, .16, side], [1.75, .09, .09]),
+      solid('skid toe', [1.975, .295, side], [.265, .225, .09]),
+      ...[-.9, 1].map(x => solid('skid support', [x, .65, side * .725], [.065, .515, .34]))
+    ])
+  ];
+  const AIRCRAFT_SOLIDS = {
+    trainer: [
+      solid('fuselage', [.6, 1.48, 0], [1.9, .57, .58]),
+      solid('nose', [2.8, 1.42, 0], [.65, .45, .46]),
+      solid('tail boom', [-2.475, 1.58, 0], [1.175, .32, .27]),
+      solid('canopy', [.145, 1.96, 0], [1.095, .4, .53]),
+      solid('wing', [.025, 2.35, 0], [.975, .075, 5.25]),
+      solid('tailplane', [-3.075, 1.73, 0], [.575, .05, 1.9]),
+      solid('tail fin', [-2.925, 2.35, 0], [.675, .7, .085]),
+      solid('propeller', [3.205, 1.41, 0], [.125, 1.12, 1.12]),
+      solid('nose gear', [2.075, .65, 0], [.085, .5, .06]),
+      solid('nose wheel', [2.05, .23, 0], [.23, .23, .09]),
+      ...[-1, 1].flatMap(side => [
+        solid('main gear', [.2, .625, side * .775], [.175, .4, .4]),
+        solid('main wheel', [.1, .29, side * 1.11], [.29, .29, .11])
+      ])
+    ],
+    commuter: [
+      solid('fuselage', [.4, 2.08, 0], [4.2, .9, .86]),
+      solid('nose', [5.075, 2.03, 0], [1.275, .64, .7]),
+      solid('tail boom', [-5.15, 2.2, 0], [1.35, .55, .48]),
+      solid('wing', [.25, 2.88, 0], [1.75, .1, 8.3]),
+      solid('canopy', [4.75, 2.55, 0], [.75, .41, .71]),
+      solid('tail fin', [-4.95, 3.65, 0], [1.45, 1.45, .14]),
+      solid('tailplane', [-5.375, 2.65, 0], [.875, .07, 3]),
+      solid('nose gear', [4.85, 1, 0], [.135, .78, .085]),
+      solid('nose wheel', [4.8, .29, 0], [.29, .29, .12]),
+      ...[-1, 1].flatMap(side => [
+        solid('engine', [.825, 2.39, side * 2.65], [1.825, .49, .46]),
+        solid('propeller', [2.815, 2.39, side * 2.65], [.125, 1.4, 1.4]),
+        solid('main gear', [-1.35, 1, side * 1.375], [.16, .71, .485]),
+        solid('main wheel', [-1.4, .36, side * 1.75], [.36, .36, .14])
+      ])
+    ],
+    helicopter: lightHeliSolids,
+    news: lightHeliSolids.concat(solid('camera', [1.4, .65, 0], [.47, .38, .28])),
+    policeheli: lightHeliSolids.concat(solid('searchlight', [1.77, .86, -.35], [.22, .24, .22]),
+      solid('side cannon', [.2, 1.42, 1.44], [.375, .27, .4])),
+    transportheli: [
+      solid('cargo cabin', [-.275, 2.28, 0], [2.525, 1.17, 1.31]),
+      solid('rear cabin', [-3.625, 2.3, 0], [.825, .9, .99]),
+      solid('cockpit', [3.625, 2.4, 0], [1.375, .95, 1.09]),
+      solid('inner tail boom', [-5, 2.8, 0], [1.4, .7, .7]),
+      solid('outer tail boom', [-8.2, 3.15, 0], [1.8, .37, .32]),
+      solid('tail fin', [-9.25, 3.8, 0], [.85, 1.2, .13]),
+      solid('tailplane', [-8.225, 3.12, 0], [.775, .07, 2.1]),
+      solid('engines', [-.8, 3.42, 0], [2.1, .47, 1.2]),
+      solid('rotor mast', [-.45, 4, 0], [.105, .36, .105]),
+      solid('main rotor', [-.45, 4.24, 0], [7.103, .04, 7.103], 'cylinder'),
+      solid('tail rotor', [-9.5, 3.65, .34], [1.02, 1.02, .13]),
+      ...[-1, 1].flatMap(side => [
+        solid('front gear', [3.6, .975, side * 1.09], [.13, .655, .42]),
+        solid('front wheel', [3.6, .4, side * 1.4], [.4, .4, .155]),
+        solid('main gear', [-2.85, .925, side * 1.425], [.2, .625, .575]),
+        solid('main wheel', [-2.9, .43, side * 1.87], [.43, .43, .175])
+      ])
+    ],
+    fighter: [
+      solid('fuselage', [-.75, 1.66, 0], [3.45, .78, .95]),
+      solid('rear fuselage', [-5.35, 1.72, 0], [1.28, .7, .85]),
+      solid('nose', [4.05, 1.64, 0], [1.35, .5, .5]),
+      solid('nose tip', [6.3, 1.59, 0], [.9, .3, .28]),
+      solid('canopy', [1.45, 2.31, 0], [1.6, .57, .52]),
+      solid('nose gear', [3.625, .79, 0], [.095, .58, .07]),
+      solid('nose wheel', [3.65, .26, 0], [.26, .26, .105]),
+      ...[-1, 1].flatMap(side => [
+        solid('wing root', [-1.55, 1.53, side * 1.25], [2.75, .085, .75]),
+        solid('mid wing', [-2.45, 1.53, side * 2.75], [2.35, .085, .75]),
+        solid('outer wing', [-3.3, 1.53, side * 4], [1.9, .085, .5]),
+        solid('wingtip', [-3.7, 1.53, side * 4.8], [1.7, .085, .3]),
+        solid('tailplane', [-5.95, 1.83, side * 1.6], [1.05, .05, 1.2]),
+        solid('tail fin', [-4.825, 3.075, side * .65], [1.175, 1.275, .1]),
+        solid('intake', [-1.2, 1.38, side * .85], [1.6, .42, .37]),
+        solid('main gear', [-2.475, .82, side * .925], [.105, .56, .405]),
+        solid('main wheel', [-2.45, .31, side * 1.25], [.31, .31, .125])
+      ])
+    ]
+  };
   const definition = (id, name, flightClass, stats) => Object.freeze({
     id, aircraftType: id, name, make: 'Meadows Aviation', model: name, class: flightClass, type: flightClass,
     category: flightClass, helicopter: flightClass === 'helicopter',
     maxSpeed: 600, acceleration: 115, handling: 1, mass: 1.5, durability: 1.5,
     engineDurability: 1.4, maxHealth: 160, length: 150, width: 185, height: 2.5,
     climbRate: 11, descentRate: 8, stallSpeed: 190, seats: 2, maxAltitude: 240,
+    collisionParts: Object.freeze(AIRCRAFT_SOLIDS[id]),
     ...stats
   });
   const AIRCRAFT_TYPES = Object.freeze({
@@ -293,13 +393,16 @@
       if (!entity) return this.enterNearest();
       if (!entity.grounded || Math.abs(entity.speed) > 35) { this._toast('Land and slow down before leaving, or use your parachute bailout key in flight.'); return false; }
       const model = getModel(entity), player = this.game.player;
-      for (const offset of [Math.PI / 2, -Math.PI / 2, Math.PI]) {
-        const radius = (Math.abs(Math.sin(offset)) > .5 ? model.width : model.length) / 2 + 28;
+      // Try both cabin doors below high wings/rotors before the wider exits.
+      // Low wings still require the fallback beyond the full span.
+      const doorRadius = model.collisionParts[0].half[2] * SCALE + 28, wingRadius = model.width / 2 + 28;
+      const exits = [[Math.PI/2, doorRadius], [-Math.PI/2, doorRadius], [Math.PI/2, wingRadius], [-Math.PI/2, wingRadius], [Math.PI, model.length/2+28]];
+      for (const [offset, radius] of exits) {
         const point = { x: entity.x + Math.cos(entity.angle + offset) * radius, y: entity.y + Math.sin(entity.angle + offset) * radius, elevation: entity.elevation };
         const support = this._support(point, entity.elevation + .2);
         if (Math.abs(support - entity.elevation) > .5 || this.game._isFree && !this.game._isFree(point.x, point.y, 12, support)) continue;
         const person={...point,elevation:support};
-        if(this.game._personVehicleContact && this.aircraft.concat(this.game.cars || [],this.game.police || []).some(other=>other!==entity && other.visible!==false && this.game._personVehicleContact(person,other,12))) continue;
+        if(this.game._personVehicleContact && this.aircraft.concat(this.game.cars || [],this.game.police || []).some(other=>other.visible!==false && this.game._personVehicleContact(person,other,12))) continue;
         if((this.game.peds || []).some(ped=>!ped.transportedBy && Math.abs(finite(ped.elevation)-support)<1.9 && distance(ped,person)<28)) continue;
         Object.assign(player, point, { vehicleId: null, elevation: support, verticalVelocity: 0, vz: 0, grounded: true, parachuting: false });
         entity.throttle = 0; entity.npc = false; this._phase(entity, 'parked');

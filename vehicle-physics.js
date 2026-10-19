@@ -23,7 +23,8 @@
 
   function personContact(person, vehicle, radius, type) {
     if (person.transportedBy) return null;
-    if (vehicle.kind === 'tank') return tankPersonContact(person, vehicle, radius);
+    if (vehicle.kind === 'tank') return partsPersonContact(person, Physics.tankBoxes(vehicle), radius);
+    if (vehicle.kind === 'aircraft') return partsPersonContact(person, Physics.aircraftBoxes(vehicle), radius);
     const q = quaternion(vehicle);
     const inverse = q.conjugate(), h = height(vehicle), r = radius / SCALE;
     const offset=aircraftModel(vehicle)?q.vmult(new C.Vec3(0,h/2,0)):new C.Vec3(0,h/2,0);
@@ -50,21 +51,14 @@
     return best;
   }
 
-  function tankPersonContact(person, vehicle, radius) {
+  function partsPersonContact(person, boxes, radius) {
     const r = radius/SCALE; let best = null;
-    for (const box of Physics.tankBoxes(vehicle)) for (const vertical of [r, Physics.PERSON_HEIGHT/2, Physics.PERSON_HEIGHT-r]) {
-      const m = box.basis, dx = person.x/SCALE-box.x, dy = finite(person.elevation)+vertical-box.y, dz = person.y/SCALE-box.z;
-      const local = [dx*m[0]+dy*m[3]+dz*m[6], dx*m[1]+dy*m[4]+dz*m[7], dx*m[2]+dy*m[5]+dz*m[8]], half = [box.hx,box.hy,box.hz];
-      let delta = local.map((v,i)=>v-clamp(v,-half[i],half[i])), distance = Math.hypot(...delta), depth = r-distance;
-      if (depth <= 0) continue;
-      if (distance < .000001) {
-        const gaps = local.map((v,i)=>half[i]-Math.abs(v)), axis = gaps.indexOf(Math.min(...gaps));
-        delta = [0,0,0]; delta[axis] = local[axis] < 0 ? -1 : 1; distance = 1; depth = r+gaps[axis];
-      }
-      const normal = [0,1,2].map(row=>(delta[0]*m[row*3]+delta[1]*m[row*3+1]+delta[2]*m[row*3+2])/distance);
-      const horizontal = Math.hypot(normal[0],normal[2]);
-      const hit = horizontal < .15 ? { vertical:true, up:normal[1], nx:0, ny:0, depth:depth*SCALE } :
-        { nx:normal[0]/horizontal, ny:normal[2]/horizontal, depth:depth/horizontal*SCALE };
+    for (const box of boxes) for (const vertical of [r, Physics.PERSON_HEIGHT/2, Physics.PERSON_HEIGHT-r]) {
+      const contact = Physics.sphereBox({ x:person.x/SCALE, y:finite(person.elevation)+vertical, z:person.y/SCALE }, r, box);
+      if (!contact) continue;
+      const horizontal = Math.hypot(contact.x,contact.z);
+      const hit = horizontal < .15 ? { vertical:true, up:contact.y, nx:0, ny:0, depth:contact.depth*SCALE } :
+        { nx:contact.x/horizontal, ny:contact.z/horizontal, depth:contact.depth/horizontal*SCALE };
       if (!best || hit.depth > best.depth) best = hit;
     }
     return best;
@@ -355,16 +349,21 @@
           // resolve either pose and otherwise traverse entire terrain patches.
           const body=new C.Body({type:C.Body.KINEMATIC,mass:0,material:this.carMaterial,allowSleep:false,collisionFilterMask:ROAD_VEHICLE_GROUP});
           body.kind=entity.kind;body.entity=entity;
-          body.addShape(new C.Box(new C.Vec3(model.length/40,model.height/2,model.width/40)));
           this.world.addBody(body);
-          entry={body,model,position:new C.Vec3(),quaternion:new C.Quaternion(),initialized:false};
+          entry={body,model:null,position:new C.Vec3(),quaternion:new C.Quaternion(),initialized:false};
           this.aircraftBodies.set(entity.id,entry);
         }
         const body=entry.body;
         body.entity=entity;
         if(entry.model!==model) {
-          const shape=body.shapes[0];shape.halfExtents.set(model.length/40,model.height/2,model.width/40);
-          shape.updateConvexPolyhedronRepresentation();shape.updateBoundingSphereRadius();body.updateBoundingRadius();entry.model=model;
+          for(const shape of body.shapes.slice())body.removeShape(shape);
+          const parts=entity.kind==='aircraft'?Physics.aircraftParts(entity):
+            [{half:[model.length/40,model.height/2,model.width/40],offset:[0,model.height/2,0]}];
+          for(const part of parts) {
+            const shape=part.shape==='cylinder'?new C.Cylinder(part.half[0],part.half[0],part.half[1]*2,24):new C.Box(new C.Vec3(...part.half));
+            body.addShape(shape,new C.Vec3(part.offset[0],part.offset[1]-model.height/2,part.offset[2]));
+          }
+          body.updateBoundingRadius();entry.model=model;
         }
         entry.quaternion.copy(quaternion(entity));
         const offset=entry.quaternion.vmult(new C.Vec3(0,model.height/2,0));

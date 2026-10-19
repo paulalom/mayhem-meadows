@@ -86,7 +86,10 @@ test('truck meets real tank, train and aircraft solids with its tall body',()=>{
       {id:'train',kind,x:1200,y:1000,angle:0,elevation:0,active:true,railModel:{length:190,width:62,height:3.8}};
     const f=fixture(truck({speed:100,vx:100}),kind==='aircraft'?{aircraft:[other]}:{railTraffic:{colliders:[other]}});
     const hits=advance(f,2,{up:true});assert.ok(hits.some(hit=>hit.other===other),`${kind} participates in physical truck contacts`);
-    assert.ok(f.ride.x<other.x-70);
+    const gear=kind==='aircraft'?Physics.aircraftParts(other).find(part=>part.name==='main wheel'):null;
+    const obstacleX=gear?other.x+(gear.offset[0]-gear.half[0])*20:other.x-other.railModel.length/2;
+    assert.ok(f.ride.x+Stats.getModel(f.ride).length/2<=obstacleX+2,
+      'the truck stops at the actual solid; an elevated tail leaves space below it');
   }
 });
 
