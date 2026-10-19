@@ -16,6 +16,13 @@
   let mapOpen = false, wheelOpen = false, wheelIndex = 0, inventoryView = null, garageSignature = '', hangarSignature = '', navigationTarget = null;
   const toyIds = ['popper', 'hammer', 'cannon'];
   const money = n => '$' + Math.round(n).toLocaleString();
+  const garageHint = 'Visit Sprinkle Garage and stop to shop or manage rides.';
+  const hangarHint = 'Land and stop at an airfield apron or helipad to manage aircraft.';
+  const cashHint = price => 'You need ' + money(price) + ' (' + money(price - game.money) + ' more).';
+  function buttonState(button, reason = '', hint = '') {
+    button.disabled = Boolean(reason);
+    button.title = reason || hint;
+  }
   const isAircraft = vehicle => vehicle?.kind === 'aircraft';
   const isTank = vehicle => vehicle?.kind === 'tank';
   const aircraftModel = vehicle => MayhemAircraft.getModel(vehicle);
@@ -93,7 +100,9 @@
     const status = muted || audioSettings.masterVolume === 0 ? 'Sound muted' : audioSettings.musicVolume === 0 ? 'Music volume 0' : audio.getStatus().state === 'unavailable' ? 'Audio unavailable' : station?.genre || 'Enjoy the engine';
     if ($('radio-status').textContent !== name) $('radio-status').textContent = name;
     $('radio-genre').textContent = status;
-    $('radio-previous').disabled = $('radio-next').disabled = !playActive() || !driving;
+    const reason = !driving ? 'Hop in a vehicle to change radio stations.' : !playActive() ? 'Resume playing and close any menus to change stations.' : '';
+    buttonState($('radio-previous'), reason, 'Previous station · B');
+    buttonState($('radio-next'), reason, 'Next station · N');
   }
   function events() {
     for (const event of game.drainEvents()) {
@@ -209,7 +218,7 @@
   function renderWheel() {
     document.querySelectorAll('.wheel-option').forEach(button => {
       const id = button.dataset.gadget, selected = toyIds[wheelIndex] === id;
-      button.disabled = !game.inventory.unlocked.includes(id);
+      buttonState(button, !game.inventory.unlocked.includes(id) ? 'Unlock the ' + GADGETS[id].name + ' at Sprinkle Garage for ' + money(GADGETS[id].price) + '.' : '');
       button.classList.toggle('selected', selected);
       button.setAttribute('aria-pressed', String(selected));
       button.querySelector('.toy-name').textContent = GADGETS[id].name;
@@ -276,7 +285,7 @@
     $('garage-count').textContent = records.length + ' / 3 rides';
     $('garage-empty').hidden = records.length !== 0;
     const currentSaved = records.some(record => record.id === game.current.garageId);
-    $('store-car').disabled = !game.garageAvailable || !game.player.vehicleId || isAircraft(game.current) || currentSaved || records.length >= 3;
+    buttonState($('store-car'), currentSaved ? 'This ride is already saved in your garage.' : records.length >= 3 ? 'Your garage has 3 rides. Release a slot before saving another.' : !game.player.vehicleId || isAircraft(game.current) ? 'Hop in a car to save it in your garage.' : !game.garageAvailable ? garageHint : '');
     $('store-car').textContent = currentSaved ? 'Ride already saved' : records.length >= 3 ? 'Garage full · release a slot' : 'Save current ride';
     const signature = JSON.stringify([records, game.garageAvailable, game.money, game.maxHealth]);
     if (signature === garageSignature) return;
@@ -297,16 +306,19 @@
       copy.append(name, condition, stats); heading.append(copy);
       const badge = document.createElement('span'); badge.className = 'saved-car-badge'; badge.style.background = record.color; badge.setAttribute('aria-label', 'Current paint ' + record.color); heading.append(badge);
       const actions = document.createElement('div'); actions.className = 'saved-car-actions';
-      const retrieve = document.createElement('button'); retrieve.type = 'button'; retrieve.className = 'inventory-action'; retrieve.dataset.retrieveCar = record.id; retrieve.textContent = record.health <= 0 || record.burning || record.exploded ? 'Needs repair first' : 'Bring it out ↗'; retrieve.disabled = !game.garageAvailable || record.health <= 0 || record.burning || record.exploded; actions.append(retrieve);
-      const repair = document.createElement('button'); repair.type = 'button'; repair.className = 'inventory-action'; repair.dataset.repairCar = record.id; repair.textContent = 'Un-dent · $45'; repair.disabled = !game.garageAvailable || !VehicleStats.isDamaged(record) || game.money < 45; actions.append(repair);
-      const release = document.createElement('button'); release.type = 'button'; release.className = 'inventory-action'; release.dataset.releaseCar = record.id; release.textContent = 'Release slot'; release.title = 'Remove ownership; any deployed car stays in town'; release.disabled = !game.garageAvailable; actions.append(release);
+      const retrieve = document.createElement('button'); retrieve.type = 'button'; retrieve.className = 'inventory-action'; retrieve.dataset.retrieveCar = record.id; retrieve.textContent = record.health <= 0 || record.burning || record.exploded ? 'Needs repair first' : 'Bring it out ↗';
+      buttonState(retrieve, record.health <= 0 || record.burning || record.exploded ? 'Repair this ride before bringing it out.' : !game.garageAvailable ? garageHint : ''); actions.append(retrieve);
+      const repair = document.createElement('button'); repair.type = 'button'; repair.className = 'inventory-action'; repair.dataset.repairCar = record.id; repair.textContent = 'Un-dent · $45';
+      buttonState(repair, !VehicleStats.isDamaged(record) ? 'This ride is already in perfect condition.' : !game.garageAvailable ? garageHint : game.money < 45 ? cashHint(45) : ''); actions.append(repair);
+      const release = document.createElement('button'); release.type = 'button'; release.className = 'inventory-action'; release.dataset.releaseCar = record.id; release.textContent = 'Release slot';
+      buttonState(release, !game.garageAvailable ? garageHint : '', 'Remove ownership; any deployed car stays in town'); actions.append(release);
       const swatches = document.createElement('div'); swatches.className = 'garage-swatches'; swatches.setAttribute('aria-label', 'Paint choices · $25 each');
       for (const color of PAINT_COLORS) {
         const paint = document.createElement('button'); paint.type = 'button'; paint.className = 'paint-swatch'; paint.style.setProperty('--paint', color);
         paint.dataset.paintCar = record.id; paint.dataset.color = color;
         paint.title = color === record.color ? 'Current paint' : 'Paint ' + color + ' · $25';
         paint.setAttribute('aria-label', paint.title); paint.setAttribute('aria-pressed', String(color === record.color));
-        paint.disabled = !game.garageAvailable || game.money < 25 || color === record.color;
+        buttonState(paint, color === record.color ? 'This ride is already painted this color.' : !game.garageAvailable ? garageHint : game.money < 25 ? cashHint(25) : '', paint.title);
         swatches.append(paint);
       }
       actions.append(swatches); card.append(heading, actions); fragment.append(card);
@@ -322,7 +334,7 @@
     $('hangar-count').textContent = records.length + ' / 3 aircraft';
     $('hangar-empty').hidden = records.length !== 0;
     const currentSaved = records.some(record => record.id === game.current.hangarId);
-    $('store-aircraft').disabled = !available || !isAircraft(game.current) || currentSaved || records.length >= 3;
+    buttonState($('store-aircraft'), currentSaved ? 'This aircraft is already saved in your hangar.' : records.length >= 3 ? 'Your hangar has 3 aircraft. Release a slot before saving another.' : !isAircraft(game.current) ? 'Board an aircraft to save it in your hangar.' : !available ? hangarHint : '');
     $('store-aircraft').textContent = currentSaved ? 'Aircraft already saved' : records.length >= 3 ? 'Hangar full · release a slot' : 'Save current aircraft';
     const signature = JSON.stringify([records, (game.aircraft || []).map(aircraft => [aircraft.id, aircraft.hangarId, aircraft.health, aircraft.engineHealth]), available, game.money]);
     if (signature === hangarSignature) return;
@@ -335,8 +347,12 @@
       const condition = document.createElement('p'); condition.className = 'saved-car-condition'; condition.textContent = Math.round(aircraftCondition(aircraft) * 100) + '% airframe · ' + Math.round(aircraft.engineHealth ?? 100) + '% engine · ' + aircraftModel(aircraft).seats + ' seats';
       const actions = document.createElement('div'); actions.className = 'saved-car-actions';
       const damaged = aircraftCondition(aircraft) < 1 || aircraft.engineHealth < 100 || aircraft.burning || aircraft.exploded;
-      for (const [action, label, disabled] of [['retrieve', 'Bring to stand ↗', !available || aircraft.health <= 0 || aircraft.burning || aircraft.exploded], ['repair', 'Service · $75', !available || !damaged || game.money < 75], ['release', 'Release slot', !available]]) {
-        const button = document.createElement('button'); button.type = 'button'; button.className = 'inventory-action'; button.dataset.hangarAction = action; button.dataset.aircraftId = record.id; button.textContent = label; button.disabled = Boolean(disabled); actions.append(button);
+      for (const [action, label, reason] of [
+        ['retrieve', 'Bring to stand ↗', aircraft.health <= 0 || aircraft.burning || aircraft.exploded ? 'Service this aircraft before bringing it to a stand.' : !available ? hangarHint : ''],
+        ['repair', 'Service · $75', !damaged ? 'This aircraft is already in perfect condition.' : !available ? hangarHint : game.money < 75 ? cashHint(75) : ''],
+        ['release', 'Release slot', !available ? hangarHint : '']
+      ]) {
+        const button = document.createElement('button'); button.type = 'button'; button.className = 'inventory-action'; button.dataset.hangarAction = action; button.dataset.aircraftId = record.id; button.textContent = label; buttonState(button, reason); actions.append(button);
       }
       card.append(heading, condition, actions); fragment.append(card);
     }
@@ -355,10 +371,20 @@
       card.querySelector('.pocket-count').textContent = count + ' / ' + definition.cap;
       card.querySelector('.pocket-description').textContent = definition.description;
       const use = card.querySelector('[data-use-pocket]'), buy = card.querySelector('[data-buy-pocket]');
-      const needed = id === 'biscuits' ? game.player.composure < 100 : id === 'repairTape' ? !!game.player.vehicleId && Math.abs(game.current.speed || 0) <= 45 && VehicleStats.isDamaged(game.current) : game.inventory.unlocked.includes('cannon') && game.inventory.ammo.cannon < 12;
-      use.disabled = fallen || count <= 0 || !needed;
+      let useHint = '';
+      if (id === 'biscuits' && game.player.composure >= 100) useHint = 'Your composure is already full.';
+      if (id === 'repairTape') {
+        if (!game.player.vehicleId) useHint = 'Hop in a damaged ride to use repair tape.';
+        else if (Math.abs(game.current.speed || 0) > 45) useHint = 'Stop your ride before applying repair tape.';
+        else if (!VehicleStats.isDamaged(game.current)) useHint = 'This ride is already in perfect condition.';
+      }
+      if (id === 'refill') {
+        if (!game.inventory.unlocked.includes('cannon')) useHint = 'Unlock the Party Cannon at Sprinkle Garage before using a refill.';
+        else if (game.inventory.ammo.cannon >= 12) useHint = 'Your Party Cannon is already full (12 charges).';
+      }
+      buttonState(use, fallen ? 'Find your feet before using pocket items.' : count <= 0 ? 'No ' + definition.name + ' left. Restock at Sprinkle Garage.' : useHint);
       use.textContent = id === 'refill' ? 'Load cannon' : 'Use one';
-      buy.disabled = !available || count >= definition.cap || game.money < definition.price;
+      buttonState(buy, count >= definition.cap ? 'Your pockets are full of ' + definition.name + ' (' + definition.cap + ' max).' : !available ? garageHint : game.money < definition.price ? cashHint(definition.price) : '');
       buy.textContent = 'Buy · ' + money(definition.price);
     }
     document.querySelectorAll('[data-shop-gadget]').forEach(card => {
@@ -366,7 +392,7 @@
       card.querySelector('.gadget-status').textContent = owned ? 'In your toy wheel' : GADGETS[id].description;
       card.querySelector('.gadget-price').textContent = owned ? 'UNLOCKED' : money(GADGETS[id].price);
       button.firstChild.nodeValue = owned ? 'Yours forever ' : 'Unlock toy ';
-      button.disabled = owned || !available || game.money < GADGETS[id].price;
+      buttonState(button, owned ? 'You already own the ' + GADGETS[id].name + '.' : !available ? garageHint : game.money < GADGETS[id].price ? cashHint(GADGETS[id].price) : '');
     });
     renderGarage();
     renderHangar();
@@ -574,7 +600,7 @@
     graphicsFailed = true; paused = true; keys.clear(); releaseMouse();
     $('renderer-error').hidden = false;
     $('renderer-error-detail').textContent = message;
-    $('play-button').disabled = true;
+    buttonState($('play-button'), message);
     $('pause-screen').hidden = true;
     updateAudio();
   }
@@ -860,11 +886,17 @@
     $('mission-progress').textContent = mission ? `${mission.targetIndex + 1}/${mission.targets.length} · ${Math.round(dist(objective, game.current) / 20)}m` + (mission.type === 'airtaxi' ? ` · COMFORT ${Math.round(game.missionStats.comfort ?? 100)}%` : '') : 'No rush. Cause a little joy.';
     $('mission-status').textContent = mission ? 'Gig in progress · base pay ' + money(mission.reward) : `${game.completed || 0} gigs delivered. Choose your next questionable errand.`;
     $('abandon-button').hidden = !mission;
-    document.querySelectorAll('.contract-button').forEach(b => { b.disabled = !!mission; });
+    document.querySelectorAll('.contract-button').forEach(button => buttonState(button, mission ? 'Finish or abandon your current gig before starting another.' : ''));
     const nearest = game.services.find(s => ['garage', 'wash'].includes(s.id) && dist(s, game.current) < 115);
     $('garage-status').textContent = nearest ? (nearest.id === 'wash' ? 'At the wash · E repairs and clears heat.' : 'At the garage · G saves rides. I buys supplies.') : 'Visit GARAGE for rides, toys and supplies. WASH clears heat.';
     $('boost-price').textContent = game.upgrades.boost >= 3 ? 'MAXED' : money(200 + game.upgrades.boost * 150);
     $('armor-price').textContent = game.upgrades.armor >= 3 ? 'MAXED' : money(150 + game.upgrades.armor * 125);
+    document.querySelectorAll('.purchase-button').forEach(button => {
+      const item = button.dataset.upgrade, level = game.upgrades[item];
+      const price = item === 'repair' ? 45 : item === 'boost' ? 200 + level * 150 : 150 + level * 125;
+      const reason = item !== 'repair' && level >= 3 ? 'This upgrade is already maxed out.' : !started ? 'Start playing, then visit Sprinkle Garage to buy tune-ups.' : !playActive() ? 'Resume playing and close any menus to buy tune-ups.' : !game.garageAvailable ? garageHint : item === 'repair' && !game.player.vehicleId ? 'Hop in a damaged car before buying a repair.' : item === 'repair' && !VehicleStats.isDamaged(game.current) ? 'This ride is already in perfect condition.' : game.money < price ? cashHint(price) : '';
+      buttonState(button, reason);
+    });
     let hint = nearest ? (nearest.id === 'wash' ? 'E · wash & cool off ($75)' : 'G · garage collection   I · supplies & toys') : car ? (Math.abs(car.speed) < 45 ? 'E · hop out   H · honk   SPACE · drift' : 'SPACE · drift   SHIFT · boost   H · honk') : game.cars.some(c => dist(c, game.player) < 65) ? 'E · borrow this ride' : 'RIGHT MOUSE · aim   LEFT MOUSE · ' + GADGETS[game.inventory.equipped].name + '   TAB · toys';
     if (flying) hint = helicopter ? 'W/S forward / back · A/D turn · SPACE / CTRL altitude · SHIFT hover · F parachute' : 'W/S throttle · A/D bank · SPACE / CTRL pitch · SHIFT boost · F parachute';
     else if (tank) hint = 'WASD drive · MOUSE turret · HOLD LEFT MOUSE cannon · R recover · E exit';
