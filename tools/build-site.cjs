@@ -3,6 +3,7 @@
 // Prepare only the files needed to play on a static host. No bundler is required.
 const fs = require('node:fs');
 const path = require('node:path');
+const { createBuildInfo, stampVersion } = require('./build-version.cjs');
 
 const project = path.resolve(__dirname, '..');
 const output = path.resolve(project, 'dist');
@@ -66,6 +67,10 @@ function build() {
   // Read every source before touching the previous build, so a missing asset
   // leaves the last output available. Reject links in source directories too.
   const files = runtimeFiles.map(readSource);
+  const info = createBuildInfo(JSON.parse(readSource('package.json').data).version);
+  const html = files.find(file => file.relativePath === 'index.html');
+  html.data = Buffer.from(stampVersion(html.data.toString(), info));
+  files.push({ relativePath: 'version.json', data: Buffer.from(JSON.stringify(info, null, 2) + '\n') });
   files.push({ relativePath: '.nojekyll', data: Buffer.alloc(0) });
 
   // Keep recursive removal pinned to this project's direct dist directory.
@@ -88,7 +93,7 @@ function build() {
     fs.writeFileSync(destination, data);
     bytes += data.length;
   }
-  process.stdout.write(`Built ${files.length} files (${(bytes / 1024 / 1024).toFixed(2)} MiB) in ${output}\n`);
+  process.stdout.write(`Built v${info.version}: ${files.length} files (${(bytes / 1024 / 1024).toFixed(2)} MiB) in ${output}\n`);
 }
 
 try { build(); }

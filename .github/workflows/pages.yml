@@ -28,6 +28,10 @@ jobs:
         run: npm run check
       - name: Prepare static game
         run: npm run build
+        env:
+          DEPLOY_NUMBER: ${{ github.run_number }}
+          DEPLOY_SHA: ${{ github.sha }}
+          DEPLOY_ATTEMPT: ${{ github.run_attempt }}
       - name: Upload game
         uses: actions/upload-pages-artifact@v5
         with:

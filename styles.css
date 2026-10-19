@@ -52,7 +52,7 @@ button:active:not(:disabled){transform:translateY(1px)}
 #game-canvas{display:block;width:100%;height:100%;outline-offset:-4px}
 .viewport-topline{position:absolute;top:14px;left:17px;right:17px;display:flex;justify-content:space-between;align-items:center;pointer-events:none;z-index:1;gap:10px;font-family:"Courier New",monospace;font-size:8px;font-weight:700;letter-spacing:1.1px}
 .district-label{background:rgba(20,29,39,.88);color:var(--cream);border-radius:3px;display:flex;align-items:center;gap:8px;padding:6px 8px}
-.viewport-tag{color:var(--cream);background:rgba(20,29,39,.8);padding:6px 8px;border-radius:3px}
+.game-version{position:absolute;top:14px;right:17px;z-index:16;color:var(--cream);background:rgba(20,29,39,.9);padding:6px 8px;border-radius:3px;font:700 8px "Courier New",monospace;letter-spacing:.4px;white-space:nowrap;pointer-events:none}
 .objective-panel{position:absolute;top:53px;left:17px;max-width:330px;width:calc(100% - 34px);background:rgba(20,29,39,.91);padding:13px 15px 10px;border-radius:4px;border-left:3px solid var(--lime);z-index:1;pointer-events:none;box-shadow:0 3px 14px #0002}
 .objective-kicker{font-size:8px;letter-spacing:1.1px;color:var(--lime)}
 .objective-panel h2{font-size:14px;letter-spacing:-.2px;margin:3px 0 5px;line-height:1.3}

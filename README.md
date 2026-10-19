@@ -26,6 +26,8 @@ The layout adapts to small screens, but touch controls and gamepads are not impl
 
 GitHub Pages publishes the game at **https://paulalom.github.io/mayhem-meadows/**. Each push to **main** runs the game checks, packages the static files, and deploys them through **.github/workflows/pages.yml**. Failed checks prevent deployment. You can also publish from the repository's **Actions** tab with **Publish game to GitHub Pages → Run workflow**. In **Settings → Pages**, the publishing source must be **GitHub Actions**.
 
+The game displays its version in the top-right corner, including on the welcome screen and in fullscreen. Each publishing run adds its GitHub workflow run number to the patch number in **package.json**: with base **0.9.0**, run 12 publishes **v0.9.12**. Failed or cancelled runs can leave gaps; rerunning the same workflow keeps its version and records a new attempt. The build writes the version, full commit ID and attempt to **dist/version.json**, without changing tracked files or creating a version commit. Local builds and `npm start` show **v0.9.0-dev**; directly opening the source HTML shows **LOCAL BUILD**. Change the package major/minor version when starting a new release series.
+
 To prepare the same bundle for any static web host:
 
 ```sh

@@ -3,6 +3,8 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
+const { createBuildInfo, stampVersion } = require('./build-version.cjs');
+const localVersion = createBuildInfo(require('../package.json').version, {});
 const root = path.resolve(__dirname, '..');
 const port = Number(process.env.PORT) || 4173;
 const allowed = new Set(['/index.html', '/styles.css', '/height-data.js', '/terrain.js', '/world.js', '/core.js', '/physics.js', '/vehicle-stats.js', '/vehicle-physics.js', '/audio.js', '/game.js', '/scene3d.js', '/vendor/three.min.js', '/vendor/cannon.min.js']);
@@ -55,8 +57,11 @@ const server = http.createServer((req, res) => {
   const file = path.join(root, pathname);
   fs.readFile(file, (error, data) => {
     if (error) { res.writeHead(404); res.end('Not found'); return; }
-    if (pathname === '/index.html' && new URL(req.url, 'http://localhost').searchParams.get('profile') === '1') {
-      data = data.toString().replace('<script src="game.js" defer>', '<script src="tools/performance-profiler.js" defer></script>\n    <script src="game.js" defer>');
+    if (pathname === '/index.html') {
+      data = stampVersion(data.toString(), localVersion);
+      if (new URL(req.url, 'http://localhost').searchParams.get('profile') === '1') {
+        data = data.replace('<script src="game.js" defer>', '<script src="tools/performance-profiler.js" defer></script>\n    <script src="game.js" defer>');
+      }
     }
     res.writeHead(200, { 'Content-Type': types[path.extname(file)], 'Cache-Control': 'no-store' });
     res.end(data);
