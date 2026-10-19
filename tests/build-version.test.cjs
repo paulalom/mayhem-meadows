@@ -44,6 +44,8 @@ test('the real game page contains a static, accessible version label inside its 
   const html = stampVersion(source, createBuildInfo('0.9.0', deployment(12)));
   assert.match(html, /id="game-version"[^>]*aria-label="Game version 0\.9\.12">v0\.9\.12<\/span>/);
   assert.match(html, /title="Deployment 12 · commit abcdef0 · attempt 1"/);
+  assert.match(html, /href="styles\.css\?v=0\.9\.12"/);
+  assert.match(html, /src="game\.js\?v=0\.9\.12"/);
   assert.ok(html.indexOf('id="game-version"') > html.indexOf('id="game-shell"'));
   assert.ok(html.indexOf('id="game-version"') < html.indexOf('id="start-screen"'));
   assert.doesNotMatch(html, /LOCAL BUILD/);

@@ -24,7 +24,8 @@ function createBuildInfo(baseVersion, env = process.env) {
 function stampVersion(html, info) {
   if (html.split(versionMarker).length !== 2) throw new Error('Expected exactly one game version label.');
   const detail = info.commit ? `Deployment ${info.deployment} · commit ${info.commit.slice(0, 7)} · attempt ${info.attempt}` : 'Local development build';
-  return html.replace(versionMarker, `<span id="game-version" class="game-version" title="${detail}" aria-label="Game version ${info.version}">v${info.version}</span>`);
+  return html.replace(versionMarker, `<span id="game-version" class="game-version" title="${detail}" aria-label="Game version ${info.version}">v${info.version}</span>`)
+    .replace(/\b(src|href)="([^":?#]+\.(?:js|css))"/g, (_, attribute, file) => `${attribute}="${file}?v=${info.version}"`);
 }
 
 module.exports = { createBuildInfo, stampVersion };

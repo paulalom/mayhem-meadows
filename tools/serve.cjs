@@ -58,10 +58,11 @@ const server = http.createServer((req, res) => {
   fs.readFile(file, (error, data) => {
     if (error) { res.writeHead(404); res.end('Not found'); return; }
     if (pathname === '/index.html') {
-      data = stampVersion(data.toString(), localVersion);
+      data = data.toString();
       if (new URL(req.url, 'http://localhost').searchParams.get('profile') === '1') {
         data = data.replace('<script src="game.js" defer>', '<script src="tools/performance-profiler.js" defer></script>\n    <script src="game.js" defer>');
       }
+      data = stampVersion(data, localVersion);
     }
     res.writeHead(200, { 'Content-Type': types[path.extname(file)], 'Cache-Control': 'no-store' });
     res.end(data);

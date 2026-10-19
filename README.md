@@ -28,6 +28,8 @@ GitHub Pages publishes the game at **https://paulalom.github.io/mayhem-meadows/*
 
 The game displays its version in the top-right corner, including on the welcome screen and in fullscreen. Each publishing run adds its GitHub workflow run number to the patch number in **package.json**: with base **0.9.0**, run 12 publishes **v0.9.12**. Failed or cancelled runs can leave gaps; rerunning the same workflow keeps its version and records a new attempt. The build writes the version, full commit ID and attempt to **dist/version.json**, without changing tracked files or creating a version commit. Local builds and `npm start` show **v0.9.0-dev**; directly opening the source HTML shows **LOCAL BUILD**. Change the package major/minor version when starting a new release series.
 
+Built script and stylesheet URLs include the version to refresh browser caches when a new deployment is opened.
+
 To prepare the same bundle for any static web host:
 
 ```sh
