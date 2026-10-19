@@ -10,7 +10,9 @@ test('the northern district extends the map without moving seeded city streets, 
   const city={roads:world.roads.filter(r=>!r.id.startsWith('base-')).map(r=>({id:r.id,a:r.a,b:r.b,points:r.points.map(p=>[p.x,p.y])})),
     buildings:world.buildings.filter(b=>b.district!=='military').map(b=>({id:b.id,x:b.x,y:b.y,w:b.w,h:b.h,angle:b.angle})),
     spawns:world.vehicleSpawns.filter(s=>!s.militaryModel).map(s=>({x:s.x,y:s.y,angle:s.angle,kind:s.kind,roadId:s.roadId}))};
-  assert.equal(crypto.createHash('sha256').update(JSON.stringify(city)).digest('hex'),'e20568267b2b7ea8a14415cd275222bfcf4d6f1b75555cd84058bd26feb4d842');
+  // Reserving the repair workshop and driveway intentionally updates the
+  // nearby Docklands frontage; the northern extension keeps this layout fixed.
+  assert.equal(crypto.createHash('sha256').update(JSON.stringify(city)).digest('hex'),'7e946858cc18ed3cb9c39c9196e62a5d5b979b3bcc24622fac162f2e2fccb184');
   assert.equal(World.districtAt(4350,-1920).id,'military');assert.equal(World.districtAt(9000,-2000).id,'ridge');
   assert.equal(world.landscape.militaryBase,base);assert.equal(world.network.roadById.size,world.roads.length);
 });

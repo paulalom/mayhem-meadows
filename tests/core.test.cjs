@@ -192,9 +192,9 @@ test('garage purchases require proximity and use the displayed prices', () => {
   assert.equal(game.purchase('boost'), true); assert.equal(game.money, 1300);
 });
 
-test('a stopped driver can wash without exiting; already clean rides can exit freely', () => {
+test('a stopped driver can get garage repairs without exiting; serviced rides can exit freely', () => {
   const game = makeGame(); game.interact(); const car = game.current;
-  const wash = game.services.find(service=>service.id==='wash'); car.x = wash.x; car.y = wash.y; car.speed = 0; car.health = 40; game.heat = 2;
+  const garage = game.services.find(service=>service.id==='repair'); car.x = garage.x; car.y = garage.y; car.elevation = garage.elevation; car.speed = 0; car.health = 40; game.heat = 2;
   assert.equal(game.interact(), true); assert.equal(game.money, 75); assert.equal(game.heat, 0); assert.equal(car.health, game.maxHealth); assert.equal(game.player.vehicleId, car.id);
   assert.equal(game.interact(), true); assert.equal(game.player.vehicleId, null); assert.equal(game.money, 75);
 });

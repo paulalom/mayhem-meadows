@@ -796,7 +796,10 @@
       mini.fillRect(-building.w * scale / 2, -building.h * scale / 2, building.w * scale, building.h * scale);
       mini.restore();
     }
-    for (const service of game.services) { mini.fillStyle = service.id === 'wash' ? '#70e6db' : '#e6f77c'; mini.fillRect(service.x * scale - 2, service.y * scale - 2, 4, 4); }
+    for (const service of game.services) {
+      mini.fillStyle = service.id === 'repair' ? '#70e6db' : '#e6f77c'; mini.fillRect(service.x * scale - 2, service.y * scale - 2, 4, 4);
+      if (service.mapLabel) { mini.font = 'bold 5px system-ui'; mini.fillText(service.mapLabel, service.x * scale + 3, service.y * scale - 3); }
+    }
     const airport = game.world.landscape?.airport || game.world.airport;
     for (const runway of [...(airport?.runways || []),...(game.world.militaryBase?.runways||[])]) {
       mini.fillStyle = '#eef4dd'; mini.fillRect(runway.x * scale, runway.y * scale, Math.max(1.5, runway.w * scale), runway.h * scale);
@@ -1000,8 +1003,9 @@
     $('mission-status').textContent = mission ? 'Gig in progress · base pay ' + money(mission.reward) : `${game.completed || 0} gigs delivered. Choose your next questionable errand.`;
     $('abandon-button').hidden = !mission;
     document.querySelectorAll('.contract-button').forEach(button => buttonState(button, mission ? 'Finish or abandon your current gig before starting another.' : ''));
-    const nearest = game.services.find(s => ['garage', 'wash'].includes(s.id) && dist(s, game.current) < 115);
-    $('garage-status').textContent = nearest ? (nearest.id === 'wash' ? 'At the wash · E repairs and clears heat.' : 'At the garage · G saves rides. I buys supplies.') : 'Visit GARAGE for rides, toys and supplies. WASH clears heat.';
+    const nearest = game.services.find(s => dist(s, game.current) < (s.id === 'repair' ? 360 : 115));
+    const insideRepairBay = game.insideRepairBay();
+    $('garage-status').textContent = nearest ? (nearest.id === 'repair' ? (game.repairAvailable ? 'In the repair bay · E repairs and clears heat for $75.' : 'Cool-Down Garage · drive inside and stop for repairs.') : 'At the garage · G saves rides. I buys supplies.') : 'Sprinkle Garage: rides & supplies. Cool-Down Garage: repairs & heat relief.';
     $('boost-price').textContent = game.upgrades.boost >= 3 ? 'MAXED' : money(200 + game.upgrades.boost * 150);
     $('armor-price').textContent = game.upgrades.armor >= 3 ? 'MAXED' : money(150 + game.upgrades.armor * 125);
     document.querySelectorAll('.purchase-button').forEach(button => {
@@ -1010,7 +1014,7 @@
       const reason = item !== 'repair' && level >= 3 ? 'This upgrade is already maxed out.' : !started ? 'Start playing, then visit Sprinkle Garage to buy tune-ups.' : !playActive() ? 'Resume playing and close any menus to buy tune-ups.' : !game.garageAvailable ? garageHint : item === 'repair' && !game.player.vehicleId ? 'Hop in a damaged car before buying a repair.' : item === 'repair' && !VehicleStats.isDamaged(game.current) ? 'This ride is already in perfect condition.' : game.money < price ? cashHint(price) : '';
       buttonState(button, reason);
     });
-    let hint = nearest ? (nearest.id === 'wash' ? `${controlKey('interact')} · wash & cool off ($75)` : 'G · garage collection   I · supplies & toys') : car ? `${controlKey('interact')} · hop out` : game.cars.some(c => dist(c, game.player) < 65) ? `${controlKey('interact')} · borrow this ride` : 'RIGHT MOUSE · aim   LEFT MOUSE · ' + GADGETS[game.inventory.equipped].name + '   TAB · toys';
+    let hint = nearest ? (nearest.id === 'repair' ? (game.repairAvailable ? `${controlKey('interact')} · repair & clear heat ($75)` : insideRepairBay ? 'Stop in the marked bay for repairs' : 'Drive into the open garage bay for repairs · $75') : 'G · garage collection   I · supplies & toys') : car ? `${controlKey('interact')} · hop out` : game.cars.some(c => dist(c, game.player) < 65) ? `${controlKey('interact')} · borrow this ride` : 'RIGHT MOUSE · aim   LEFT MOUSE · ' + GADGETS[game.inventory.equipped].name + '   TAB · toys';
     if (flying) hint = flightControlsHint(helicopter ? 'helicopter' : 'plane');
     else if (tank) hint = `${controlKey('up')} / ${controlKey('down')} drive · MOUSE turret · HOLD LEFT MOUSE cannon · ${controlKey('recover')} recover · ${controlKey('interact')} exit`;
     else if (car && !nearest) hint = `${controlKey('up')} / ${controlKey('down')} drive · ${controlKey('left')} / ${controlKey('right')} steer · ${controlKey('brake')} drift · ${controlKey('boost')} boost · ${controlKey('interact')} exit`;

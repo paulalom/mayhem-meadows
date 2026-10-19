@@ -181,11 +181,11 @@ test('services, varied lane spawns, and contracts use reachable road locations',
   assert.equal(world.start.car.x,6016); assert.equal(world.start.car.y,3700);
   assert.equal(world.start.car.kind,'compact'); assert.equal(world.start.car.color,'#ffd15b');
   assert.ok(world.start.player.elevation>0&&world.start.car.elevation>0);
-  const wash=world.staticObjects.find(object=>object.kind==='wash'),service=world.services.find(service=>service.id==='wash');
-  assert.ok(distance(wash,service)<1e-8,'wash activation is under the actual arch');
+  const garage=world.staticObjects.find(object=>object.serviceId==='repair'),service=world.services.find(service=>service.id==='repair');
+  assert.ok(distance(garage,service)<1e-8,'repair activation is inside the actual workshop');
   const road=world.network.project(service);
-  assert.ok(road.distance<1e-8);
-  assert.ok(angleDistance(wash.angle,road.angle+Math.PI/2)<1e-8,'wash posts straddle the road');
+  assert.ok(road.distance>road.width/2+world.sidewalkWidth+garage.lot.h/2,'the whole workshop sits behind the sidewalk');
+  assert.ok(angleDistance(garage.angle,road.angle+Math.PI)<.1,'the open bay faces the access road');
   assert.deepEqual([...new Set(world.vehicleSpawns.map(spawn=>spawn.kind))].sort(),['compact','sports','van']);
   assert.equal(new Set(world.vehicleSpawns.filter(spawn=>!spawn.militaryModel).map(spawn=>spawn.color)).size,6);
   for(const spawn of world.vehicleSpawns.filter(spawn=>spawn.traffic)) {

@@ -115,8 +115,10 @@ test('airborne cars render the full quaternion about the same chassis centre as 
 
 test('solid street props are rendered once from the shared compound shapes and placements', () => {
   const scene = makeScene();
-  scene._staticParts = new Map(); scene._propVolumes = []; scene._propAimMeshes = []; scene._sign = () => {};
+  scene._staticParts = new Map(); scene._propVolumes = []; scene._propAimMeshes = []; scene._buildingVolumes = []; scene._sign = () => {};
   scene._physicalProps();
+  const workshop = scene.game.staticObjects.find(object => object.serviceId === 'repair');
+  assert.equal(scene._buildingVolumes.filter(volume => volume.object === workshop).length, workshop.parts.length, 'each workshop wall and roof also blocks the camera');
   const partCount = scene.game.staticObjects.reduce((sum, object) => sum + object.parts.length, 0);
   assert.equal(scene._propAimMeshes.length, partCount, 'each physical part has one matching raycast visual');
   assert.equal(scene._propVolumes.length, partCount);

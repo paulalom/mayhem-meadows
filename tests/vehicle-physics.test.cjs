@@ -117,11 +117,11 @@ test('jumping onto a car roof lands on its surface and can jump off again', () =
   assert.equal(game.player.grounded, true); assert.equal(game.jump(), true);
 });
 
-test('jumping cannot pass through a carwash beam or an airborne underbody', () => {
+test('jumping cannot pass through a garage lintel or an airborne underbody', () => {
   for (const underbody of [false, true]) {
     const game = empty();
     if (underbody) { const ride = car(game, 900); ride.elevation = 2.4; game.vehiclePhysics.sync(); }
-    else { game.staticObjects = [{ kind: 'wash', x: 900, y: 900, parts: [{ half: [2.4,0.175,0.325], offset: [0,2.55,0] }] }]; game.vehiclePhysics.sync(); }
+    else { game.staticObjects = [{ kind: 'garage', x: 900, y: 900, parts: [{ half: [2.4,0.175,0.325], offset: [0,2.55,0] }] }]; game.vehiclePhysics.sync(); }
     game.jump(); let maxHeight = 0;
     for (let i = 0; i < 12; i++) { game.update(1 / 60); maxHeight = Math.max(maxHeight, game.player.elevation); }
     assert.ok(maxHeight < 2.4 - PERSON_HEIGHT + 0.025, 'scaled head stops below the real overhead collider');

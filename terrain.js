@@ -208,7 +208,8 @@
     // Airport surfaces join the same linked support groups as parking bays.
     // Their overlapping support vertices give the whole runway/taxi/apron one
     // height in the rendered mesh and Cannon heightfield, including shoulders.
-    for(const bay of [...(world.parkingBays||[]),...aircraftPads]) {
+    const workshopPads=(world.staticObjects||[]).filter(object=>object.serviceId==='repair').flatMap(object=>[object.lot,object.driveway]);
+    for(const bay of [...(world.parkingBays||[]),...aircraftPads,...workshopPads]) {
       const cx=bay.x+bay.w/2,cy=bay.y+bay.h/2,c=Math.cos(bay.angle||0),s=Math.sin(bay.angle||0),hw=bay.w/2,hh=bay.h/2;
       const pad={cx,cy,c,s,hw,hh,base:heightAt(cx,cy),indices:[]};pad.parent=pad;parkingPads.push(pad);
       const radius=Math.hypot(hw+support,hh+support);

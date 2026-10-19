@@ -63,12 +63,16 @@ test('confirmed military sight prevents cooling, and a hidden fourth-star player
   assert.ok(game.drainEvents().some(event => event.type === 'sound' && event.name === 'escape'));
 });
 
-test('wash and capture clear fourth-star heat, pending calls and stale aircraft sight', () => {
-  for (const ending of ['wash', 'capture']) {
+test('garage service and capture clear fourth-star heat, pending calls and stale aircraft sight', () => {
+  for (const ending of ['repair', 'capture']) {
     const game = fixture(), reporter = { bubble: 'HELP! CALLING POLICE...', bubbleTimer: 2 };
     game.heat = MAX_HEAT; game.airPoliceSeen = game.policeSeen = true; game.escapeTimer = 17;
     game._witnessReports.push({ reporter, remaining: 2 });
-    if (ending === 'wash') assert.equal(game._useService({ id: 'wash', x: 900, y: 900 }), true);
+    if (ending === 'repair') {
+      const service = game.services.find(value => value.id === 'repair');
+      const car = game._addCar(service.x, service.y, 0, 'compact', '#ffd15b'); game.player.vehicleId = car.id;
+      assert.equal(game._useService(service), true);
+    }
     else game._caught();
     assert.equal(game.heat, 0); assert.equal(game.airPoliceSeen, false); assert.equal(game.policeSeen, false);
     assert.equal(game.escapeTimer, 0); assert.equal(game._witnessReports.length, 0); assert.equal(reporter.bubble, '');

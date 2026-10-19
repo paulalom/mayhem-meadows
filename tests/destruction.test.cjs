@@ -36,7 +36,7 @@ test('outdoor props have durability while buildings, platforms, the perimeter an
       assert.equal(object.destroyed, true); assert.equal(object.health, 0);
     }
   }
-  for (const kind of ['tree', 'fence', 'lamp', 'bench', 'fountain', 'wash', 'wayfinding']) assert.ok(kinds.has(kind));
+  for (const kind of ['tree', 'fence', 'lamp', 'bench', 'fountain', 'wayfinding']) assert.ok(kinds.has(kind));
   assert.equal(game._damageProp(game.buildings[0], 10000), false);
   assert.equal(JSON.stringify(game.buildings), buildings); assert.equal(JSON.stringify(game.services), services);
 });

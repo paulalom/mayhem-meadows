@@ -133,12 +133,16 @@ test('confirmed incidents reset search at the heat cap and during cooldown; unse
   game._raiseHeat(1, 'Hidden mischief'); assert.equal(game.escapeTimer, 5);
 });
 
-test('wash, capture and escape clear pending calls so they cannot restart a chase', () => {
-  for (const ending of ['wash', 'capture', 'escape']) {
+test('garage service, capture and escape clear pending calls so they cannot restart a chase', () => {
+  for (const ending of ['repair', 'capture', 'escape']) {
     const game = empty(), witness = resident(game);
     game._addCar(900, 900, 0, 'compact', '#ffd15b'); game.interact();
     assert.equal(game._witnessReports.length, 1);
-    if (ending === 'wash') { game.money = 100; game._useService({ id: 'wash' }); }
+    if (ending === 'repair') {
+      const service = game.services.find(value => value.id === 'repair');
+      Object.assign(game.current, { x: service.x, y: service.y });
+      game.money = 100; assert.equal(game._useService(service), true);
+    }
     if (ending === 'capture') game._caught();
     if (ending === 'escape') {
       game.heat = 1; game.escapeTimer = game.escapeGoal; cop(game, 2000); game._updatePolice(1 / 60);

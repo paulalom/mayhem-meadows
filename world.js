@@ -18,7 +18,7 @@
     military: Object.freeze({id:'military',name:'Northwatch Airbase',color:'#a3ad8d',mapColor:'#a3ad8d',pedCount:6})
   });
   const COLORS = ['#ffd15b', '#fb8097', '#67d3c8', '#a6a0fa', '#90c66b', '#6fb5eb'];
-  const PROP_HEALTH = Object.freeze({fence:25,wayfinding:20,lamp:35,bench:45,tree:90,fountain:160,wash:100});
+  const PROP_HEALTH = Object.freeze({fence:25,wayfinding:20,lamp:35,bench:45,tree:90,fountain:160});
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   const heading = (a, b) => Math.atan2(b.y - a.y, b.x - a.x);
@@ -322,8 +322,26 @@
     ]) road(...spec);
     for(const street of roads) if(street.id==='bridge-north'||street.id==='bridge-city') street.bridge=true;
     const network = new RoadNetwork(roads, nodes);
-    const washApproach=network.pointOnRoad('ferry-quay',190);
-    const services = [{id:'garage',x:6000,y:3500,label:'Sprinkle Garage'},{id:'wash',x:washApproach.x,y:washApproach.y,label:'Cool-Down Car Wash · $75'}];
+    // Face the workshop's open north face toward Container Road. The entire
+    // building sits behind the sidewalk; its forecourt joins the road edge.
+    const repairApproach=network.pointOnRoad('yard-road',600),repairAngle=wrap(repairApproach.angle+Math.PI);
+    const repairPoint={x:repairApproach.x-Math.sin(repairAngle)*270,y:repairApproach.y+Math.cos(repairAngle)*270};
+    const repairLot={x:repairPoint.x-116,y:repairPoint.y-136,w:232,h:272,angle:repairAngle};
+    const driveCentre={x:repairApproach.x-Math.sin(repairAngle)*146,y:repairApproach.y+Math.cos(repairAngle)*146};
+    const repairDriveway={x:driveCentre.x-100,y:driveCentre.y-108,w:200,h:216,angle:repairAngle};
+    const repairGarage={kind:'garage',serviceId:'repair',...repairPoint,angle:repairAngle,district:'works',lot:repairLot,driveway:repairDriveway,parts:[
+      {shape:'box',offset:[-4.8,2.5,0],half:[.2,2.5,6],color:'#71aaa5'},
+      {shape:'box',offset:[4.8,2.5,0],half:[.2,2.5,6],color:'#71aaa5'},
+      {shape:'box',offset:[0,2.5,5.8],half:[5,2.5,.2],color:'#71aaa5'},
+      {shape:'box',offset:[-4,2,-5.8],half:[1,2,.2],color:'#e8dfc9'},
+      {shape:'box',offset:[4,2,-5.8],half:[1,2,.2],color:'#e8dfc9'},
+      {shape:'box',offset:[0,4.5,-5.8],half:[5,.5,.2],color:'#e8dfc9'},
+      {shape:'box',offset:[0,5.15,0],half:[5.4,.15,6.4],color:'#4d6872'},
+      {shape:'box',offset:[0,.5,5],half:[2.4,.5,.5],color:'#596c7a'},
+      {shape:'box',offset:[3.9,1,4.9],half:[.55,1,.6],color:'#d57e68'}
+    ]};
+    const services = [{id:'garage',x:6000,y:3500,label:'Sprinkle Garage'},
+      {id:'repair',...repairPoint,angle:repairAngle,label:'Cool-Down Garage · $75',mapLabel:'REPAIRS',bay:{halfWidth:88,halfDepth:82}}];
     const start={player:{x:5984,y:3700,angle:-Math.PI/2},car:{x:6016,y:3700,angle:-Math.PI/2,kind:'compact',color:'#ffd15b'}};
     const areas=[
       ['heights',[[3200,2700],[5300,2700],[5550,4200],[4500,4400],[3150,3800]]],
@@ -389,7 +407,7 @@
     const marinaAccessLength=distance(townHelipads[0],marinaRoad),marinaAccessAngle=heading(townHelipads[0],marinaRoad);
     const marinaAccess={x:(3040+marinaRoad.x-marinaAccessLength)/2,y:(4740+marinaRoad.y)/2-26,w:marinaAccessLength,h:52,angle:marinaAccessAngle,role:'walkway'};
     const protectedPads=[...airport.runways,...airport.taxiways,...airport.aprons,...airport.walkways,
-      ...airport.approachCorridors,rooftopLot,padBox(townHelipads[0]),marinaAccess];
+      ...airport.approachCorridors,rooftopLot,padBox(townHelipads[0]),marinaAccess,repairLot,repairDriveway];
     const onLand=point=>point.x>=100&&point.y>=100&&point.x<=MAP_WIDTH-100&&point.y<=MAP_HEIGHT-100&&!HeightData.isWaterRaw(point.x,point.y,MAP_WIDTH,MAP_HEIGHT);
     // Sample whole oriented footprints, including their interiors: a building
     // must never straddle a narrow water channel hidden between its corners.
@@ -508,8 +526,7 @@
     }
     const garageKiosk = {kind:'garage',x:6120,y:3485,angle:0,district:'market',parts:[{shape:'box',offset:[0,.9,0],half:[.95,.9,.65]},{shape:'box',offset:[0,1.88,0],half:[1.05,.09,.75]}]};
     addProp(garageKiosk);
-    addProp({kind:'wash',x:washApproach.x,y:washApproach.y,angle:washApproach.angle+Math.PI/2,district:'works',parts:[
-      {shape:'box',offset:[-2.25,1.25,0],half:[.13,1.25,.13]}, {shape:'box',offset:[2.25,1.25,0],half:[.13,1.25,.13]}, {shape:'box',offset:[0,2.55,0],half:[2.4,.175,.325]}]});
+    addProp(repairGarage);
     for(const id of ['heights-lane','clock-street','eastmarket-road','southgate-road','willow-west-road','willow-top-road','apple-road','orchard-green-road','ridge-low-road']) {
       const street=network.roadById.get(id),point=network.pointOnRoad(id,street.length*.55,street.width/2+SIDEWALK_WIDTH+16);
       if(propClear(propBox(point.x,point.y,20,8,point.angle))) addProp({kind:'lamp',x:point.x,y:point.y,angle:point.angle,district:street.district,parts:[

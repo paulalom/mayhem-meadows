@@ -70,7 +70,6 @@ test('destruction removes all owned prop parts and signs while reusing shared ba
   const tree = objects.find(object => object.kind === 'tree');
   const fountain = objects.find(object => object.kind === 'fountain');
   const wayfinding = objects.find(object => object.kind === 'wayfinding');
-  const wash = objects.find(object => object.kind === 'wash');
   assert.equal(scene._propRenderStates.get(tree).slots.length, tree.parts.length + 2, 'tree owns both canopy shapes');
   assert.equal(scene._propRenderStates.get(fountain).slots.length, fountain.parts.length + 2, 'fountain owns its water and spray');
   assert.equal(scene._propRenderStates.get(planter).slots.length, planter.parts.length + 3, 'planter owns foliage and flowers');
@@ -80,7 +79,7 @@ test('destruction removes all owned prop parts and signs while reusing shared ba
   const permanentMeshes = scene.scene.children.filter(mesh => mesh.isMesh && !mesh.isInstancedMesh && !mesh.material.map);
   const permanentBuffers = permanentMeshes.map(mesh => Array.from(mesh.geometry.attributes.position.array));
   const meshes = [...scene._propInstances], geometryCount = scene._geometries.length, materialCount = scene._materials.size;
-  const destroyed = [tree, fountain, wayfinding, wash, planter];
+  const destroyed = [tree, fountain, wayfinding, planter];
   for (const object of destroyed) object.destroyed = true;
   for (let i = 0; i < 60; i++) scene._syncDestructibleProps();
   for (const object of destroyed) {
@@ -89,7 +88,6 @@ test('destruction removes all owned prop parts and signs while reusing shared ba
     for (const sign of state.signs) assert.equal(sign.visible, false, object.kind + ' sign disappears');
   }
   assert.equal(scene._propRenderStates.get(wayfinding).signs.length, 1);
-  assert.equal(scene._propRenderStates.get(wash).signs.length, 1);
   for (const object of objects.filter(object => !object.destroyed && object.destructible !== false)) {
     for (const slot of scene._propRenderStates.get(object).slots) assert.ok(matrixOf(slot).determinant() > 0, 'neighboring prop remains visible');
   }
@@ -98,8 +96,8 @@ test('destruction removes all owned prop parts and signs while reusing shared ba
   assert.equal(scene._geometries.length, geometryCount);
   assert.equal(scene._materials.size, materialCount);
   assert.deepEqual(permanentMeshes.map(mesh => Array.from(mesh.geometry.attributes.position.array)), permanentBuffers, 'terrain and garage are unchanged');
-  assert.equal(scene.canvas.dataset.destroyedProps, '5');
-  assert.equal(Number(scene.canvas.dataset.liveProps), objects.length - 5);
+  assert.equal(scene.canvas.dataset.destroyedProps, String(destroyed.length));
+  assert.equal(Number(scene.canvas.dataset.liveProps), objects.length - destroyed.length);
 });
 
 test('destroyed props stop intercepting crosshair rays immediately and owned camera volumes are ignored', () => {

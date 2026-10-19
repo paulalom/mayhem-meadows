@@ -20,7 +20,8 @@ function makeFlatGame() {
     missionAnchors:{delivery,deliveryAlt:delivery.slice().reverse(),dash,party:dash.slice(0,3),partyAlt:dash.slice(3)}};
   game.terrain=null; game.network=network; game.roads=roads; game.nodes=nodes;
   game.buildings=[{x:240,y:240,w:240,h:240,height:6,elevation:0,angle:0}]; game.staticObjects=[]; game.pedPaths=[];
-  game.services=[{id:'garage',x:900,y:900,elevation:0,label:'Sprinkle Garage'},{id:'wash',x:1620,y:1980,elevation:0,label:'Confetti Car Wash'}];
+  game.services=[{id:'garage',x:900,y:900,elevation:0,label:'Sprinkle Garage'},
+    {id:'repair',x:1620,y:1980,elevation:0,angle:0,bay:{halfWidth:88,halfDepth:82},label:'Cool-Down Garage'}];
   Object.assign(game.player,game.world.start.player,{vehicleId:null,elevation:0,verticalVelocity:0,grounded:true});
   game.cars=[]; game.police=[]; game.peds=[]; game._nextId=1;
   game.vehiclePhysics.sync();

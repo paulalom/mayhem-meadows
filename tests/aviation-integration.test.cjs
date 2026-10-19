@@ -106,7 +106,7 @@ test('aircraft recovery keeps the same pilot and type, and ground garages cannot
   Object.assign(craft,{x:garage.x,y:garage.y,elevation:game._ground(garage),grounded:true});
   const before=craft.maxHealth;
   assert.equal(game.garageAvailable,false);assert.equal(game.purchase('repair'),false);
-  assert.equal(game._useService({id:'wash'}),false);assert.equal(craft.maxHealth,before);
+  assert.equal(game._useService({id:'repair'}),false);assert.equal(craft.maxHealth,before);
 });
 
 test('smooth passenger trips earn a comfort bonus and rough flight reduces it without losing base pay',()=>{

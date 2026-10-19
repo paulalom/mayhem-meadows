@@ -38,7 +38,7 @@ test('four stars announce a six-second truck response with four new soldiers, wi
   advance(f.system,20);assert.equal(f.system.events.filter(e=>e.type==='dispatch').length,1);
 });
 
-test('base alarms mobilize at once, while lower heat or a wash cancels the pending dispatch',()=>{
+test('base alarms mobilize at once, while lower heat or garage service cancels the pending dispatch',()=>{
   const f=fixture();assert.equal(f.system.reportBaseAttack({playerCaused:false}),false);assert.equal(f.game.heat,0);
   assert.equal(f.system.reportBaseAttack({playerCaused:true,position:{x:6000,y:-800}}),true);assert.equal(f.game.heat,4);
   advance(f.system,6.1);assert.equal(f.system.trucks.length,1);assert.deepEqual(f.system.trucks[0].incident,{x:6000,y:-800});

@@ -34,7 +34,7 @@
     owns(CAR_MODELS, vehicle.modelId) && CAR_MODELS[vehicle.modelId].kind === 'van';
   const starterInventory = () => ({ equipped: 'popper', unlocked: ['popper'], pockets: { biscuits: 2, repairTape: 1, refill: 1 }, ammo: { cannon: 0 } });
   const CURSES = ['SON OF A BISCUIT!', 'HECKITY HECK!', 'FLIPPIN’ TURNIPS!', 'OH, CRUMBS!', 'YOU ABSOLUTE WAFFLE!'];
-  const PROP_SOUND_MATERIALS = { fence: 'wood', bench: 'wood', lamp: 'metal', wash: 'metal', wayfinding: 'metal', fountain: 'stone', tree: 'foliage' };
+  const PROP_SOUND_MATERIALS = { fence: 'wood', bench: 'wood', lamp: 'metal', wayfinding: 'metal', fountain: 'stone', tree: 'foliage' };
   const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
   const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   const wrapAngle = n => Math.atan2(Math.sin(n), Math.cos(n));
@@ -202,6 +202,21 @@
       return Boolean(garage && distance(this.current, garage) < 115 &&
         (!this.player.vehicleId || Math.abs(this.current.speed) <= 45 && this.current.upright !== false && this._onGround(this.current)) &&
         (this.player.vehicleId || this._onGround(this.player)) && !this.ragdolls.get(this.player.id));
+    }
+
+    insideRepairBay(vehicle = this.current) {
+      const service = this.services.find(value => value.id === 'repair');
+      if (!service || !this.player.vehicleId || Aircraft.isAircraft(vehicle)) return false;
+      const c = Math.cos(service.angle), s = Math.sin(service.angle), dx = vehicle.x - service.x, dy = vehicle.y - service.y;
+      const box = this._vehicleBox(vehicle), relative = vehicle.angle - service.angle;
+      const extentX = Math.abs(Math.cos(relative)) * box.half[0] + Math.abs(Math.sin(relative)) * box.half[1];
+      const extentY = Math.abs(Math.sin(relative)) * box.half[0] + Math.abs(Math.cos(relative)) * box.half[1];
+      return Math.abs(dx * c + dy * s) + extentX <= service.bay.halfWidth &&
+        Math.abs(-dx * s + dy * c) + extentY <= service.bay.halfDepth && Math.abs(this._base(vehicle) - service.elevation) < .35;
+    }
+
+    get repairAvailable() {
+      return this.insideRepairBay() && Math.abs(this.current.speed) <= 20 && this.current.upright !== false && this._onGround(this.current);
     }
 
     _random() { this._seed = (Math.imul(this._seed, 1664525) + 1013904223) >>> 0; return this._seed / 4294967296; }
@@ -657,7 +672,7 @@
       object.destroyed = true; object.destroyedAt = this.time;
       this._environmentVersion++;
       // Debris is temporary scenery, with a fixed budget and no solid contacts.
-      const colors = { tree: '#a88462', fence: '#e7ddbd', lamp: '#536d74', bench: '#cf9771', fountain: '#eee7d3', wash: '#89d7d1', wayfinding: '#687d74' };
+      const colors = { tree: '#a88462', fence: '#e7ddbd', lamp: '#536d74', bench: '#cf9771', fountain: '#eee7d3', wayfinding: '#687d74' };
       const angle = object.angle || 0, c = Math.cos(angle), s = Math.sin(angle);
       const parts = object.parts.concat(object.kind === 'tree' ? [{ offset: [0, 2.3 * (object.scale || 1), 0], half: [.8, .8, .8], color: '#80bf8e' }] : []);
       for (const part of parts) for (let i = 0; i < 3; i++) {
@@ -821,8 +836,8 @@
         const car = this.current;
         if (car.upright === false || !this._onGround(car)) { this._toast('Your ride needs its wheels on the road. Press R to recover.'); return false; }
         if (Math.abs(car.speed) > 45) { this._toast('Slow down before hopping out.'); return false; }
-        const wash = this.services.find(s => s.id === 'wash' && distance(s, car) < 85);
-        if (wash && (this.heat > 0 || this._witnessReports.length || VehicleStats.isDamaged(car))) return this._useService(wash);
+        const repair = this.services.find(s => s.id === 'repair');
+        if (this.insideRepairBay(car) && (this.heat > 0 || this._witnessReports.length || VehicleStats.isDamaged(car))) return this._useService(repair);
         return this._exitCar(car);
       }
       const train = this.railTraffic.boardingTarget(this.player);
@@ -901,11 +916,12 @@
     _useService(service) {
       if(Aircraft.isAircraft(this.current)) { this._toast('Aircraft are serviced at the airport hangar.'); return false; }
       if (service.id === 'garage') { this._toast('Sprinkle Garage: press G for your car collection, or I for toys and pocket supplies.'); return true; }
-      if (this.heat === 0 && !this._witnessReports.length && (!this.player.vehicleId || !VehicleStats.isDamaged(this.current))) { this._toast('Already sparkling clean!'); return false; }
-      if (this.money < 75) { this._toast('The wash costs $75. Finish a gig for cash.', 'warning'); return false; }
+      if (!this.repairAvailable) { this._toast('Drive into Cool-Down Garage and stop inside the marked repair bay.'); return false; }
+      if (this.heat === 0 && !this._witnessReports.length && !VehicleStats.isDamaged(this.current)) { this._toast('Your ride is already fully serviced.'); return false; }
+      if (this.money < 75) { this._toast('Garage service costs $75. Finish a gig for cash.', 'warning'); return false; }
       this.money -= 75; this._clearHeat(); this.player.composure = 100;
       if (this.player.vehicleId) VehicleStats.repair(this.current, finite(this.current.maxHealth,this.maxHealth));
-      this._confetti(this.current.x, this.current.y, 36); this._toast('Squeaky clean: heat cleared and car repaired!', 'success'); this._sound('wash', { x: service.x, y: service.y });
+      this._confetti(this.current.x, this.current.y, 36); this._toast('Back on the road: car repaired and heat cleared!', 'success'); this._sound('repair', { x: service.x, y: service.y });
       return true;
     }
 
@@ -1651,8 +1667,6 @@
         if (Math.floor(this.time * 18) !== Math.floor((this.time - dt) * 18)) this.skidMarks.push({ x: car.x, y: car.y, angle: car.angle, life: 12 });
         if (this._driftTime > 0.5 && this._styleCooldown <= 0) { this._style(15, 'Biscuit drift!'); this._driftTime = 0; }
       } else this._driftTime = Math.max(0, this._driftTime - dt * 2);
-      const service = this.services.find(s => s.id === 'wash' && distance(s, car) < 85 && Math.abs(car.speed) < 20);
-      this.nearWash = Boolean(service);
     }
 
     _nearMissStyle(car) {

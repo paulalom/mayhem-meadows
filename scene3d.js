@@ -565,6 +565,19 @@
           this._surfaceBox('#f3efd9', cx - s * offset, cz + c * offset, .039, bay.w / UNIT - .12, .008, .05, yaw);
         }
       }
+      for (const garage of (this.game.staticObjects || []).filter(object => object.serviceId === 'repair')) {
+        this._groundRect(garage.driveway, '#a8b4ae', .038);
+        this._groundRect(garage.lot, '#8f9f9c', .04);
+        const c = Math.cos(garage.angle), s = Math.sin(garage.angle), x = garage.x / UNIT, z = garage.y / UNIT;
+        const mark = (lx, lz, width, depth, color = '#f4d982', angle = 0) =>
+          this._surfaceBox(color, x + c * lx - s * lz, z + s * lx + c * lz, .055, width, .012, depth, garage.angle + angle);
+        for (const side of [-1, 1]) mark(side * 2.1, -.1, .1, 6.8);
+        mark(0, 3.3, 4.3, .12);
+        for (let i = -5; i <= 5; i++) mark(i * .48, -6.15, .25, .45, i % 2 ? '#53636a' : '#f4d982');
+        // A painted arrow leads from the apron into the unobstructed bay.
+        mark(0, -8.3, .18, 1.1);
+        mark(-.24, -7.9, .65, .14, '#f4d982', Math.PI / 4); mark(.24, -7.9, .65, .14, '#f4d982', -Math.PI / 4);
+      }
       if (this._worldInfo) this._worldInfo.parkingBays = this.game.world?.parkingBays?.length || 0;
     }
 
@@ -871,7 +884,7 @@
       const colors = {
         tree: ['#a88462', '#67af91'], lamp: ['#536d74', '#536d74', '#fcf1be'],
         bench: ['#cf9771'], fountain: ['#eee7d3', '#f3eddc', '#f3eddc'],
-        garage: ['#b8a1e0', '#ffe0b1'], wash: ['#89d7d1'], planter: ['#b08d77'],
+        garage: ['#b8a1e0', '#ffe0b1'], planter: ['#b08d77'],
         bollard: ['#5c7781'], wayfinding: ['#687d74', '#f1ddae'], fence: ['#e7ddbd'], hedge: ['#78a578']
       };
       for (const object of this.game.staticObjects || []) {
@@ -907,14 +920,29 @@
           const extentX = Math.abs(cosine) * half[0] + Math.abs(sine) * half[2];
           const extentZ = Math.abs(sine) * half[0] + Math.abs(cosine) * half[2];
           this._propVolumes.push({ object, minX: px - extentX, maxX: px + extentX, minY: py - half[1], maxY: py + half[1], minZ: pz - extentZ, maxZ: pz + extentZ });
+          if (object.serviceId === 'repair') this._buildingVolumes.push({
+            object, cx: px, cz: pz, halfX: half[0], halfZ: half[2], cosine, sine: -sine,
+            minY: py - half[1], maxY: py + half[1]
+          });
         }
         if (object.kind === 'tree') this._tree(x, z, object.scale || 1.05, object.variety || 0, false, elevation);
         if (object.kind === 'fountain') {
           this._static(this._cylinder, this._material('#7dd9e6'), x, elevation + 0.63, z, 1.43, 0.07, 1.43, null, false);
           this._static(this._sphere, this._material('#a3e5eb'), x, elevation + 1.70, z, 0.18, 0.55, 0.18, null, false);
         }
-        if (object.kind === 'garage') sign('SPRINKLE GARAGE', -.68, 1.26, 0, '#fff1c8', '#775688', 1.75, .5);
-        if (object.kind === 'wash') sign('COOL-DOWN CAR WASH', -.35, 2.62, Math.PI, '#dcfff1', '#3c827d', 4.5, .48);
+        if (object.serviceId === 'repair') {
+          sign('COOL-DOWN GARAGE', -6.03, 4.5, Math.PI, '#fff1c8', '#385e65', 7.8, .68);
+          sign('REPAIRS $75  /  STOP + PRESS E', 5.57, 2.9, Math.PI, '#dcfff1', '#385e65', 6.2, .62);
+          sign('DRIVE IN', -6.05, 3.85, Math.PI, '#385e65', '#fff1c8', 3.2, .38);
+          // Ceiling strips, a worktop and drawer fronts make the open interior
+          // readable without filling the actual driveable space with props.
+          const detail = (color, lx, ly, lz, w, h, d) => this._static(this._cube, this._material(color),
+            x + cosine * lx + sine * lz, elevation + ly, z - sine * lx + cosine * lz, w, h, d, [0, yaw, 0]);
+          for (const side of [-1, 1]) detail('#fff0c1', side * 2.8, 4.94, 0, .22, .05, 6.5);
+          detail('#dfceb0', 0, 1.04, 5, 4.9, .08, 1.1);
+          for (let i = 0; i < 4; i++) detail('#cbd3c9', i * 1.15 - 1.72, .55, 4.48, 1, .62, .03);
+          for (let i = 0; i < 3; i++) detail('#f1d7ad', 3.9, .4 + i * .55, 4.28, .85, .035, .03);
+        } else if (object.kind === 'garage') sign('SPRINKLE GARAGE', -.68, 1.26, 0, '#fff1c8', '#775688', 1.75, .5);
         if (object.kind === 'wayfinding') sign(object.label, -.045, 1.3, Math.PI, '#f1ddae', '#425e5c', .94, .37);
         if (object.kind === 'planter') {
           this._static(this._sphere, this._material('#7da676'), x, elevation + 0.62, z, 0.48, 0.23, 0.26);
@@ -1857,6 +1885,10 @@
     _cameraStep(dt) {
       const current = this.game.current, driving = Boolean(this.game.player.vehicleId);
       const flying = driving && (current.kind === 'aircraft' || Boolean(current.aircraftType));
+      const workshop = this.game.services?.find(service => service.id === 'repair');
+      const workshopX = workshop ? (current.x - workshop.x) * Math.cos(workshop.angle) + (current.y - workshop.y) * Math.sin(workshop.angle) : Infinity;
+      const workshopZ = workshop ? -(current.x - workshop.x) * Math.sin(workshop.angle) + (current.y - workshop.y) * Math.cos(workshop.angle) : Infinity;
+      const inWorkshop = driving && !flying && Math.abs(workshopX) < 100 && workshopZ > -160 && workshopZ < 110 && Math.abs(current.elevation - workshop.elevation) < 1;
       const fallen = !driving && this._bodyFor(this.game.player);
       let x = current.x / UNIT, z = current.y / UNIT;
       const elevation = Number.isFinite(current.elevation) ? current.elevation : this._surfaceY(x, z);
@@ -1913,10 +1945,10 @@
       const speed = driving ? Math.abs(current.speed || 0) / UNIT : 0;
       const aircraftModel = flying && this._aircraft?.get(current.id);
       const flightBoom = clamp((aircraftModel?.length || 8) * .8 + (aircraftModel?.width || 9) * .6, 14, 26);
-      const distance = flying ? flightBoom + Math.min(6, speed * .08) : driving ? 7.4 + Math.min(1.8, speed * 0.06) : mix(5.5, 2.9, this._aimBlend);
+      const distance = inWorkshop ? 4.8 : flying ? flightBoom + Math.min(6, speed * .08) : driving ? 7.4 + Math.min(1.8, speed * 0.06) : mix(5.5, 2.9, this._aimBlend);
       const horizontal = Math.cos(this._viewPitch) * distance;
       const shoulder = driving ? 0 : 0.70 * this._aimBlend;
-      const clearance = flying ? 3 : driving ? 1.5 : mix(1.05, 0.50, this._aimBlend);
+      const clearance = inWorkshop ? .35 : flying ? 3 : driving ? 1.5 : mix(1.05, 0.50, this._aimBlend);
       const lift = -Math.sin(this._viewPitch) * distance + clearance;
       const targetY = targetHeight;
       this._cameraTarget.set(x, targetY, z);

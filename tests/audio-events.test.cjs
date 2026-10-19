@@ -61,7 +61,7 @@ test('pocket items use physical cues only when an item is actually spent', () =>
   assert.equal(game.usePocket('repairTape'), false); assert.deepEqual(sounds(game), []);
 });
 
-test('wash, garage repairs and paint have dedicated cues and failed services stay silent', () => {
+test('workshop service, collection repairs and paint have dedicated cues and failed services stay silent', () => {
   const game = empty(), car = ride(game); game.money = 1000;
   assert.equal(game.purchase('repair'), false); assert.deepEqual(sounds(game), []);
   car.health = 40;
@@ -73,15 +73,16 @@ test('wash, garage repairs and paint have dedicated cues and failed services sta
   assert.equal(game.garagePaint(id, PAINT_COLORS[1]), false);
   assert.deepEqual(sounds(game).map(event => event.name), ['repair', 'paint']);
   game.heat = 1;
-  const wash = game.services.find(service => service.id === 'wash');
-  assert.equal(game._useService(wash), true);
-  assert.deepEqual(sounds(game), [{ type: 'sound', name: 'wash', details: { x: wash.x, y: wash.y } }]);
-  assert.equal(game._useService(wash), false); assert.deepEqual(sounds(game), []);
+  const garage = game.services.find(service => service.id === 'repair');
+  Object.assign(car, { x: garage.x, y: garage.y });
+  assert.equal(game._useService(garage), true);
+  assert.deepEqual(sounds(game), [{ type: 'sound', name: 'repair', details: { x: garage.x, y: garage.y } }]);
+  assert.equal(game._useService(garage), false); assert.deepEqual(sounds(game), []);
 });
 
 test('broken scenery and vehicle contacts carry material, source and bounded impact strength', () => {
   const game = empty();
-  for (const [kind, material] of [['fence', 'wood'], ['bench', 'wood'], ['lamp', 'metal'], ['wayfinding', 'metal'], ['wash', 'metal'], ['fountain', 'stone'], ['tree', 'foliage']]) {
+  for (const [kind, material] of [['fence', 'wood'], ['bench', 'wood'], ['lamp', 'metal'], ['wayfinding', 'metal'], ['fountain', 'stone'], ['tree', 'foliage']]) {
     const prop = { id: 'audio-' + kind, kind, x: 940, y: 930, health: 25, maxHealth: 25, parts: [{ offset: [0, .5, 0], half: [.3, .5, .3] }] };
     game.staticObjects = [prop];
     assert.equal(game._damageProp(prop, 30, game.player, false), true);
@@ -186,7 +187,7 @@ test('a splash comes from the submerged entity once per immersion, before recove
   game._waterRecovery(.1); assert.deepEqual(sounds(game), []);
 });
 
-test('police search cues occur only on entry and reset after sight, escape, wash or capture', () => {
+test('police search cues occur only on entry and reset after sight, escape, garage service or capture', () => {
   const game = empty(); game.money = 1000;
   const cop = { id: 'police-audio', ...game._vehicleState('compact'), x: 900, y: 180, angle: 0, speed: 0, routeTimer: 999, route: [{ x: 900, y: 180 }], lastSeen: { x: 900, y: 900 } };
   game.police = [cop]; game.heat = 1;
@@ -199,7 +200,9 @@ test('police search cues occur only on entry and reset after sight, escape, wash
   assert.equal(sounds(game).filter(event => event.name === 'escape').length, 1);
   game._updatePolice(.02); assert.deepEqual(sounds(game), []);
   game.heat = 1; game._updatePolice(.02); assert.equal(sounds(game).filter(event => event.name === 'search').length, 1);
-  game._useService(game.services.find(service => service.id === 'wash')); game.drainEvents();
+  const service = game.services.find(value => value.id === 'repair');
+  const car = game._addCar(service.x, service.y, 0, 'compact', PAINT_COLORS[0]); game.player.vehicleId = car.id;
+  assert.equal(game._useService(service), true); game.player.vehicleId = null; game.drainEvents();
   game.heat = 1; game._updatePolice(.02); assert.equal(sounds(game).filter(event => event.name === 'search').length, 1);
   game._caught(); game.drainEvents(); game.heat = 1; game._updatePolice(.02);
   assert.equal(sounds(game).filter(event => event.name === 'search').length, 1);
