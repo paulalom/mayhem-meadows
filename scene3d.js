@@ -2141,6 +2141,7 @@
       model.group.visible = !player.vehicleId && !playerBody;
       model.group.position.set(player.x / UNIT, (Number.isFinite(player.elevation) ? player.elevation : 0) + 0.03, player.y / UNIT);
       model.group.rotation.y = -player.angle;
+      model.group.rotation.z = 0;
       const movement = Math.hypot(player.x - this._lastPlayerX, player.y - this._lastPlayerY) / UNIT;
       this._lastPlayerX = player.x; this._lastPlayerY = player.y;
       this._walkPhase += Math.min(0.7, movement * 1.9);
@@ -2154,10 +2155,26 @@
       }
       const cooldown = Math.max(0, game._actionCooldown || 0);
       model.rightArm.rotation.y = 0;
-      if (equipped === 'hammer' && cooldown > 0) {
-        const elapsed = 0.9 - cooldown;
-        model.rightArm.rotation.z = this.reducedMotion ? Math.PI / 2
-          : elapsed < 0.55 ? mix(2.7, 1.1, clamp(elapsed / 0.55, 0, 1)) : mix(1.1, 0, clamp((elapsed - 0.55) / 0.35, 0, 1));
+      if (equipped === 'hammer') {
+        const swing = game._hammerSwing;
+        model.rightArm.rotation.z = .75;
+        if (swing) {
+          const elapsed = swing.elapsed, strikeAt = root.MayhemCore.GADGETS.hammer.strikeAt;
+          const pitch = clamp(swing.pitch || 0, -1.35, 1.35);
+          // Simulation and rendering share the contact time: the head points
+          // straight down the aimed strike at the instant knockback is applied.
+          const frames = [[0, .75], [.14, 2.8], [strikeAt, Math.PI / 2 + pitch], [.34, .35 + pitch * .3], [.46, .35], [.9, .75]];
+          let pose = .75;
+          for (let i = 1; i < frames.length; i++) if (elapsed <= frames[i][0]) {
+            const t = clamp((elapsed - frames[i - 1][0]) / (frames[i][0] - frames[i - 1][0]), 0, 1);
+            pose = mix(frames[i - 1][1], frames[i][1], t * t * (3 - 2 * t)); break;
+          }
+          model.rightArm.rotation.z = this.reducedMotion ? mix(.75, pose, .6) : pose;
+          model.rightArm.rotation.y = this.reducedMotion ? 0 : Math.sin(Math.PI * clamp(elapsed / .46, 0, 1)) * -.22;
+          model.leftArm.rotation.z = Math.sin(Math.PI * clamp(elapsed / .65, 0, 1)) * 1.2;
+          model.group.rotation.y = -swing.angle;
+          model.group.rotation.z = this.reducedMotion ? 0 : Math.sin(Math.PI * clamp(elapsed / .46, 0, 1)) * -.08;
+        }
       } else if (this._cameraInfo.aiming || cooldown > (equipped === 'cannon' ? 0.86 : 0.35)) {
         const pitch = Number.isFinite(player.aimPitch) ? clamp(player.aimPitch, -1.35, 1.35) : 0;
         model.rightArm.rotation.z = Math.PI / 2 + pitch;

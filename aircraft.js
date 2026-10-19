@@ -190,7 +190,7 @@
 
   class AircraftSystem {
     constructor(game, options = {}) {
-      this.game = game; this.aircraft = []; this.aircraftProjectiles = [];
+      this.game = game; this.aircraft = []; this.aircraftProjectiles = []; this._externalVelocities = new WeakMap();
       this.time = 0; this._nextId = 1; this.airports = {};
       // Keep the original civilian aliases available to the HUD and tools.
       // A remote airstrip owns its own runway and ground-traffic clearance.
@@ -428,6 +428,7 @@
       if (!isAircraft(entity)) return false;
       const position = this.parkingPosition(entity.aircraftType, entity);
       if (!position) { this._toast('All suitable aircraft stands are occupied. Clear a stand first.'); return false; }
+      this.clearImpulse(entity);
       Object.assign(entity, { x: position.x, y: position.y, angle: finite(position.angle), elevation: finite(position.elevation, this._ground(position)),
         speed: 0, vx: 0, vy: 0, vz: 0, verticalVelocity: 0, pitch: 0, roll: 0, throttle: 0, grounded: true, upright: true, visible: true,
         npc: false, borrowed: true, altitudeAGL: 0, agl: 0 });
@@ -435,6 +436,33 @@
       this._releaseRunway(entity);
       if (this.current === entity) this._syncPlayer(entity);
       this._toast('Aircraft recovered at a clear airport stand.', 'success'); return true;
+    }
+
+    // Match road-vehicle impulses: world x/up/z changes in metres per second.
+    // Keep the shove separate from forward airspeed so banking or a parked
+    // flight controller cannot erase sideways momentum on its next update.
+    impulse(entity, velocity = {}) {
+      if (!isAircraft(entity) || !this.aircraft.includes(entity) || entity.visible === false || entity.exploded) return false;
+      const external = this._externalVelocities.get(entity) || { x: 0, y: 0, z: 0, ballistic: false };
+      const x = finite(velocity.x), y = finite(velocity.y), z = finite(velocity.z);
+      external.x += x; external.y += y; external.z += z;
+      external.appliedX = finite(external.appliedX) + x; external.appliedZ = finite(external.appliedZ) + z;
+      external.ballistic ||= y !== 0;
+      this._externalVelocities.set(entity, external);
+      entity.vx = finite(entity.vx) + x * SCALE; entity.vy = finite(entity.vy) + z * SCALE;
+      entity.vz = finite(entity.vz) + y; entity.verticalVelocity = entity.vz;
+      if (entity.vz > 0) entity.grounded = false;
+      return entity;
+    }
+
+    clearImpulse(entity) {
+      const external = this._externalVelocities.get(entity);
+      if (!external) return false;
+      this._externalVelocities.delete(entity);
+      entity.vx = finite(entity.vx) - external.appliedX * SCALE;
+      entity.vy = finite(entity.vy) - external.appliedZ * SCALE;
+      entity.vz = finite(entity.vz) - external.y; entity.verticalVelocity = entity.vz;
+      return true;
     }
 
     damage(entity, amount) {
@@ -523,6 +551,8 @@
 
     _fly(entity, dt, input) {
       const model = getModel(entity), heli = model.class === 'helicopter';
+      const external = this._externalVelocities.get(entity);
+      if (external) entity.vz -= external.y;
       const engine = entity.health > 0 && !entity.exploded ? clamp(entity.engineHealth / 100, 0, 1) : 0;
       const steering = model.handling * (.4 + .6 * clamp(entity.handlingHealth / 100, 0, 1));
       // Explicit player plane controls keep each flight axis separate. The
@@ -564,9 +594,12 @@
         entity.vz = approach(entity.vz, vertical, 8, dt);
         entity.pitch = approach(entity.pitch, clamp(Math.atan2(entity.vz, Math.max(6, entity.speed / SCALE)), -.5, .5), 1.25, dt);
       }
+      if (external?.ballistic) { external.y -= 18 * dt; entity.vz += external.y; }
       const ceiling = model.maxAltitude + this._ground(entity);
       if (entity.elevation > ceiling && entity.vz > 0) entity.vz = approach(entity.vz, -2, 25, dt);
-      entity.vx = Math.cos(entity.angle) * entity.speed; entity.vy = Math.sin(entity.angle) * entity.speed;
+      entity.vx = Math.cos(entity.angle) * entity.speed + finite(external?.x) * SCALE;
+      entity.vy = Math.sin(entity.angle) * entity.speed + finite(external?.z) * SCALE;
+      if (external) { external.appliedX = external.x; external.appliedZ = external.z; }
       entity.x += entity.vx * dt; entity.y += entity.vy * dt; entity.elevation += entity.vz * dt;
       this._boundary(entity, dt);
       const floor = this._support(entity, Math.max(before.elevation, entity.elevation) + .1);
@@ -582,9 +615,15 @@
           this.game.missionStats.collisions++; entity._landingAt = this.time;
         }
         entity.elevation = floor; entity.vz = 0; entity.grounded = true;
+        if (external) { external.y = 0; external.ballistic = false; }
         if (entity.exploded) entity.speed = approach(entity.speed, 0, 120, dt);
       } else entity.grounded = false;
       this._collide(entity, before);
+      if (external) {
+        const drag = Math.exp(-(entity.grounded ? 4 : 1.2) * dt);
+        external.x *= drag; external.z *= drag;
+        if (!external.ballistic && Math.hypot(external.x, external.z) < .001) this._externalVelocities.delete(entity);
+      }
       entity.verticalVelocity = entity.vz;
       entity.altitudeAGL = entity.agl = Math.max(0, entity.elevation - this._ground(entity));
       if (heli) entity.stalled = entity.stallWarning = false;
@@ -639,11 +678,18 @@
         consider({ x: other.x - otherModel.length / 2, y: other.y - otherModel.width / 2, w: otherModel.length, h: otherModel.width, angle: other.angle }, finite(other.elevation), otherModel.height, other);
       }
       if (!hit) return;
-      const speed = Math.hypot(entity.speed, entity.vz * SCALE);
+      const external = this._externalVelocities.get(entity);
+      const speed = Math.hypot(Math.cos(entity.angle) * entity.speed + finite(external?.x) * SCALE,
+        Math.sin(entity.angle) * entity.speed + finite(external?.z) * SCALE, entity.vz * SCALE);
       const travel = Math.max(1, Math.hypot(delta.x, delta.y));
       const fraction = Math.max(0, hit.fraction - bodyRadius / travel * .12);
       entity.x = before.x + delta.x * fraction; entity.y = before.y + delta.y * fraction;
       entity.speed *= -.18; entity.vx = Math.cos(entity.angle) * entity.speed; entity.vy = Math.sin(entity.angle) * entity.speed;
+      if (external) {
+        external.x *= -.18; external.z *= -.18;
+        external.appliedX = external.x; external.appliedZ = external.z;
+        entity.vx += external.x * SCALE; entity.vy += external.z * SCALE;
+      }
       if (this.time - finite(entity._collisionAt, -10) > .55) {
         entity._collisionAt = this.time;
         const amount = Math.max(0, speed - 45) * .13;

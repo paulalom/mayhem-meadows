@@ -37,6 +37,7 @@ async function main() {
     const after = await page.evaluate(() => {
       const game = globalThis.__browserCheckGame, scene = globalThis.__browserCheckScene, fence = globalThis.__destructionFence;
       const used = game.action(game.player.angle);
+      game.update(.23);
       scene.update(0, { paused: true });
       const state = scene._propRenderStates.get(fence), matrix = new scene.T.Matrix4();
       const hidden = state.slots.every(slot => { slot.mesh.getMatrixAt(slot.index, matrix); return matrix.elements[0] === 0 && matrix.elements[5] === 0 && matrix.elements[10] === 0; });

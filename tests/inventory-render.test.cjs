@@ -52,10 +52,36 @@ test('equipping each toy changes the held model without allocating geometry or m
   scene._people(0);
   assert.equal(scene._player.rightArm.rotation.z, Math.PI / 2, 'a fired barrel points forward');
   scene.game.inventory.equipped = 'hammer'; scene.game._actionCooldown = 0.9;
+  scene.game._hammerSwing = { elapsed: .14, angle: 0, pitch: 0, struck: false };
   scene._people(0);
   assert.ok(scene._player.rightArm.rotation.z > 2, 'hammer starts a raised swing');
-  scene.game._actionCooldown = 0.4; scene._people(0);
+  scene.game._hammerSwing.elapsed = .34; scene._people(0);
   assert.ok(scene._player.rightArm.rotation.z < 1.3, 'hammer sweeps forward through the strike');
+});
+
+test('hammer windup, contact and follow-through share simulation time and reuse the held model', () => {
+  const scene = makeScene(), game = scene.game;
+  game.peds = []; game.inventory.equipped = 'hammer';
+  scene._people(0);
+  const model = scene._player, toy = model.toys.hammer, geometryCount = scene._geometries.length;
+  const pose = (elapsed, pitch = .3) => {
+    game._hammerSwing = { elapsed, angle: .4, pitch, struck: elapsed >= core.GADGETS.hammer.strikeAt };
+    scene._people(0); model.rightArm.updateWorldMatrix(true, true);
+    return model.rightArm.rotation.z;
+  };
+  const ready = pose(0), raised = pose(.14), contact = pose(core.GADGETS.hammer.strikeAt), follow = pose(.34), recovered = pose(.9);
+  assert.ok(raised > ready + 1.5, 'clear backswing before contact');
+  assert.ok(Math.abs(contact - Math.PI / 2 - .3) < .000001, 'impact pose follows the captured attack pitch');
+  assert.ok(follow < contact - 1, 'head follows through past contact');
+  assert.equal(recovered, ready);
+  assert.equal(model.group.rotation.y, -.4, 'the visible strike keeps its captured direction');
+  assert.equal(model.toys.hammer, toy); assert.equal(scene._geometries.length, geometryCount);
+  const before = toy.matrixWorld.clone(); scene._people(0); model.rightArm.updateWorldMatrix(true, true);
+  assert.deepEqual(toy.matrixWorld.elements, before.elements, 'paused simulation holds the same attack pose');
+  scene.reducedMotion = true;
+  assert.ok(pose(.14) - pose(0) < raised - ready, 'reduced motion limits the backswing');
+  game._hammerSwing = null; scene._people(0);
+  assert.equal(model.group.rotation.z, 0, 'body lean clears when the swing ends');
 });
 
 test('held toy visibly follows upward and downward aim and lowers when aiming stops', () => {

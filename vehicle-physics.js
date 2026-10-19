@@ -425,16 +425,39 @@
 
     // Blast vectors are changes in world-space velocity (metres per second).
     // Mirror only velocity fields so sync still detects pending teleports.
-    impulse(entity, velocity) {
+    impulse(entity, velocity, point) {
       if(aircraftModel(entity))return this.get(entity.id);
       const entry = this._body(entity), body = entry.body;
       this._syncEntry(entity, entry, false);
-      body.applyImpulse(new C.Vec3(finite(velocity.x) * body.mass, finite(velocity.y) * body.mass, finite(velocity.z) * body.mass));
+      // A low, off-centre hammer contact tips the chassis as well as lifting it.
+      const offset = point ? new C.Vec3(point.x / SCALE - body.position.x, point.height - body.position.y, point.y / SCALE - body.position.z) : undefined;
+      body.applyImpulse(new C.Vec3(finite(velocity.x) * body.mass, finite(velocity.y) * body.mass, finite(velocity.z) * body.mass), offset);
       body.freeRollUntil = this.world.time + 1;
       entity.vx = body.velocity.x * SCALE; entity.vy = body.velocity.z * SCALE; entity.verticalVelocity = body.velocity.y;
       entity.speed = entity.vx * Math.cos(finite(entity.angle)) + entity.vy * Math.sin(finite(entity.angle));
       for (const field of ['vx', 'vy', 'verticalVelocity', 'speed']) entry.snapshot[field] = entity[field];
       body.wakeUp(); return body;
+    }
+
+    strikePoints(entity, origin, pitch = 0) {
+      const body = this.get(entity.id);
+      if (!body) return [];
+      if (Math.hypot(origin.x / SCALE - body.position.x, origin.height - body.position.y, origin.y / SCALE - body.position.z) > body.boundingRadius + 62 / SCALE) return [];
+      const points = [];
+      for (let i = 0; i < body.shapes.length; i++) {
+        const half = body.shapes[i].halfExtents;
+        const center = body.position.vadd(body.quaternion.vmult(body.shapeOffsets[i]));
+        if (!half) { points.push({ x: center.x * SCALE, y: center.z * SCALE, height: center.y }); continue; }
+        const pose = body.quaternion.mult(body.shapeOrientations[i]), inverse = pose.conjugate();
+        const closest = height => {
+          const local = inverse.vmult(new C.Vec3(origin.x / SCALE, height, origin.y / SCALE).vsub(center));
+          return center.vadd(pose.vmult(new C.Vec3(clamp(local.x, -half.x, half.x), clamp(local.y, -half.y, half.y), clamp(local.z, -half.z, half.z))));
+        };
+        let point = closest(origin.height);
+        point = closest(origin.height + Math.tan(pitch) * Math.hypot(point.x - origin.x / SCALE, point.z - origin.y / SCALE));
+        points.push({ x: point.x * SCALE, y: point.z * SCALE, height: point.y });
+      }
+      return points;
     }
 
     _supported(body) {

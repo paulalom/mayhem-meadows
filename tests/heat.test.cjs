@@ -109,6 +109,7 @@ test('hitting an officer still reports immediately after the toy distracts them'
     const game = empty(), patrol = cop(game, 940);
     game.inventory.equipped = toy;
     if (toy === 'cannon') game._burstParty({ x: 940, y: 900, height: 1, angle: 0 }); else game.action(0);
+    if (toy === 'hammer') { assert.equal(game.heat, 0, 'winding up is harmless'); advance(game, .23); }
     assert.ok(patrol.distracted > 0, toy); assert.equal(game.heat, 1, toy);
     assert.equal(game._witnessReports.length, 0, toy);
   }

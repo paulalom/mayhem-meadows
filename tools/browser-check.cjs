@@ -720,7 +720,12 @@ async function checkThemedAudio(browser, externalRequests) {
 
     for (const [gadget, event, sample] of [['popper', 'pop', 'pop'], ['hammer', 'hammer', 'hammer'], ['cannon', 'cannon', 'cannon-launch']]) {
       await routed(async () => page.evaluate(gadget => {
-        const game = globalThis.__browserCheckGame; game.equipGadget(gadget); game._actionCooldown = 0; game.action();
+        const game = globalThis.__browserCheckGame; game.equipGadget(gadget); game._actionCooldown = 0;
+        if (gadget === 'hammer') {
+          const lane = globalThis.__browserCheckLane(), ped = { ...globalThis.__browserCheckAudioResident, ...lane.point(36), pace: 0, stunned: 0, ragdollGrace: 0 };
+          ped.homeX = ped.x; ped.homeY = ped.y; game.peds = [ped];
+        }
+        game.action();
       }, gadget), event, sample);
     }
     await page.waitForFunction(() => globalThis.__browserCheckAudioEvents.some(entry => entry.name === 'party' &&

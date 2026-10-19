@@ -42,6 +42,10 @@ test('actual close weapons alarm Northwatch on a physical building, fence, utili
     else if (target === 'utility') place(game, 3350, -1320);
     else place(game, 1900, -1160);
     assert.equal(game.action(0, { pitch: 0 }), true);
+    if (gadget === 'hammer') {
+      assert.equal(game.heat, 0, 'the hammer windup has not struck base property');
+      advance(game, .23);
+    }
     alarm(game, gadget + ' hit on the actual base ' + target);
   }
 });
@@ -62,6 +66,7 @@ test('missed, skyward, outside-base and physically screened close strikes do not
     }
     const angle = scenario === 'miss' ? Math.PI : 0;
     assert.equal(game.action(angle, { pitch: scenario === 'sky' ? 1.3 : 0 }), true);
+    if (gadget === 'hammer') advance(game, .23);
     assert.equal(game.heat, 0, gadget + ' ' + scenario + ' does not count as attacking base property');
   }
 });

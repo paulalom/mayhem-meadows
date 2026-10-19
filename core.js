@@ -22,7 +22,7 @@
   const MILITARY_COLORS = ['#73806a', '#8c9275'];
   const GADGETS = {
     popper: { name: 'Confetti Popper', description: 'Unlimited bursts of close-up silliness.', price: 0, cooldown: 0.55 },
-    hammer: { name: 'Inflatable Hammer', description: 'A short, satisfying shove. No refills needed.', price: 120, cooldown: 0.9 },
+    hammer: { name: 'Inflatable Hammer', description: 'Swing to launch people and rides. Confetti on contact!', price: 120, cooldown: 0.9, strikeAt: .22 },
     cannon: { name: 'Party Cannon', description: 'Lob a party ball that showers a crowd in confetti.', price: 280, cooldown: 1.1 }
   };
   const POCKET_ITEMS = {
@@ -145,6 +145,7 @@
       this._troubleCooldown = 0;
       this._impactCooldown = 0;
       this._actionCooldown = 0;
+      this._hammerSwing = null;
       this._hornCooldown = 0;
       this._styleCooldown = 0;
       this._driftTime = 0;
@@ -675,7 +676,7 @@
       return hit?this._reportBaseHit(hit.source||hit.body?.entity,hit,{playerCaused:true,ownerId}):false;
     }
 
-    _damageProp(object, amount, origin, playerCaused = true) {
+    _damageProp(object, amount, origin, playerCaused = true, impact) {
       if(object&&Number.isFinite(amount)&&amount>0&&playerCaused)this._reportBaseHit(object,{x:object.x,y:object.y,height:this._base(object)+1},{playerCaused:true});
       if (!object || object.destroyed || object.destructible === false || object.kind === 'garage' ||
         !this.staticObjects.includes(object) || !Number.isFinite(amount) || amount <= 0) return false;
@@ -700,7 +701,7 @@
           size: part.half.map(half => clamp(half * (0.6 + this._random() * .5), .08, .65)), color: part.color || colors[object.kind] || '#b8a1e0', life, maxLife: life });
       }
       this.debris = this.debris.slice(-120);
-      this._confetti(object.x, object.y, 12);
+      this._confetti(impact?.x ?? object.x, impact?.y ?? object.y, 12, impact?.height);
       this._sound('crash', { x: object.x, y: object.y, sourceId: object.id, destroyed: true, intensity: clamp(amount / maxHealth, .25, 1), material: PROP_SOUND_MATERIALS[object.kind] || 'stone' });
       this.vehiclePhysics.sync();
       if (playerCaused) this._raiseHeat(1, 'Scenery smashed', { position: object, noise: 180 });
@@ -989,8 +990,8 @@
         this._sound('empty', { x: this.player.x, y: this.player.y }); return false;
       }
       this._actionCooldown = GADGETS[equipped].cooldown;
-      if(equipped!=='cannon') {
-        const reach=equipped==='hammer'?62:100,origin={x:this.player.x,y:this.player.y,height:this.player.elevation+MUZZLE_HEIGHT};
+      if(equipped==='popper') {
+        const reach=100,origin={x:this.player.x,y:this.player.y,height:this.player.elevation+MUZZLE_HEIGHT};
         this._reportBaseAttackSegment(origin,{x:origin.x+Math.cos(angle)*reach,y:origin.y+Math.sin(angle)*reach,height:origin.height+Math.tan(pitch)*reach/20},this.player.id);
       }
       if (equipped === 'cannon') {
@@ -1004,21 +1005,7 @@
         return true;
       }
       if (equipped === 'hammer') {
-        const reach = 62, forwardX = Math.cos(angle), forwardY = Math.sin(angle);
-        this._confetti(this.player.x + forwardX * 35 * cosPitch, this.player.y + forwardY * 35 * cosPitch, 18, this.player.elevation + MUZZLE_HEIGHT + sinPitch * 1.75); this._sound('hammer', { x: this.player.x, y: this.player.y });
-        let hit = this._strikeProps(angle, pitch, reach, 45, .5);
-        const victims = [], officers = [];
-        const inReach = person => {
-          const dx = person.x - this.player.x, dy = person.y - this.player.y, range = Math.hypot(dx, dy);
-          return range < reach && inAimHeight(person) && (range < 1 || (dx * forwardX + dy * forwardY) / range > 0.5) &&
-            !this._blockedLine(this.player,person,this.player.elevation+MUZZLE_HEIGHT,this._base(person)+MUZZLE_HEIGHT);
-        };
-        for (const ped of this._activePeds()) if (ped.stunned <= 0 && inReach(ped)) {
-          if (this._knockDown(ped, { x: forwardX * 5.8, y: 3.2, z: forwardY * 5.8 })) { victims.push(ped); hit = true; }
-        }
-        for (const cop of this.police) if (this._activePolice(cop) && inReach(cop)) { officers.push(cop); cop.distracted = 2.3; this._confetti(cop.x, cop.y, 25); hit = true; }
-        for(const victim of victims)this._reportBaseHit(victim,victim,{playerCaused:true});
-        if (hit) this._raiseHeat(1, 'Inflatable nuisance', { noise: 100, victims, officers });
+        this._hammerSwing = { elapsed: 0, angle, pitch, struck: false };
         return true;
       }
       const pop = { x: this.player.x + Math.cos(angle) * 44 * cosPitch, y: this.player.y + Math.sin(angle) * 44 * cosPitch };
@@ -1030,6 +1017,79 @@
       for(const victim of victims)this._reportBaseHit(victim,victim,{playerCaused:true});
       if (hit) this._raiseHeat(1, 'Confetti disturbance', { noise: 140, victims, officers });
       return true;
+    }
+
+    _updateHammer(dt) {
+      const swing = this._hammerSwing;
+      if (!swing) return;
+      if (this.player.vehicleId || this.player.trainRide || this.player.parachuting || this.ragdolls.get(this.player.id) || this.inventory.equipped !== 'hammer') {
+        this._hammerSwing = null; return;
+      }
+      swing.elapsed += dt;
+      if (!swing.struck && swing.elapsed + 1e-8 >= GADGETS.hammer.strikeAt) {
+        swing.struck = true;
+        this._hammerStrike(swing.angle, swing.pitch);
+      }
+      if (swing.elapsed + 1e-8 >= GADGETS.hammer.cooldown) this._hammerSwing = null;
+    }
+
+    _hammerStrike(angle, pitch) {
+      const origin = { x: this.player.x, y: this.player.y, height: this.player.elevation + MUZZLE_HEIGHT };
+      const forwardX = Math.cos(angle), forwardY = Math.sin(angle), targets = [];
+      this.vehiclePhysics.sync();
+      const inReach = point => {
+        const dx = point.x - origin.x, dy = point.y - origin.y, range = Math.hypot(dx, dy);
+        return Math.hypot(range, (point.height - origin.height) * 20) < 62 &&
+          (range < 1 || (dx * forwardX + dy * forwardY) / range > .5) &&
+          Math.abs(origin.height + Math.tan(pitch) * range / 20 - point.height) < .55;
+      };
+      // Resolve visibility before breaking props or launching any targets, so
+      // an intact fence or parked car shields everything behind it this swing.
+      for (const person of this._activePeds()) {
+        if (person.stunned > 0 || person.ragdollGrace > 0 || this.ragdolls.get(person.id)) continue;
+        const range = distance(origin, person), height = clamp(origin.height + Math.tan(pitch) * range / 20,
+          this._base(person) + .1, this._base(person) + PERSON_HEIGHT);
+        const point = { x: person.x, y: person.y, height };
+        if (inReach(point) && !this.vehiclePhysics.firstHit(origin, point)) targets.push({ person, point });
+      }
+      for (const vehicle of this._vehicles().concat((this.aircraft || []).filter(craft => craft.visible !== false))) {
+        const points = this.vehiclePhysics.strikePoints(vehicle, origin, pitch);
+        for (const point of points) {
+          const hit = this.vehiclePhysics.firstHit(origin, point);
+          if ((!hit || hit.body?.entity === vehicle) && inReach(hit || point)) { targets.push({ vehicle, point: hit || point }); break; }
+        }
+      }
+      for (const object of this.staticObjects) {
+        if (object.destroyed) continue;
+        const point = this._propPoints(object, origin, pitch).find(point => inReach(point) && this._propVisible(origin, point, object));
+        if (point) targets.push({ object, point });
+      }
+      // Buildings and the ground can also receive an honest, harmless bonk.
+      if (!targets.length) {
+        const reach = 62, flat = Math.cos(pitch) * reach;
+        const hit = this.vehiclePhysics.firstHit(origin, { x: origin.x + forwardX * flat, y: origin.y + forwardY * flat, height: origin.height + Math.sin(pitch) * reach / 20 });
+        if (hit) targets.push({ point: hit, target: hit.source || hit.body?.entity });
+      }
+      const victims = [], officers = [];
+      for (const { person, vehicle, object, point, target } of targets) {
+        // A compressed mass curve gives cars an absurd hop, while people fly
+        // farther and heavy armour still feels much heavier than a hatchback.
+        const mass = vehicle ? 700 * (Aircraft.isAircraft(vehicle) ? Aircraft.getModel(vehicle) : VehicleStats.getModel(vehicle)).mass : Math.max(30, finite(person?.mass, 75));
+        const strength = Math.pow(75 / Math.max(30, mass), .35);
+        const impulse = { x: forwardX * 14 * strength, y: 9 * strength, z: forwardY * 14 * strength };
+        if (person) {
+          if (!this._knockDown(person, impulse, point)) continue;
+          victims.push(person);
+        } else if (vehicle) {
+          if (Aircraft.isAircraft(vehicle)) this.aviation.impulse(vehicle, impulse);
+          else this.vehiclePhysics.impulse(vehicle, impulse, point);
+          if (this.police.includes(vehicle)) { officers.push(vehicle); vehicle.distracted = 2.3; }
+        } else if (object) this._damageProp(object, 45, origin, true, point);
+        if (!person) this._confetti(point.x, point.y, 28, point.height);
+        this._sound('hammer', { x: point.x, y: point.y, intensity: 1 });
+        this._reportBaseHit(person || vehicle || object || target, point, { playerCaused: true });
+      }
+      if (targets.some(target => target.person || target.vehicle || target.object)) this._raiseHeat(1, 'Inflatable nuisance', { position: origin, noise: 100, victims, officers });
     }
 
     _burstParty(projectile) {
@@ -1096,14 +1156,14 @@
       return true;
     }
 
-    _knockDown(person, impulse) {
+    _knockDown(person, impulse, impact) {
       if(person.transportedBy)return false;
       if (this.ragdolls.get(person.id) || person.ragdollGrace > 0) return false;
       if (person === this.player && person.trainRide) this._exitTrain(true);
       const body = this.ragdolls.trigger(person, impulse,{terrain:this.world?.terrain});
       if (!body) return false;
       person.stunned = 3.8; person.bubble = this._pick(CURSES); person.bubbleTimer = 3;
-      this._confetti(person.x, person.y, 32); this._sound('flop', { x: person.x, y: person.y, intensity: clamp(Math.hypot(impulse.x || 0, impulse.y || 0, impulse.z || 0) / 9, .25, 1) });
+      this._confetti(impact?.x ?? person.x, impact?.y ?? person.y, 32, impact?.height); this._sound('flop', { x: person.x, y: person.y, intensity: clamp(Math.hypot(impulse.x || 0, impulse.y || 0, impulse.z || 0) / 9, .25, 1) });
       if (person !== this.player) this._sound('resident', { x: person.x, y: person.y, text: person.bubble, id: person.id });
       if (person === this.player) this._toast(person.bubble + ' Getting back up…');
       return true;
@@ -1378,6 +1438,7 @@
       if(this.player.vehicleId) { this.current.speed=this.current.vx=this.current.vy=0; this.current.throttle=0; }
       const craft=deployed || this.aviation.spawn(record.aircraftType,position,{npc:false,airportId,standId:position.id});
       this.aviation._releaseRunway(craft);
+      this.aviation.clearImpulse(craft);
       Object.assign(craft,record,{x:position.x,y:position.y,angle:finite(position.angle,0),id:craft.id,hangarId:record.id,airportId,standId:position.id,home:{...position},visible:true,npc:false,phase:'parked',flightPhase:'parked',phaseTime:0,speed:0,vx:0,vy:0,vz:0,verticalVelocity:0,pitch:0,roll:0,throttle:0,grounded:true,upright:true,altitudeAGL:0,agl:0,burning:false,exploded:false,borrowed:true});
       craft.elevation=finite(position.elevation,this._ground(position));
       Object.assign(this.player,{vehicleId:craft.id,x:craft.x,y:craft.y,elevation:craft.elevation,angle:craft.angle,verticalVelocity:0,grounded:true,parachuting:false});
@@ -1572,6 +1633,7 @@
         this.player.x = car.x; this.player.y = car.y; this.player.angle = car.angle; this.player.elevation = car.elevation;
         this.player.verticalVelocity = car.verticalVelocity; this.player.grounded = car.grounded;
       }
+      this._updateHammer(dt);
       this._projectiles(dt);
       this._propExplosions();
       const finished = this.ragdolls.step(dt, { buildings: this.buildings, staticObjects: this.staticObjects, cars: this.cars, police: this.police, aircraft:(this.aircraft || []).filter(craft=>craft.visible!==false), railVehicles:this.railTraffic.colliders, size: SIZE, bounds:this._worldBounds(), terrain:this.world?.terrain });

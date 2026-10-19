@@ -72,9 +72,10 @@ test('inflatable hammer has a short forward cone, a physical shove, and a distin
   Object.assign(game.peds[1], { x: 1040, y: 1080 });
   Object.assign(game.peds[2], { x: 1160, y: 1080 });
   const cash = game.money;
-  assert.equal(game.action(0), true); assert.ok(game.physics.get(game.peds[0].id));
-  assert.equal(game.physics.get(game.peds[1].id), undefined); assert.equal(game.physics.get(game.peds[2].id), undefined);
+  assert.equal(game.action(0), true); assert.equal(game.physics.get(game.peds[0].id), undefined);
   assert.equal(game._actionCooldown, 0.9); assert.equal(game.action(0), false); assert.equal(game.money, cash);
+  advance(game, .23); assert.ok(game.physics.get(game.peds[0].id));
+  assert.equal(game.physics.get(game.peds[1].id), undefined); assert.equal(game.physics.get(game.peds[2].id), undefined);
   assert.equal(game.heat, 0); assert.ok(game.peds[0].bubble.length > 0);
   game._updateWitnessReports(2); assert.equal(game.heat, 1);
 });
@@ -124,9 +125,16 @@ test('aiming close-range toys into the sky misses residents and officers without
     Object.assign(game.police[0], { x: 1120, y: 1080 });
     game.drainEvents();
     assert.equal(game.action(0, { pitch: 1.2 }), true);
-    assert.equal(game.physics.bodies.size, 0); assert.equal(game.police[0].distracted, undefined);
-    assert.equal(game.heat, 0); assert.ok(game.particles.some(particle => particle.height > 2));
-    assert.ok(game.drainEvents().some(event => event.type === 'sound'));
+    if (toy === 'hammer') advance(game, .23);
+    assert.equal(game.physics.bodies.size, 0); assert.equal(Boolean(game.police[0].distracted), false);
+    assert.equal(game.heat, 0);
+    if (toy === 'hammer') {
+      assert.equal(game.particles.length, 0);
+      assert.equal(game.drainEvents().some(event => event.name === 'hammer'), false);
+    } else {
+      assert.ok(game.particles.some(particle => particle.height > 2));
+      assert.ok(game.drainEvents().some(event => event.type === 'sound'));
+    }
   }
 });
 
@@ -140,6 +148,7 @@ test('close-range toys hit along a slightly downward aim and block obstructed sh
     Object.assign(game.peds[1], { x: 1120, y: 1090, pace: 0 });
     game.buildings = [{ x: 1100, y: 1083, w: 12, h: 30, height: 4 }];
     assert.equal(game.action(0, { pitch: -0.2 }), true);
+    if (toy === 'hammer') advance(game, .23);
     assert.ok(game.physics.get(game.peds[0].id));
     assert.equal(game.physics.get(game.peds[1].id), undefined); assert.equal(game.heat, 0);
     game._updateWitnessReports(2); assert.equal(game.heat, 1);

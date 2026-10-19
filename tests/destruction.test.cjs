@@ -66,7 +66,8 @@ test('popper chips scenery with its normal cooldown and hammer destroys a nearby
   assert.equal(game.action(0), false); assert.equal(fence.health, 15);
   advance(game, .6); assert.equal(game.action(0), true); assert.equal(fence.health, 5);
   advance(game, .6); game.inventory.unlocked.push('hammer'); game.inventory.equipped = 'hammer';
-  assert.equal(game.action(0), true); assert.equal(fence.destroyed, true); assert.equal(game.heat, 0);
+  assert.equal(game.action(0), true); assert.equal(fence.destroyed, undefined);
+  advance(game, .23); assert.equal(fence.destroyed, true); assert.equal(game.heat, 0);
 });
 
 test('strikes respect facing, pitch and walls, and can reach the near edge of a long rotated fence', () => {
@@ -77,12 +78,13 @@ test('strikes respect facing, pitch and walls, and can reach the near edge of a 
       game.buildings = [{ x: 917, y: 870, w: 8, h: 60, height: 5 }]; game.vehiclePhysics.sync();
     }
     game.inventory.equipped = 'hammer'; game.action(0, { pitch: blockedBy === 'pitch' ? 1 : 0 });
+    advance(game, .23);
     assert.equal(fence.health, 25, blockedBy);
   }
   const game = empty(), fence = prop('fence', 900, 1020);
   fence.angle = Math.PI / 2; fence.parts[0].half = [6, .5, .175];
   game.player.x = 870; install(game, [fence]); game.inventory.equipped = 'hammer';
-  game.action(0); assert.equal(fence.destroyed, true, 'surface distance works even when the centre is out of reach');
+  game.action(0); advance(game, .23); assert.equal(fence.destroyed, true, 'surface distance works even when the centre is out of reach');
 });
 
 test('cannon bursts damage scenery in three dimensions, with walls shielding props', () => {
@@ -105,6 +107,7 @@ test('aimed upward strikes hit the elevated surface of tall props', () => {
   const game = empty(), lamp = prop('lamp');
   lamp.parts[0] = { offset: [0, 1.4, 0], half: [.2, 1.4, .2] }; install(game, [lamp]);
   game.inventory.equipped = 'hammer'; game.action(0, { pitch: .45 });
+  advance(game, .23);
   assert.equal(lamp.destroyed, true);
 });
 
