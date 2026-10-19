@@ -49,6 +49,15 @@ function combatFixture() {
   game.vehiclePhysics.sync();
   return { game, guard };
 }
+function enableComposureRecovery(game) {
+  game._updatePolice = Game.prototype._updatePolice;
+  game.police = Array.from({ length: 3 }, (_, index) => ({ id: 'remote-patrol-' + index,
+    ...game._vehicleState('compact'), x: 10500 + index * 80, y: 6200,
+    elevation: game._ground(10500 + index * 80, 6200), angle: 0, speed: 0, vx: 0, vy: 0,
+    distracted: 999, route: [{ x: 10500 + index * 80, y: 6200 }], routeTimer: 999,
+    lastSeen: { x: game.player.x, y: game.player.y } }));
+  game.vehiclePhysics.sync();
+}
 
 test('actual Northwatch personnel become six peaceful physical guards and patrol at ground level', () => {
   const game = fixture(), guards = game.soldiers;
@@ -122,15 +131,9 @@ test('infantry rounds hit an occupied physical vehicle without hurting its passe
 
 test('real police-update composure recovery cannot erase rifle pressure and resumes after the player reaches cover', () => {
   const { game, guard } = combatFixture(); guard.aimAngle = 0;
-  game._updatePolice = Game.prototype._updatePolice;
-  game.police = Array.from({ length: 3 }, (_, index) => ({ id: 'remote-patrol-' + index,
-    ...game._vehicleState('compact'), x: 10500 + index * 80, y: 6200,
-    elevation: game._ground(10500 + index * 80, 6200), angle: 0, speed: 0, vx: 0, vy: 0,
-    distracted: 999, route: [{ x: 10500 + index * 80, y: 6200 }], routeTimer: 999,
-    lastSeen: { x: game.player.x, y: game.player.y } }));
-  game.vehiclePhysics.sync(); advance(game, 6);
+  enableComposureRecovery(game); advance(game, 6);
   assert.ok(game.player.composure < 90, 'repeated real bursts reduce composure across the reload interval');
-  assert.ok(Number.isFinite(game.player.lastSoldierHitAt), 'the actual impact records the recovery delay');
+  assert.ok(Number.isFinite(game.player.lastIncomingFireAt), 'the actual impact records the recovery delay');
   game.staticObjects = game.staticObjects.concat({ id: 'recovery-cover', kind: 'fence', x: 4200,
     y: -930, elevation: 14, angle: 0, destructible: false,
     parts: [{ offset: [0, 1.2, 0], half: [.12, 1.2, 3.5] }] });
@@ -139,6 +142,33 @@ test('real police-update composure recovery cannot erase rifle pressure and resu
   assert.ok(Math.abs(game.player.composure - sheltered) < .02, 'the recovery delay remains active after the last hit');
   advance(game, 2);
   assert.ok(game.player.composure > sheltered + 3, 'sustained physical cover allows composure to recover');
+});
+
+test('incoming rifle bursts suppress recovery even when the player dodges every round', () => {
+  const { game, guard } = combatFixture(); guard.aimAngle = 0;
+  enableComposureRecovery(game); game.player.composure = 50;
+  let shots = 0;
+  for (let tick = 0; tick < 6 * 60; tick++) {
+    const before = game.player.composure;
+    game.update(1 / 60);
+    const fired = game.soldierTraffic.events.filter(event => event.type === 'fire').length;
+    if (fired > 0) assert.ok(game.player.composure <= before + 1e-8,
+      'composure cannot rise during incoming fire or the pauses between bursts');
+    if (fired > shots) place(game, 4400, game.player.y < -910 ? -890 : -930);
+    shots = fired;
+  }
+  assert.ok(shots >= 6, 'the actual guard fires repeated live bursts');
+  assert.equal(game.soldierTraffic.events.some(event => event.type === 'hit-player'), false,
+    'every live round misses the dodging player');
+  game.staticObjects = game.staticObjects.concat({ id: 'dodging-cover', kind: 'fence', x: 4200,
+    y: -930, elevation: 14, angle: 0, destructible: false,
+    parts: [{ offset: [0, 1.2, 0], half: [.12, 1.2, 3.5] }] });
+  game.vehiclePhysics.sync();
+  const sheltered = game.player.composure;
+  advance(game, 4);
+  assert.equal(game.soldierTraffic.events.filter(event => event.type === 'fire').length, shots,
+    'solid cover stops aimed fire');
+  assert.ok(game.player.composure > sheltered, 'recovery resumes safely behind cover');
 });
 
 test('actual toy hits disable a base guard, report the base attack and let the articulated body recover', () => {

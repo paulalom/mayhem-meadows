@@ -46,6 +46,35 @@ function spawnPair(aviation, civilian, military) {
   ];
 }
 
+test('NPC aircraft fire delays composure recovery only when aimed at or hitting the on-foot player', () => {
+  const { game, aviation } = fixture(); game.time = 10;
+  const helicopter = aviation.spawn('transportheli', { x: 5700, y: 4000, elevation: 0, angle: -Math.PI / 2 }, { npc: true });
+  assert.equal(aviation._fire(helicopter, 0, game.player), true);
+  assert.equal(game.player.lastIncomingFireAt, 10, 'incoming fire counts before the first impact');
+  helicopter.gunCooldown = 0; game.time = 11; game._blockedLine = () => true;
+  assert.equal(aviation._fire(helicopter, 0, game.player), false);
+  assert.equal(game.player.lastIncomingFireAt, 10, 'cover prevents fresh pressure');
+  helicopter.gunCooldown = 0; game._blockedLine = () => false;
+  const car = { id: 'borrowed-car', kind: 'compact', x: 6000, y: 4000, elevation: 0, health: 100 };
+  game.cars.push(car); game.player.vehicleId = car.id;
+  assert.equal(aviation._fire(helicopter, 0, car), true);
+  assert.equal(game.player.lastIncomingFireAt, 10, 'fire at a vehicle does not suppress its passenger');
+});
+
+test('NPC aircraft impacts refresh the shared recovery delay while intercepted rounds do not', () => {
+  for (const covered of [false, true]) {
+    const { game, aviation } = fixture(); game.time = 10; game.player.composure = 50;
+    game.player.lastIncomingFireAt = 5;
+    if (covered) game.buildings.push({ x: 5980, y: 3990, w: 5, h: 20, elevation: 0, height: 3 });
+    aviation.aircraftProjectiles.push({ id: 'incoming', ownerId: 'npc-heli', npc: true,
+      x: 5970, y: 4000, elevation: 1, height: 1, vx: 2400, vy: 0, vz: 0, life: 1, damage: 3 });
+    aviation._projectiles(1 / 60);
+    assert.equal(game.player.composure, covered ? 50 : 47);
+    assert.equal(game.player.lastIncomingFireAt, covered ? 5 : 10);
+    assert.equal(aviation.aircraftProjectiles.length, 0);
+  }
+});
+
 test('military aircraft move to the remote base while the civilian fleet and air taxi metadata remain intact', () => {
   const { aviation, civilian, military } = fixture({ populate: true });
   const militaryAircraft = aviation.aircraft.filter(entity => ['fighter', 'transportheli'].includes(entity.aircraftType));

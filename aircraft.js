@@ -1049,6 +1049,7 @@
         vz: target ? (finite(target.elevation) + targetHeight - elevation) / shotTravel : Math.tan(clamp(finite(aimPitch), -.8, .8)) * 70,
         life: .95, ownerId: entity.id, npc: Boolean(entity.npc), military: Boolean(entity.militaryResponse), damage: entity.militaryResponse ? 5 : 3, radius: 2, color: '#ffc94d' };
       this.aircraftProjectiles.push(projectile);
+      if (entity.npc && target === this.game.player) target.lastIncomingFireAt = finite(this.game.time, this.time);
       if (entity === this.current) this.game._raiseHeat?.(.2, 'Airborne confetti cannon', { position: entity, noise: 400 });
       this.game._sound?.('pop', { x, y, intensity: .4 });
       return true;
@@ -1142,6 +1143,7 @@
           if (isAircraft(targetHit)) this.damage(targetHit, amount);
           else if (targetHit === this.game.player) {
             targetHit.composure = Math.max(10, finite(targetHit.composure, 100) - amount);
+            if (round.npc) targetHit.lastIncomingFireAt = finite(this.game.time, this.time);
             targetHit.bubble = 'OH, CRUMBS!'; targetHit.bubbleTimer = 1;
           } else if ((this.game.peds || []).includes(targetHit)) {
             if (this.game._knockDown?.(targetHit, { x: round.vx / 500, y: 2, z: round.vy / 500 })) victims.push(targetHit);

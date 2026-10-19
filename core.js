@@ -1854,7 +1854,7 @@
         this.escapeTimer = seen ? 0 : this.escapeTimer + dt;
         if (this.escapeTimer >= this.escapeGoal) { this._clearHeat(); this._toast('Fun Police escaped! Back to the biscuits.', 'success'); this._sound('escape'); this._addScore(25); }
       } else { this.escapeTimer = 0; this._policeSearching = false; }
-      const recoveryRate=this.time-finite(this.player.lastSoldierHitAt,-Infinity)<3?0:7;
+      const recoveryRate=this.time-finite(this.player.lastIncomingFireAt,-Infinity)<3?0:7;
       this.player.composure = clamp(this.player.composure + (contact ? -27 : recoveryRate) * dt, 0, 100);
       if (this.player.composure <= 0) this._caught();
     }

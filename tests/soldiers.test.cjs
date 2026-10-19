@@ -78,7 +78,7 @@ test('a confirmed base attack calls guards to its reported point but covered and
 test('the nearest solid vehicle or person absorbs a swept round, including friendly soldiers',()=>{
   const {game,system,guard}=fixture(2);game.heat=4;const friendly=system.soldiers[1];friendly.x=150;friendly.y=0;friendly.stunned=100;
   system.rounds.push({ownerId:guard.id,x:0,y:0,height:1,vx:ROUND_SPEED,vy:0,vh:0,life:1,damage:2.4});advance(system,.2);
-  assert.equal(game.player.composure,100);assert.equal(system.rounds.length,0);assert.equal(game.player.lastSoldierHitAt,undefined);
+  assert.equal(game.player.composure,100);assert.equal(system.rounds.length,0);assert.equal(game.player.lastIncomingFireAt,undefined);
   friendly.y=100;const car={id:'cover',kind:'van',x:140,y:0,elevation:0,health:100};game.cars=[car];
   game.vehiclePhysics.firstHit=(a,b)=>a.x<=120&&b.x>=120?{x:120,y:0,height:1,body:{entity:car}}:null;
   system.rounds.push({ownerId:guard.id,x:0,y:0,height:1,vx:ROUND_SPEED,vy:0,vh:0,life:1,damage:2.4});advance(system,.2);
@@ -89,18 +89,18 @@ test('terrain absorbs rounds before a more distant vehicle hit',()=>{
   const {game,system,guard}=fixture();game.heat=4;const target={id:'target-car',kind:'van',x:300,y:0,elevation:0,health:100};game.cars.push(target);game.player.vehicleId=target.id;
   game._ground=p=>p.x>=65&&p.x<90?2:0;game.vehiclePhysics.firstHit=(a,b)=>a.x<=100&&b.x>=100?{x:100,y:0,height:1,body:{entity:target}}:null;
   system.rounds.push({ownerId:guard.id,x:60,y:0,height:1,vx:ROUND_SPEED,vy:0,vh:0,life:1,damage:2.4});system.step(1/60);
-  assert.equal(target.health,100);assert.equal(system.rounds.length,0);assert.equal(game.player.lastSoldierHitAt,undefined);
+  assert.equal(target.health,100);assert.equal(system.rounds.length,0);assert.equal(game.player.lastIncomingFireAt,undefined);
 });
 
 test('NPC hits carry no player attribution, share a damage cap, respect grace and can catch the player',()=>{
   const {game,system,guard}=fixture();game.heat=4;
   const inject=()=>{for(let i=0;i<20;i++)system.rounds.push({ownerId:guard.id,x:290,y:0,height:1,vx:ROUND_SPEED,vy:0,vh:0,life:1,damage:2.4});};
-  game.time=123;inject();system.step(1/60);assert.ok(game.player.composure>=89.999);assert.ok(game.player.composure<100);assert.equal(game.player.lastSoldierHitAt,123);
-  game.graceTimer=2;game.time=124;const composure=game.player.composure;inject();system.step(1/60);assert.equal(game.player.composure,composure);assert.equal(game.player.lastSoldierHitAt,123);
+  game.time=123;inject();system.step(1/60);assert.ok(game.player.composure>=89.999);assert.ok(game.player.composure<100);assert.equal(game.player.lastIncomingFireAt,123);
+  game.graceTimer=2;game.time=124;const composure=game.player.composure;inject();system.step(1/60);assert.equal(game.player.composure,composure);assert.equal(game.player.lastIncomingFireAt,123);
   game.graceTimer=0;const car={id:'driven',kind:'compact',x:300,y:0,elevation:0,health:100};game.cars=[car];game.player.vehicleId=car.id;
   game.vehiclePhysics.firstHit=(a,b)=>({x:300,y:0,height:1,body:{entity:car}});system._damageCredit=10;inject();system.step(1/60);
   assert.ok(car.health<100);assert.ok(game.damage.every(hit=>hit.metadata.playerCaused===false&&hit.metadata.source==='soldier-round'));
-  assert.equal(game.player.lastSoldierHitAt,123,'vehicle hits do not suppress on-foot recovery');
+  assert.equal(game.player.lastIncomingFireAt,123,'vehicle hits do not suppress on-foot recovery');
   game.player.vehicleId=null;game.cars=[];game.vehiclePhysics.firstHit=()=>null;game.player.composure=1;system._damageCredit=10;inject();system.step(1/60);assert.equal(game.caught,1);
 });
 
@@ -109,6 +109,14 @@ test('stunned, ragdolled, removed and transported soldiers cannot move or fire',
   guard.stunned=0;game.ragdolls.set(guard.id,{});advance(system,1);assert.equal(system.events.filter(e=>e.type==='fire').length,0);
   game.ragdolls.delete(guard.id);guard.transportedBy='truck';advance(system,1);assert.equal(guard.soldierPhase,'riding');assert.equal(system.events.filter(e=>e.type==='fire').length,0);
   game.peds=[];advance(system,.1);assert.equal(system.soldiers.length,0);assert.strictEqual(game.soldiers,system.soldiers);assert.equal(game.militarySoldierSeen,false);
+});
+
+test('rifle impacts still delay recovery when the shared damage budget is exhausted',()=>{
+  const {game,system,guard}=fixture();game.heat=4;game.time=12;game.player.composure=50;system._damageCredit=0;
+  system.rounds.push({ownerId:guard.id,x:290,y:0,height:1,vx:ROUND_SPEED,vy:0,vh:0,life:1,damage:2.4});
+  system._rounds(1/60);
+  assert.equal(game.player.composure,50);assert.equal(game.player.lastIncomingFireAt,12);
+  assert.equal(system.rounds.length,0);
 });
 
 test('squads have bounded population, safe physical exits and boarding, and retire only offscreen',()=>{

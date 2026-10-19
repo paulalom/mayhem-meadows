@@ -166,6 +166,7 @@
       if(soldier.gunCooldown>0||soldier.aimTime<.45||this.rounds.length>=MAX_ROUNDS||!this._visible(soldier,target))return false;
       const point=this._muzzle(soldier),pitch=soldier.aimPitch;
       this.rounds.push({id:'soldier-round-'+this._nextId++,ownerId:soldier.id,...point,vx:Math.cos(soldier.aimAngle)*Math.cos(pitch)*ROUND_SPEED,vy:Math.sin(soldier.aimAngle)*Math.cos(pitch)*ROUND_SPEED,vh:Math.sin(pitch)*ROUND_SPEED/20,life:.7,damage:2.4});
+      if(target===this.game.player)this.game.player.lastIncomingFireAt=finite(this.game.time,this.time);
       soldier.lastShotTime=this.time;soldier.burstLeft=finite(soldier.burstLeft,3)-1;
       if(soldier.burstLeft<=0){soldier.gunCooldown=2.2;soldier.burstLeft=3;}else soldier.gunCooldown=.18;
       this._event('fire',{id:soldier.id});this.game._sound?.('pop',{x:soldier.x,y:soldier.y,volume:.28});return true;
@@ -180,7 +181,7 @@
           const hit=cover.person||cover.hit?.body?.entity;
           if(hit===this.game.player&&!this.game.player.vehicleId&&this.game.heat>=4&&this.game.graceTimer<=0){
             const damage=Math.min(round.damage,this._damageCredit);this._damageCredit=Math.max(0,this._damageCredit-damage);this.game.player.composure=Math.max(0,this.game.player.composure-damage);
-            if(damage>0)this.game.player.lastSoldierHitAt=finite(this.game.time,this.time);
+            this.game.player.lastIncomingFireAt=finite(this.game.time,this.time);
             this._event('hit-player',{damage});if(this.game.player.composure<=0)this.game._caught?.();
           }else if(hit&&hit.id===this.game.player?.vehicleId&&this.game.heat>=4&&this.game.graceTimer<=0){
             const damage=Math.min(1.4,this._damageCredit);this._damageCredit-=damage;if(damage>0)this.game._damageVehicle?.(hit,damage,{playerCaused:false,source:'soldier-round',origin:point});
